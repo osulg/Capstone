@@ -13,10 +13,6 @@ pip install pyfuse3 trio
 
 ## 실행 방법
 
-# 디렉토리 세팅 (최초 1회)
-mkdir -p mnt underlay/honeypot
-echo "do not touch" > underlay/honeypot/decoy.txt
-
 # 가상환경 활성화
 source venv/bin/activate
 
