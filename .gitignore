@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.jsonl
+mnt/
+underlay/
+honeypot/
+.venv/
+venv/
