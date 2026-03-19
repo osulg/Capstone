@@ -7,7 +7,7 @@ Stage1Detector
 
 from .honeypot import HoneypotDetector
 from .ext_change import ExtChangeDetector
-from .sensitive_path import SensitivePathDetector
+from .entropy import EntropyDetector
 
 
 class Stage1Detector:
@@ -15,7 +15,7 @@ class Stage1Detector:
         self._detectors = [
             HoneypotDetector(honeypot_dir),
             ExtChangeDetector(),
-            SensitivePathDetector(),
+            EntropyDetector(),
         ]
 
     async def check(self, ev, ops) -> bool:

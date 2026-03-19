@@ -1,48 +1,39 @@
 """
-SensitivePathDetector
-- /etc/passwd, /etc/shadow, ~/.ssh/ 등 민감한 시스템 경로에
-  open/read 접근이 발생하면 탐지
-- MITRE ATT&CK T1003.008 (OS Credential Dumping) 대응
+EntropyDetector
+- Shannon 엔트로피 계산 및 탐지 담당
+- 엔트로피 >= 7.0 이상이면 암호화/난독화된 악성 파일로 탐지
+- 근거: Lyda & Hamrock (2007), IEEE Security & Privacy
 """
+import math
 
-import os
-
-# 탐지할 민감 경로 목록 (절대 경로 또는 경로 접두사)
-SENSITIVE_PATHS = [
-    # 크리덴셜 관련
-    "/etc/passwd",
-    "/etc/shadow",
-    "/etc/gshadow",
-    "/etc/sudoers",
-
-    # SSH 키
-    os.path.expanduser("~/.ssh"),
-    "/root/.ssh",
-
-    # 인증서 / 키
-    "/etc/ssl/private",
-
-    # 시스템 설정
-    "/etc/crontab",
-    "/etc/cron.d",
-    "/var/spool/cron",
-]
+ENTROPY_THRESHOLD = 7.0
+MIN_BUFFER_SIZE = 128
 
 
-class SensitivePathDetector:
-    def __init__(self):
-        # 모두 realpath로 정규화
-        self._sensitive = [os.path.realpath(p) for p in SENSITIVE_PATHS]
+def shannon_entropy(data: bytes) -> float:
+    if not data:
+        return 0.0
+    freq = [0] * 256
+    for b in data:
+        freq[b] += 1
+    n = len(data)
+    ent = 0.0
+    for c in freq:
+        if c:
+            p = c / n
+            ent -= p * math.log2(p)
+    return ent
+
+
+class EntropyDetector:
+    def __init__(self, threshold: float = ENTROPY_THRESHOLD):
+        self.threshold = threshold
 
     def check(self, ev) -> bool:
-        if ev.op not in ("open", "read", "lookup"):
+        if ev.op != "write":
             return False
-
-        target = os.path.realpath(ev.path)
-
-        for sensitive in self._sensitive:
-            # 정확히 일치하거나, 해당 경로의 하위인 경우 탐지
-            if target == sensitive or target.startswith(sensitive + os.sep):
-                return True
-
-        return False
+        if ev.size < MIN_BUFFER_SIZE:
+            return False
+        if ev.entropy is None:
+            return False
+        return ev.entropy >= self.threshold
