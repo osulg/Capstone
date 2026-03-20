@@ -7,6 +7,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional, Dict, Tuple
 from collections import defaultdict
+from enum import Enum
 
 import pyfuse3
 import trio
@@ -31,6 +32,10 @@ class FsEvent:
     entropy: Optional[float] = None
     new_path: Optional[str] = None   # rename 시 목적지 경로
 
+class ProcState(str, Enum):
+    LOW = "LOW"
+    SUSPICIOUS = "SUSPICIOUS"
+
 
 def shannon_entropy(data: bytes) -> float:
     if not data:
@@ -45,7 +50,6 @@ def shannon_entropy(data: bytes) -> float:
             p = c / n
             ent -= p * math.log2(p)
     return ent
-
 
 class PidStats:
     def __init__(self):
@@ -119,7 +123,11 @@ async def stats_collector(
                                 f"renames={st.rename_count} unlinks={st.unlink_count} "
                                 f"unique_files={len(st.files)}"
                             )
-                            await ops.mark_suspect(pid)
+                            await ops.mark_suspect(
+                                pid,
+                                reason="stat_anomaly",
+                                path=""
+                            )
                         st.reset()
 
                     next_tick += WINDOW_S
@@ -160,13 +168,18 @@ class Passthrough(pyfuse3.Operations):
         self._dir_fh_path: Dict[int, str] = {}
 
         self._send_chan, self._recv_chan = trio.open_memory_channel(10000)
+        self._stage2_send, self._stage2_recv = trio.open_memory_channel(1000)
 
         # [수정 2번] 로그 파일을 underlay 바깥(프로젝트 루트)에 저장
         self._log_path = os.path.join(os.path.dirname(self.root), "guardfs_log.jsonl")
 
         self._pid_lock = trio.Lock()
-        self._suspect_until_ns: Dict[int, int] = {}
-        self.SUSPECT_TTL_S = 10.0
+
+        # PID 상태 관리
+        self._proc_state: Dict[int, ProcState] = {}
+
+        # 이미 2단계 큐에 들어간 PID 중복 등록 방지
+        self._queued_stage2: set[int] = set()
 
     # ------------------------------------------------------------------ helpers
 
@@ -211,28 +224,36 @@ class Passthrough(pyfuse3.Operations):
         except trio.WouldBlock:
             pass
 
-    async def mark_suspect(self, pid: int) -> None:
-        until_ns = time.time_ns() + int(self.SUSPECT_TTL_S * 1e9)
-        async with self._pid_lock:
-            prev = self._suspect_until_ns.get(pid, 0)
-            self._suspect_until_ns[pid] = max(prev, until_ns)
-
-    async def _is_suspect(self, pid: int) -> bool:
+    async def mark_suspect(self, pid: int, reason: str = "", path: str = "") -> None:
         if pid <= 0:
-            return False
-        now = time.time_ns()
-        async with self._pid_lock:
-            until = self._suspect_until_ns.get(pid)
-            if until is None:
-                return False
-            if until < now:
-                del self._suspect_until_ns[pid]
-                return False
-            return True
+            return
 
-    async def _deny_if_suspect(self, pid: int) -> None:
-        if await self._is_suspect(pid):
-            raise pyfuse3.FUSEError(errno.EACCES)
+        async with self._pid_lock:
+            prev = self._proc_state.get(pid, ProcState.LOW)
+
+            # 상태 승격
+            if prev == ProcState.LOW:
+                self._proc_state[pid] = ProcState.SUSPICIOUS
+                print(f"[STATE] pid={pid} LOW -> SUSPICIOUS reason={reason}")
+
+            # 이미 큐에 올라간 PID면 중복 전송 방지
+            if pid in self._queued_stage2:
+                return
+
+            self._queued_stage2.add(pid)
+
+        await self._stage2_send.send({
+            "pid": pid,
+            "reason": reason,
+            "path": path,
+            "ts": time.time()
+        })
+
+    async def get_proc_state(self, pid: int) -> ProcState:
+        if pid <= 0:
+            return ProcState.LOW
+        async with self._pid_lock:
+            return self._proc_state.get(pid, ProcState.LOW)
 
     # ------------------------------------------------------------------ FUSE ops
 
@@ -297,7 +318,6 @@ class Passthrough(pyfuse3.Operations):
         p = self._resolve_path(parent_inode, name)
 
         pid = ctx.pid if ctx is not None else -1
-        await self._deny_if_suspect(pid)
 
         try:
             os.rmdir(p)
@@ -402,8 +422,6 @@ class Passthrough(pyfuse3.Operations):
             )
         )
 
-        await self._deny_if_suspect(pid)
-
         try:
             if hasattr(os, "pwrite"):
                 n = os.pwrite(fd, buf, off)
@@ -420,7 +438,6 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         pid = ctx.pid if ctx is not None else -1
-        await self._deny_if_suspect(pid)
 
         try:
             with open(p, "r+b") as f:
@@ -436,7 +453,6 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EBADF)
 
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
-        await self._deny_if_suspect(pid)
 
         try:
             os.ftruncate(fd, size)
@@ -450,7 +466,6 @@ class Passthrough(pyfuse3.Operations):
         p = self._resolve_path(parent_inode, name)
 
         pid = ctx.pid if ctx is not None else -1
-        await self._deny_if_suspect(pid)
 
         try:
             os.unlink(p)
@@ -465,7 +480,6 @@ class Passthrough(pyfuse3.Operations):
         newp = self._resolve_path(parent_inode_new, name_new)
 
         pid = ctx.pid if ctx is not None else -1
-        await self._deny_if_suspect(pid)
 
         try:
             os.rename(oldp, newp)
@@ -483,6 +497,26 @@ class Passthrough(pyfuse3.Operations):
         if fd is not None:
             os.close(fd)
 
+async def stage2_worker(recv_chan, ops: "Passthrough"):
+    async with recv_chan:
+        async for item in recv_chan:
+            pid = item["pid"]
+            reason = item["reason"]
+            path = item["path"]
+
+            print(f"[STAGE2] received pid={pid} reason={reason} path={path}")
+
+            # 임시 2단계 분석
+            if "honeypot" in reason:
+                risk = 0.95
+            else:
+                risk = 0.5
+
+            print(f"[STAGE2] pid={pid} analyzed risk={risk}")
+
+            # 분석 완료 후 큐 등록 해제
+            async with ops._pid_lock:
+                ops._queued_stage2.discard(pid)
 
 async def main(mountpoint: str, root: str):
     honeypot_dir = os.path.join(os.path.realpath(root), "honeypot")
@@ -497,6 +531,8 @@ async def main(mountpoint: str, root: str):
                 honeypot_dir,
                 ops,
             )
+            nursery.start_soon(stage2_worker, ops._stage2_recv, ops)
+            
             await pyfuse3.main()
     finally:
         pyfuse3.close(unmount=True)

@@ -1,7 +1,7 @@
 """
 Stage1Detector
 - 세 가지 탐지기(Honeypot / 확장자 변경 / 민감 경로)를 통합
-- 하나라도 탐지되면 ops.mark_suspect(pid) 호출 → 2단계로 escalate
+- 하나라도 탐지되면 ops.mark_suspect(pid, reason, path) 호출 → 2단계로 escalate
 - stats_collector에서 분리
 """
 
@@ -30,6 +30,10 @@ class Stage1Detector:
                     f"[STAGE1] pid={ev.pid} op={ev.op} "
                     f"path={ev.path} reason={reason}"
                 )
-                await ops.mark_suspect(ev.pid)
+                await ops.mark_suspect(
+                    ev.pid,
+                    reason=reason.lower().replace("detector", ""),
+                    path=ev.path
+                )
                 return True
         return False
