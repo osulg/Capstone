@@ -26,10 +26,11 @@ class Stage1Detector:
         for detector in self._detectors:
             if detector.check(ev):
                 reason = detector.__class__.__name__
+                entropy_str = f"{ev.entropy:.4f}" if ev.entropy is not None else "N/A"
                 print(
                     f"[STAGE1] pid={ev.pid} op={ev.op} "
-                    f"path={ev.path} reason={reason}"
-                )
+                    f"path={ev.path} entropy={entropy_str} reason={reason}"
+                    )
                 await ops.mark_suspect(ev.pid)
                 return True
         return False
