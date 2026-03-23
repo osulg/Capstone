@@ -3,7 +3,6 @@ import os
 import sys
 import errno
 import time
-import math
 from dataclasses import dataclass
 from typing import Optional, Dict, Tuple
 from collections import defaultdict
@@ -12,7 +11,7 @@ from enum import Enum
 import pyfuse3
 import trio
 from stage1 import Stage1Detector, EventLogger
-
+from stage1.entropy import shannon_entropy
 
 def _full_path(root: str, path: str) -> str:
     if path.startswith("/"):
@@ -35,21 +34,6 @@ class FsEvent:
 class ProcState(str, Enum):
     LOW = "LOW"
     SUSPICIOUS = "SUSPICIOUS"
-
-
-def shannon_entropy(data: bytes) -> float:
-    if not data:
-        return 0.0
-    freq = [0] * 256
-    for b in data:
-        freq[b] += 1
-    n = len(data)
-    ent = 0.0
-    for c in freq:
-        if c:
-            p = c / n
-            ent -= p * math.log2(p)
-    return ent
 
 class PidStats:
     def __init__(self):
@@ -409,7 +393,7 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EBADF)
 
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
-        ent = shannon_entropy(buf)
+        ent = shannon_entropy(buf[:256])
         self._emit(
             FsEvent(
                 ts_ns=time.time_ns(),
