@@ -31,6 +31,6 @@ class Stage1Detector:
                     f"[STAGE1] pid={ev.pid} op={ev.op} "
                     f"path={ev.path} entropy={entropy_str} reason={reason}"
                     )
-                await ops.mark_suspect(ev.pid)
+                await ops.mark_suspect(ev.pid, reason=reason, path=ev.path)
                 return True
         return False
