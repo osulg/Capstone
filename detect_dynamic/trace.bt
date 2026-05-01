@@ -1,0 +1,37 @@
+// 1. Open (O)
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    printf("%d O\n", pid);
+}
+
+// 2. Create (C) - openat에서 O_CREAT 플래그(보통 0x40 또는 64) 확인
+tracepoint:syscalls:sys_enter_openat
+{
+    if (args->flags & 64) {
+        printf("%d C\n", pid);
+    }
+}
+
+// 3. Write (W)
+tracepoint:syscalls:sys_enter_write
+{
+    printf("%d W\n", pid);
+}
+
+// 4. Delete/Rename (D)
+tracepoint:syscalls:sys_enter_unlink,
+tracepoint:syscalls:sys_enter_unlinkat,
+tracepoint:syscalls:sys_enter_rename,
+tracepoint:syscalls:sys_enter_renameat
+{
+    printf("%d D\n", pid);
+}
+
+// 5. Encrypt (E) - OpenSSL 라이브러리 후킹 [cite: 230, 231]
+// 경로(/lib/x86_64-linux-gnu/libcrypto.so.3)는 시스템 환경에 맞춰 수정 필요
+uprobe:/lib/x86_64-linux-gnu/libcrypto.so.3:EVP_EncryptInit_ex,
+uprobe:/lib/x86_64-linux-gnu/libcrypto.so.3:EVP_CipherInit_ex
+{
+    printf("%d E\n", pid);
+}
