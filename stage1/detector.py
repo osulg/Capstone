@@ -1,8 +1,8 @@
 """
 Stage1Detector
-- 세 가지 탐지기(Honeypot / 확장자 변경 / 민감 경로)를 통합
-- 하나라도 탐지되면 ops.mark_suspect(pid, reason, path) 호출 → 2단계로 escalate
-- stats_collector에서 분리
+- 세 가지 탐지기(Honeypot / 확장자 변경 / Entropy)를 통합
+- 하나라도 탐지되면 True와 reason만 반환
+- mark_suspect 호출은 stats_collector에서 처리
 """
 
 from .honeypot import HoneypotDetector
@@ -18,19 +18,21 @@ class Stage1Detector:
             EntropyDetector(),
         ]
 
-    async def check(self, ev, ops) -> bool:
+    async def check(self, ev):
         """
         이벤트를 세 탐지기에 순서대로 넘긴다.
-        하나라도 True를 반환하면 즉시 mark_suspect 호출 후 True 반환.
+        하나라도 True를 반환하면 (True, reason)을 반환한다.
         """
         for detector in self._detectors:
             if detector.check(ev):
                 reason = detector.__class__.__name__
                 entropy_str = f"{ev.entropy:.4f}" if ev.entropy is not None else "N/A"
+
                 print(
                     f"[STAGE1] pid={ev.pid} op={ev.op} "
                     f"path={ev.path} entropy={entropy_str} reason={reason}"
-                    )
-                await ops.mark_suspect(ev.pid, reason=reason, path=ev.path)
-                return True
-        return False
+                )
+
+                return True, reason
+
+        return False, None
