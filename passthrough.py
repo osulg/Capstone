@@ -14,17 +14,14 @@ import pyfuse3
 import trio
 from stage1 import Stage1Detector, EventLogger
 from stage1.entropy import shannon_entropy
+from stage2_worker import stage2_worker
+from states import ProcState
 
 def _full_path(root: str, path: str) -> str:
     if path.startswith("/"):
         path = path[1:]
     return os.path.join(root, path)
 
-def get_exe_path(pid: int) -> Optional[str]:
-    try:
-        return os.readlink(f"/proc/{pid}/exe")
-    except Exception:
-        return None
 
 @dataclass
 class FsEvent:
@@ -36,68 +33,7 @@ class FsEvent:
     off: int = -1
     flags: int = 0
     entropy: Optional[float] = None
-    new_path: Optional[str] = None
-    exe_path: Optional[str] = None
-
-class ProcState(str, Enum):
-    LOW = "LOW"
-    SUSPICIOUS = "SUSPICIOUS"
-
-class PidStats:
-    def __init__(self):
-        self.write_count = 0
-        self.read_count = 0
-        self.rename_count = 0
-        self.unlink_count = 0
-        self.open_count = 0
-
-        self.total_write_bytes = 0
-        self.entropy_sum = 0.0
-        self.max_entropy = 0.0
-
-        self.files = set()
-
-    def reset(self) -> None:
-        self.__init__()
-
-    def mean_entropy(self) -> float:
-        return self.entropy_sum / self.write_count if self.write_count else 0.0
-
-    def update(self, ev) -> None:
-        self.files.add(ev.path)
-
-        if ev.op == "write":
-            self.write_count += 1
-            self.total_write_bytes += ev.size
-            if ev.entropy is not None:
-                self.entropy_sum += ev.entropy
-                self.max_entropy = max(self.max_entropy, ev.entropy)
-
-        elif ev.op == "read":
-            self.read_count += 1
-
-        elif ev.op == "open":
-            self.open_count += 1
-
-        elif ev.op == "rename":
-            self.rename_count += 1
-
-        elif ev.op == "unlink":
-            self.unlink_count += 1
-
-    def to_feature_row(self) -> dict:
-        return {
-            "write_count": self.write_count,
-            "read_count": self.read_count,
-            "open_count": self.open_count,
-            "rename_count": self.rename_count,
-            "unlink_count": self.unlink_count,
-            "total_write_bytes": self.total_write_bytes,
-            "avg_entropy": self.mean_entropy(),
-            "max_entropy": self.max_entropy,
-            "unique_file_count": len(self.files),
-        }
-
+    new_path: Optional[str] = None   # rename 시 목적지 경로
 
 async def stats_collector(
     recv_chan: trio.MemoryReceiveChannel,
@@ -107,12 +43,14 @@ async def stats_collector(
 ) -> None:
     """
     - EventLogger   : 모든 이벤트를 JSONL로 저장
-    - PidStats      : PID별 최근 행동을 malware_dataset.csv feature 구조로 집계
+    - PidStats      : PID별 최근 행동 통계 집계
     - Stage1Detector: 경량 탐지 수행
     """
     WINDOW_S = 1.0
-    C_TH = 10
-    D_TH = 10
+    WRITE_TH = 2
+    ENTROPY_TH = 0.1
+    RENAME_TH = 2
+    UNLINK_TH = 2
 
     stats = defaultdict(PidStats)
     logger = EventLogger(log_path)
@@ -133,29 +71,27 @@ async def stats_collector(
 
                 if scope.cancelled_caught:
                     for pid, st in list(stats.items()):
-                        feature_row = st.to_feature_row()
-
+                        mean_ent = st.mean_entropy()
                         suspicious = (
-                            feature_row["E_sum"] >= 1
-                            or feature_row["D_sum"] >= D_TH
-                            or feature_row["C_sum"] >= C_TH
+                            (st.counts["O_sum"] >= WRITE_TH and mean_ent >= ENTROPY_TH)
+                            or (st.counts["D_sum"] >= RENAME_TH)
+                            or (st.counts["D_sum"] >= UNLINK_TH)
                         )
 
                         if suspicious and pid > 0:
+                            feature_row = st.to_feature_row()
+
                             print(
                                 f"[SUSPICIOUS] pid={pid} "
-                                f"O_sum={feature_row['O_sum']} "
-                                f"C_sum={feature_row['C_sum']} "
-                                f"D_sum={feature_row['D_sum']} "
-                                f"E_sum={feature_row['E_sum']}"
+                                f"O_sum={st.counts['O_sum']} E_sum={mean_ent:.2f} "
+                                f"D_sum={st.counts['D_sum']}"
                             )
 
                             await ops.mark_suspect(
                                 pid,
                                 reason="stat_anomaly",
                                 path="",
-                                features=feature_row,
-                                exe_path=None
+                                features=feature_row
                             )
 
                         st.reset()
@@ -163,11 +99,14 @@ async def stats_collector(
                     next_tick += WINDOW_S
                     continue
 
+                # 로그 저장
                 logger.write(ev)
 
+                # 1. 먼저 PID별 통계 업데이트
                 st = stats[ev.pid]
                 st.update(ev)
 
+                # 2. 그다음 Stage1 경량 탐지
                 is_suspicious, reason = await stage1.check(ev)
 
                 if is_suspicious:
@@ -177,8 +116,7 @@ async def stats_collector(
                         ev.pid,
                         reason=reason,
                         path=ev.path,
-                        features=feature_row,
-                        exe_path=ev.exe_path
+                        features=feature_row
                     )
 
     finally:
@@ -212,6 +150,10 @@ class Passthrough(pyfuse3.Operations):
 
         # 이미 2단계 큐에 들어간 PID 중복 등록 방지
         self._queued_stage2: set[int] = set()
+
+        self._write_buffer: Dict[int, list] = defaultdict(list)
+        self._write_count:  Dict[int, int]  = defaultdict(int)
+        self._risk_score:   Dict[int, float] = {}
 
     # ------------------------------------------------------------------ helpers
 
@@ -251,15 +193,12 @@ class Passthrough(pyfuse3.Operations):
         return attr
 
     def _emit(self, ev: FsEvent) -> None:
-        if ev.exe_path is None and ev.pid > 0:
-            ev.exe_path = get_exe_path(ev.pid)
-
         try:
             self._send_chan.send_nowait(ev)
         except trio.WouldBlock:
             pass
 
-    async def mark_suspect(self, pid: int, reason: str = "", path: str = "", features=None, exe_path: Optional[str] = None) -> None:
+    async def mark_suspect(self, pid: int, reason: str = "", path: str = "", features=None) -> None:
         if pid <= 0:
             return
 
@@ -282,16 +221,33 @@ class Passthrough(pyfuse3.Operations):
             "reason": reason,
             "path": path,
             "features": features,
-            "exe_path": exe_path,
             "ts": time.time()
         })
 
-    async def get_proc_state(self, pid: int) -> ProcState:
+    async def get_proc_state(self, pid: int) -> ProcState: # pid의 현재 상태를 읽어오는 것
         if pid <= 0:
             return ProcState.LOW
         async with self._pid_lock:
             return self._proc_state.get(pid, ProcState.LOW)
 
+    async def set_proc_state(self, pid: int, state: ProcState) -> None:  # pid의 상태를 바꾸는 것
+        async with self._pid_lock:
+            prev = self._proc_state.get(pid, ProcState.LOW) # 이전 상태 저장
+            self._proc_state[pid] = state # 새 상태로 변경
+            print(f"[STATE] pid={pid} {prev} → {state}")
+
+    # 여기도 추가 (High 격상 트리거용) 
+    async def trigger_high(self, pid: int, reason: str = "") -> None:
+        print(f"[TRIGGER HIGH] pid={pid} reason={reason}")
+        await self.set_proc_state(pid, ProcState.HIGH)
+        await self._stage2_send.send({
+            "pid": pid,
+            "reason": reason,
+            "force_high": True,
+            "features": None,
+            "ts": time.time()
+        })           
+    
     # ------------------------------------------------------------------ FUSE ops
 
     async def access(self, inode, mode, ctx=None):
@@ -314,18 +270,19 @@ class Passthrough(pyfuse3.Operations):
         return self._stat_to_attr(st)
 
     async def create(self, parent_inode, name, mode, flags, ctx=None):
-        # [수정] ROOT_INODE 고정 → parent_inode 기반 경로 조합
         p = self._resolve_path(parent_inode, name)
-
         pid = ctx.pid if ctx is not None else -1
 
+        # ★ 테스트용 강제 MEDIUM
+        await self.set_proc_state(pid, ProcState.MEDIUM)
+
+        # MEDIUM이든 LOW든 파일은 일단 만들기
         try:
             fd = os.open(p, flags | os.O_CREAT, mode)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
         st = self._register_inode(p)
-
         fh = self._next_fh
         self._next_fh += 1
         self._fd_map[fh] = fd
@@ -459,6 +416,31 @@ class Passthrough(pyfuse3.Operations):
             )
         )
 
+        # ★ 테스트용 강제 MEDIUM + stage2 전송
+        await self.set_proc_state(pid, ProcState.MEDIUM)
+
+        # stage2에 전송 (중복 방지)
+        async with self._pid_lock:
+            if pid not in self._queued_stage2:
+                self._queued_stage2.add(pid)
+                await self._stage2_send.send({
+                    "pid": pid,
+                    "reason": "force_test",
+                    "features": None,
+                    "ts": time.time()
+                })
+
+        state = await self.get_proc_state(pid)
+        print(f"[WRITE] pid={pid} state={state} path={path}")
+
+        if state == ProcState.HIGH:
+            await trio.sleep(0.001)
+            return len(buf)
+
+        elif state == ProcState.MEDIUM:
+            from medium import handle_write_medium
+            return await handle_write_medium(fd, off, buf, path, pid, self)
+
         try:
             if hasattr(os, "pwrite"):
                 n = os.pwrite(fd, buf, off)
@@ -512,27 +494,19 @@ class Passthrough(pyfuse3.Operations):
         self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="unlink", path=p))
 
     async def rename(self, parent_inode_old, name_old, parent_inode_new, name_new, flags, ctx=None):
+        # [수정] ROOT_INODE 고정 → parent_inode 기반 경로 조합
         oldp = self._resolve_path(parent_inode_old, name_old)
         newp = self._resolve_path(parent_inode_new, name_new)
 
         pid = ctx.pid if ctx is not None else -1
-        exe_path = get_exe_path(pid)   # 이 줄 추가
 
         try:
             os.rename(oldp, newp)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
-        self._emit(
-            FsEvent(
-                ts_ns=time.time_ns(),
-                pid=pid,
-                op="rename",
-                path=oldp,
-                new_path=newp,
-                exe_path=exe_path
-            )
-        )
+        # [수정 4번] from/to를 new_path 필드로 합쳐서 한 이벤트로 emit
+        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="rename", path=oldp, new_path=newp))
 
     async def release(self, fh):
         pid, path, flags = self._fh_info.pop(fh, (-1, "?", 0))
@@ -541,148 +515,6 @@ class Passthrough(pyfuse3.Operations):
         fd = self._fd_map.pop(fh, None)
         if fd is not None:
             os.close(fd)
-
-def extract_static_features(exe_path: str) -> dict:
-    import os
-    from collections import Counter
-
-    try:
-        with open(exe_path, "rb") as f:
-            data = f.read()
-    except Exception:
-        return None
-
-    if not data.startswith(b"\x7fELF"):
-        return None
-
-    # label 제외한 모든 정적 모델 컬럼을 0으로 초기화
-    features = {col: 0 for col in STATIC_COLS}
-
-    if "file_size" in features:
-        features["file_size"] = os.path.getsize(exe_path)
-
-    if "is_64bit" in features:
-        features["is_64bit"] = 1.0 if len(data) > 4 and data[4] == 2 else 0.0
-
-    byte_counts = Counter(data)
-
-    for col in STATIC_COLS:
-        if col.startswith("byte_f_"):
-            try:
-                idx = int(col.replace("byte_f_", ""))
-                features[col] = byte_counts.get(idx % 256, 0)
-            except Exception:
-                features[col] = 0
-
-        elif col.startswith("opcode_f_"):
-            features[col] = 0
-
-    if "elf_type_ET_DYN" in features:
-        features["elf_type_ET_DYN"] = 1 if b".interp" in data else 0
-
-    if "elf_type_ET_EXEC" in features:
-        features["elf_type_ET_EXEC"] = 0 if features.get("elf_type_ET_DYN", 0) else 1
-
-    return features
-
-async def stage2_worker(recv_chan, ops: "Passthrough"):
-    import os
-    import pandas as pd
-    import joblib
-
-    # -----------------------
-    # 모델 로드
-    # -----------------------
-    dynamic_model = joblib.load("detect_dynamic/dataset/csv_files/best_model.pkl")
-    dynamic_scaler = joblib.load("detect_dynamic/dataset/csv_files/scaler.pkl")
-
-    static_model = joblib.load("final_rf_model.pkl")
-
-    # -----------------------
-    # 정적 CSV 컬럼 로드
-    # -----------------------
-    global STATIC_COLS
-
-    STATIC_COLS = pd.read_csv(
-        "fused_model/merged_topk_balanced_k200.csv",
-        nrows=0
-    ).columns.tolist()
-
-    STATIC_COLS = [c for c in STATIC_COLS if c.strip().lower() != "label"]
-
-    # -----------------------
-    # 메인 루프
-    # -----------------------
-    async with recv_chan:
-        async for item in recv_chan:
-            pid = item["pid"]
-            reason = item["reason"]
-            path = item["path"]
-            features = item["features"]
-            exe_path = item.get("exe_path")
-
-            print(
-                f"[STAGE1.5] pid={pid} reason={reason} "
-                f"path={path} exe={exe_path}"
-            )
-
-            # -----------------------
-            # 1. Dynamic ML
-            # -----------------------
-            X_dynamic = pd.DataFrame([features])
-            X_dynamic_scaled = dynamic_scaler.transform(X_dynamic.values)
-
-            dynamic_pred = dynamic_model.predict(X_dynamic_scaled)[0]
-            dynamic_prob = dynamic_model.predict_proba(X_dynamic_scaled)[0][1]
-
-            # -----------------------
-            # 2. Static ML
-            # -----------------------
-            static_pred = None
-            static_prob = None
-
-            if exe_path and os.path.exists(exe_path):
-                try:
-                    static_features = extract_static_features(exe_path)
-
-                    if static_features is not None:
-                        X_static = pd.DataFrame([static_features])
-
-                        # 🔥 컬럼 맞추기 (핵심)
-                        # 🔥 컬럼 맞추기
-                        X_static = X_static.reindex(columns=STATIC_COLS, fill_value=0)
-
-                        static_pred = static_model.predict(X_static)[0]
-                        static_prob = static_model.predict_proba(X_static)[0][1]
-
-                except Exception as e:
-                    print(f"[STATIC ERROR] exe={exe_path} error={e}")
-
-            # -----------------------
-            # 3. Fusion (1/2)
-            # -----------------------
-            if static_prob is not None:
-                final_score = 0.5 * dynamic_prob + 0.5 * static_prob
-            else:
-                final_score = dynamic_prob
-
-            final_pred = 1 if final_score >= 0.5 else 0
-
-            # -----------------------
-            # 출력
-            # -----------------------
-            print(
-                f"[RESULT] pid={pid} "
-                f"dynamic_pred={dynamic_pred} dynamic_prob={dynamic_prob:.4f} "
-                f"static_pred={static_pred} static_prob={static_prob if static_prob is not None else 'N/A'} "
-                f"final_score={final_score:.4f} final_pred={final_pred}"
-            )
-
-            # -----------------------
-            # 큐 정리
-            # -----------------------
-            async with ops._pid_lock:
-                ops._queued_stage2.discard(pid)
 
 class PidStats:
     FEATURE_COLS = [
