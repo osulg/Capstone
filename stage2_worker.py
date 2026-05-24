@@ -54,6 +54,8 @@ async def stage2_worker(recv_chan, ops) -> None:
                         await ops.set_proc_state(pid, ProcState.LOW)
                         from medium import commit_buffers
                         await commit_buffers(pid, ops)
+                        from low import handle_low_return
+                        await handle_low_return(pid, ops)
                         medium_pids.pop(pid, None)
                         continue
 

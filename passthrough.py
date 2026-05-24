@@ -416,20 +416,6 @@ class Passthrough(pyfuse3.Operations):
             )
         )
 
-        # ★ 테스트용 강제 MEDIUM + stage2 전송
-        await self.set_proc_state(pid, ProcState.MEDIUM)
-
-        # stage2에 전송 (중복 방지)
-        async with self._pid_lock:
-            if pid not in self._queued_stage2:
-                self._queued_stage2.add(pid)
-                await self._stage2_send.send({
-                    "pid": pid,
-                    "reason": "force_test",
-                    "features": None,
-                    "ts": time.time()
-                })
-
         state = await self.get_proc_state(pid)
         print(f"[WRITE] pid={pid} state={state} path={path}")
 
@@ -441,15 +427,10 @@ class Passthrough(pyfuse3.Operations):
             from medium import handle_write_medium
             return await handle_write_medium(fd, off, buf, path, pid, self)
 
-        try:
-            if hasattr(os, "pwrite"):
-                n = os.pwrite(fd, buf, off)
-            else:
-                os.lseek(fd, off, os.SEEK_SET)
-                n = os.write(fd, buf)
-            return n
-        except OSError as e:
-            raise pyfuse3.FUSEError(e.errno)
+        else:
+            # LOW (또는 SUSPICIOUS) → 즉시 디스크 기록
+            from low import handle_write_low
+            return await handle_write_low(fd, off, buf, path, pid, self)
 
     async def truncate(self, inode, size, ctx=None):
         p = self._inode_path.get(inode)
