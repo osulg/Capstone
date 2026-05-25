@@ -17,6 +17,7 @@ from stage1.entropy import shannon_entropy
 from stage2_worker import stage2_worker
 from states import ProcState
 
+
 def _full_path(root: str, path: str) -> str:
     if path.startswith("/"):
         path = path[1:]
@@ -33,7 +34,8 @@ class FsEvent:
     off: int = -1
     flags: int = 0
     entropy: Optional[float] = None
-    new_path: Optional[str] = None   # rename 시 목적지 경로
+    new_path: Optional[str] = None  # rename 시 목적지 경로
+
 
 async def stats_collector(
     recv_chan: trio.MemoryReceiveChannel,
@@ -91,7 +93,7 @@ async def stats_collector(
                                 pid,
                                 reason="stat_anomaly",
                                 path="",
-                                features=feature_row
+                                features=feature_row,
                             )
 
                         st.reset()
@@ -106,6 +108,13 @@ async def stats_collector(
                 st = stats[ev.pid]
                 st.update(ev)
 
+                # [추가] 테스트용: trigger_high_* 파일 write 시 즉시 HIGH 진입
+                if ev.op == "write" and os.path.basename(ev.path).startswith(
+                    "trigger_high_"
+                ):
+                    await ops.trigger_high(ev.pid, reason="test_force_high")
+                    continue
+
                 # 2. 그다음 Stage1 경량 탐지
                 is_suspicious, reason = await stage1.check(ev)
 
@@ -113,10 +122,7 @@ async def stats_collector(
                     feature_row = st.to_feature_row()
 
                     await ops.mark_suspect(
-                        ev.pid,
-                        reason=reason,
-                        path=ev.path,
-                        features=feature_row
+                        ev.pid, reason=reason, path=ev.path, features=feature_row
                     )
 
     finally:
@@ -152,8 +158,12 @@ class Passthrough(pyfuse3.Operations):
         self._queued_stage2: set[int] = set()
 
         self._write_buffer: Dict[int, list] = defaultdict(list)
-        self._write_count:  Dict[int, int]  = defaultdict(int)
-        self._risk_score:   Dict[int, float] = {}
+        self._write_count: Dict[int, int] = defaultdict(int)
+        self._risk_score: Dict[int, float] = {}
+
+        # [추가]
+        self._high_reason: Dict[int, str] = {}
+        self._suspended_pids: set[int] = set()
 
     # ------------------------------------------------------------------ helpers
 
@@ -198,7 +208,9 @@ class Passthrough(pyfuse3.Operations):
         except trio.WouldBlock:
             pass
 
-    async def mark_suspect(self, pid: int, reason: str = "", path: str = "", features=None) -> None:
+    async def mark_suspect(
+        self, pid: int, reason: str = "", path: str = "", features=None
+    ) -> None:
         if pid <= 0:
             return
 
@@ -216,38 +228,56 @@ class Passthrough(pyfuse3.Operations):
 
             self._queued_stage2.add(pid)
 
-        await self._stage2_send.send({
-            "pid": pid,
-            "reason": reason,
-            "path": path,
-            "features": features,
-            "ts": time.time()
-        })
+        await self._stage2_send.send(
+            {
+                "pid": pid,
+                "reason": reason,
+                "path": path,
+                "features": features,
+                "ts": time.time(),
+            }
+        )
 
-    async def get_proc_state(self, pid: int) -> ProcState: # pid의 현재 상태를 읽어오는 것
+    async def get_proc_state(
+        self, pid: int
+    ) -> ProcState:  # pid의 현재 상태를 읽어오는 것
         if pid <= 0:
             return ProcState.LOW
         async with self._pid_lock:
             return self._proc_state.get(pid, ProcState.LOW)
 
-    async def set_proc_state(self, pid: int, state: ProcState) -> None:  # pid의 상태를 바꾸는 것
+    async def set_proc_state(
+        self, pid: int, state: ProcState
+    ) -> None:  # pid의 상태를 바꾸는 것
         async with self._pid_lock:
-            prev = self._proc_state.get(pid, ProcState.LOW) # 이전 상태 저장
-            self._proc_state[pid] = state # 새 상태로 변경
+            prev = self._proc_state.get(pid, ProcState.LOW)  # 이전 상태 저장
+            self._proc_state[pid] = state  # 새 상태로 변경
             print(f"[STATE] pid={pid} {prev} → {state}")
 
-    # 여기도 추가 (High 격상 트리거용) 
+    # 여기도 추가 (High 격상 트리거용)
+    # [수정] reason 저장 추가
     async def trigger_high(self, pid: int, reason: str = "") -> None:
         print(f"[TRIGGER HIGH] pid={pid} reason={reason}")
+
+        # [추가]
+        self._high_reason[pid] = reason
+
+        from high import handle_high_enter
+
+        await handle_high_enter(pid, self, reason)
+
         await self.set_proc_state(pid, ProcState.HIGH)
-        await self._stage2_send.send({
-            "pid": pid,
-            "reason": reason,
-            "force_high": True,
-            "features": None,
-            "ts": time.time()
-        })           
-    
+
+        await self._stage2_send.send(
+            {
+                "pid": pid,
+                "reason": reason,
+                "force_high": True,
+                "features": None,
+                "ts": time.time(),
+            }
+        )
+
     # ------------------------------------------------------------------ FUSE ops
 
     async def access(self, inode, mode, ctx=None):
@@ -274,7 +304,11 @@ class Passthrough(pyfuse3.Operations):
         pid = ctx.pid if ctx is not None else -1
 
         # ★ 테스트용 강제 MEDIUM
-        await self.set_proc_state(pid, ProcState.MEDIUM)
+        # [수정] 단, 처음부터 HIGH 테스트용 trigger_high 파일은 제외
+        filename = name.decode("utf-8", "surrogateescape")
+
+        if not filename.startswith("trigger_high_"):
+            await self.set_proc_state(pid, ProcState.MEDIUM)
 
         # MEDIUM이든 LOW든 파일은 일단 만들기
         try:
@@ -287,7 +321,9 @@ class Passthrough(pyfuse3.Operations):
         self._next_fh += 1
         self._fd_map[fh] = fd
         self._fh_info[fh] = (pid, p, flags)
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="create", path=p, flags=flags))
+        self._emit(
+            FsEvent(ts_ns=time.time_ns(), pid=pid, op="create", path=p, flags=flags)
+        )
 
         fi = pyfuse3.FileInfo()
         fi.fh = fh
@@ -350,9 +386,11 @@ class Passthrough(pyfuse3.Operations):
 
                 full = os.path.join(dir_path, e.name)
                 self._inode_path[st.st_ino] = full
-                entries.append((e.name.encode("utf-8", "surrogateescape"), self._stat_to_attr(st)))
+                entries.append(
+                    (e.name.encode("utf-8", "surrogateescape"), self._stat_to_attr(st))
+                )
 
-        for i, (name_b, attr) in enumerate(entries[int(off):], start=int(off)):
+        for i, (name_b, attr) in enumerate(entries[int(off) :], start=int(off)):
             if not pyfuse3.readdir_reply(token, name_b, attr, i + 1):
                 break
 
@@ -376,7 +414,9 @@ class Passthrough(pyfuse3.Operations):
 
         pid = ctx.pid if ctx is not None else -1
         self._fh_info[fh] = (pid, p, flags)
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="open", path=p, flags=flags))
+        self._emit(
+            FsEvent(ts_ns=time.time_ns(), pid=pid, op="open", path=p, flags=flags)
+        )
 
         fi = pyfuse3.FileInfo()
         fi.fh = fh
@@ -389,7 +429,11 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EBADF)
 
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="read", path=path, size=size, off=off))
+        self._emit(
+            FsEvent(
+                ts_ns=time.time_ns(), pid=pid, op="read", path=path, size=size, off=off
+            )
+        )
 
         os.lseek(fd, off, os.SEEK_SET)
         try:
@@ -416,40 +460,25 @@ class Passthrough(pyfuse3.Operations):
             )
         )
 
-        # ★ 테스트용 강제 MEDIUM + stage2 전송
-        await self.set_proc_state(pid, ProcState.MEDIUM)
-
-        # stage2에 전송 (중복 방지)
-        async with self._pid_lock:
-            if pid not in self._queued_stage2:
-                self._queued_stage2.add(pid)
-                await self._stage2_send.send({
-                    "pid": pid,
-                    "reason": "force_test",
-                    "features": None,
-                    "ts": time.time()
-                })
-
         state = await self.get_proc_state(pid)
         print(f"[WRITE] pid={pid} state={state} path={path}")
 
+        # [수정]
         if state == ProcState.HIGH:
-            await trio.sleep(0.001)
-            return len(buf)
+            from high import handle_write_high
+
+            return await handle_write_high(fd, off, buf, path, pid, self)
 
         elif state == ProcState.MEDIUM:
             from medium import handle_write_medium
+
             return await handle_write_medium(fd, off, buf, path, pid, self)
 
-        try:
-            if hasattr(os, "pwrite"):
-                n = os.pwrite(fd, buf, off)
-            else:
-                os.lseek(fd, off, os.SEEK_SET)
-                n = os.write(fd, buf)
-            return n
-        except OSError as e:
-            raise pyfuse3.FUSEError(e.errno)
+        else:
+            # LOW (또는 SUSPICIOUS) → 즉시 디스크 기록
+            from low import handle_write_low
+
+            return await handle_write_low(fd, off, buf, path, pid, self)
 
     async def truncate(self, inode, size, ctx=None):
         p = self._inode_path.get(inode)
@@ -458,13 +487,24 @@ class Passthrough(pyfuse3.Operations):
 
         pid = ctx.pid if ctx is not None else -1
 
+        state = await self.get_proc_state(pid)
+
+        # [추가] high 관련
+        if state == ProcState.HIGH:
+            from high import handle_truncate_high
+
+            await handle_truncate_high(p, size, pid, self)
+            return
+
         try:
             with open(p, "r+b") as f:
                 f.truncate(size)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="truncate", path=p, size=size))
+        self._emit(
+            FsEvent(ts_ns=time.time_ns(), pid=pid, op="truncate", path=p, size=size)
+        )
 
     async def ftruncate(self, fh, size):
         fd = self._fd_map.get(fh)
@@ -473,18 +513,38 @@ class Passthrough(pyfuse3.Operations):
 
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
 
+        state = await self.get_proc_state(pid)
+
+        # [추가] high 관련
+        if state == ProcState.HIGH:
+            from high import handle_truncate_high
+
+            await handle_truncate_high(path, size, pid, self)
+            return
+
         try:
             os.ftruncate(fd, size)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="ftruncate", path=path, size=size))
+        self._emit(
+            FsEvent(ts_ns=time.time_ns(), pid=pid, op="ftruncate", path=path, size=size)
+        )
 
     async def unlink(self, parent_inode, name, ctx=None):
         # [수정] ROOT_INODE 고정 → parent_inode 기반 경로 조합
         p = self._resolve_path(parent_inode, name)
 
         pid = ctx.pid if ctx is not None else -1
+
+        # [수정] high 관련
+        state = await self.get_proc_state(pid)
+
+        if state == ProcState.HIGH:
+            from high import handle_unlink_high
+
+            await handle_unlink_high(p, pid, self)
+            return
 
         try:
             os.unlink(p)
@@ -493,12 +553,23 @@ class Passthrough(pyfuse3.Operations):
 
         self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="unlink", path=p))
 
-    async def rename(self, parent_inode_old, name_old, parent_inode_new, name_new, flags, ctx=None):
+    async def rename(
+        self, parent_inode_old, name_old, parent_inode_new, name_new, flags, ctx=None
+    ):
         # [수정] ROOT_INODE 고정 → parent_inode 기반 경로 조합
         oldp = self._resolve_path(parent_inode_old, name_old)
         newp = self._resolve_path(parent_inode_new, name_new)
 
         pid = ctx.pid if ctx is not None else -1
+
+        state = await self.get_proc_state(pid)
+
+        # [수정] high 관련
+        if state == ProcState.HIGH:
+            from high import handle_rename_high
+
+            await handle_rename_high(oldp, newp, pid, self)
+            return
 
         try:
             os.rename(oldp, newp)
@@ -506,31 +577,69 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(e.errno)
 
         # [수정 4번] from/to를 new_path 필드로 합쳐서 한 이벤트로 emit
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="rename", path=oldp, new_path=newp))
+        self._emit(
+            FsEvent(
+                ts_ns=time.time_ns(), pid=pid, op="rename", path=oldp, new_path=newp
+            )
+        )
 
     async def release(self, fh):
         pid, path, flags = self._fh_info.pop(fh, (-1, "?", 0))
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="release", path=path, flags=flags))
+        self._emit(
+            FsEvent(ts_ns=time.time_ns(), pid=pid, op="release", path=path, flags=flags)
+        )
 
         fd = self._fd_map.pop(fh, None)
         if fd is not None:
             os.close(fd)
 
+
 class PidStats:
     FEATURE_COLS = [
-        "O_sum", "C_sum", "D_sum", "E_sum",
-        "Is_System_Path", "Is_Test_Path", "is_dev",
-        "CCC", "CCD", "CCO", "CDC", "CDD", "CDO",
-        "COC", "COD", "COO", "DCC", "DCD", "DCO",
-        "DDC", "DDD", "DDO", "DOC", "DOD", "DOO",
-        "EEE", "EEO", "EOE", "EOO", "OCC", "OCD",
-        "OCO", "ODC", "ODD", "ODO", "OEE", "OOC",
-        "OOD", "OOO"
+        "O_sum",
+        "C_sum",
+        "D_sum",
+        "E_sum",
+        "Is_System_Path",
+        "Is_Test_Path",
+        "is_dev",
+        "CCC",
+        "CCD",
+        "CCO",
+        "CDC",
+        "CDD",
+        "CDO",
+        "COC",
+        "COD",
+        "COO",
+        "DCC",
+        "DCD",
+        "DCO",
+        "DDC",
+        "DDD",
+        "DDO",
+        "DOC",
+        "DOD",
+        "DOO",
+        "EEE",
+        "EEO",
+        "EOE",
+        "EOO",
+        "OCC",
+        "OCD",
+        "OCO",
+        "ODC",
+        "ODD",
+        "ODO",
+        "OEE",
+        "OOC",
+        "OOD",
+        "OOO",
     ]
 
     def __init__(self):
         self.counts = {col: 0 for col in self.FEATURE_COLS}
-        self.seq = []   # 최근 O/C/D/E 이벤트 흐름 저장
+        self.seq = []  # 최근 O/C/D/E 이벤트 흐름 저장
 
     def reset(self) -> None:
         self.__init__()
@@ -572,10 +681,19 @@ class PidStats:
         # 경로 기반 feature
         path = ev.path or ""
 
-        if path.startswith("/usr") or path.startswith("/bin") or path.startswith("/sbin") or path.startswith("/etc"):
+        if (
+            path.startswith("/usr")
+            or path.startswith("/bin")
+            or path.startswith("/sbin")
+            or path.startswith("/etc")
+        ):
             self.counts["Is_System_Path"] = 1
 
-        if "test" in path.lower() or "underlay" in path.lower() or "mnt" in path.lower():
+        if (
+            "test" in path.lower()
+            or "underlay" in path.lower()
+            or "mnt" in path.lower()
+        ):
             self.counts["Is_Test_Path"] = 1
 
         if "/dev/" in path:
@@ -595,6 +713,7 @@ class PidStats:
     def to_feature_row(self) -> dict:
         return {col: self.counts.get(col, 0) for col in self.FEATURE_COLS}
 
+
 async def main(mountpoint: str, root: str):
     honeypot_dir = os.path.join(os.path.realpath(root), "honeypot")
     ops = Passthrough(root)
@@ -609,7 +728,7 @@ async def main(mountpoint: str, root: str):
                 ops,
             )
             nursery.start_soon(stage2_worker, ops._stage2_recv, ops)
-            
+
             await pyfuse3.main()
     finally:
         pyfuse3.close(unmount=True)
