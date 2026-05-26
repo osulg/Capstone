@@ -11,64 +11,111 @@ FUSE 기반 랜섬웨어 탐지 파일시스템
 
 ```
 사용자 프로세스
-     │  파일 write/read/create/...
+     │  파일 write / rename / unlink / truncate / ...
      ▼
 [FUSE 마운트 포인트: ~/test_mount/]
      │
      ▼
-passthrough.py  ─── 이벤트 채널 ───▶  stats_collector
-     │                                     │  Stage1 경량 탐지
-     │                                     ▼
-     │                               stage2_worker
-     │  상태 조회/변경                      │  ML 평가 또는 재평가 (1초 주기)
-     ▼                                     ▼
-medium.py  (MEDIUM 상태 write 처리)   ProcState: LOW / MEDIUM / HIGH
+passthrough.py  ──────────────────────────▶  stage1/detector.py
+     │  상태 조회/변경                         │  경량 탐지 (엔트로피·빈도·허니팟)
+     │                                        │  score ≥ 1 → stage2 큐에 pid 추가
+     ▼                                        ▼
+medium.py  (MEDIUM 상태 write 처리)      stage2_worker.py
+                                              │  ML 평가 (초기 + 1초 주기 재평가)
+                                              ▼
+                                    ProcState: LOW / MEDIUM / HIGH
 ```
 
-- **Stage 1**: 엔트로피, write/delete 빈도 기반 경량 탐지 → SUSPICIOUS 승격
-- **Stage 2**: ML 모델 기반 정밀 평가 → MEDIUM / HIGH 판정
-- **medium.py**: MEDIUM 판정 시 3개 레이어(속도 늦추기 / 원본 보존 / 지속 감시) 동작
+### 탐지 2단계 파이프라인
+
+| 단계 | 이름 | 역할 |
+|------|------|------|
+| Stage 1 | 경량 탐지 | 엔트로피·write빈도·허니팟 접근 점수화 → score ≥ 1이면 Stage2 큐 등록 |
+| Stage 2 | ML 평가 | 동적 RF + 정적 RF 앙상블 → MEDIUM / HIGH 판정, 1초 주기 재평가 |
 
 ---
 
-## Medium 위험도 정책
+## Stage 1: 경량 탐지
 
-### 핵심 원칙
+세 가지 detector 각각 이벤트를 확인하고, 해당하면 +1점을 부여한다.
 
-Medium은 **정상일 수도 있는 의심 상태**로, 즉시 차단하지 않고 다음 3가지를 수행한다.
+| Detector | 탐지 조건 |
+|---|---|
+| EntropyDetector | write 데이터 Shannon 엔트로피 ≥ 7.0 |
+| FrequencyDetector | 단시간 내 write/delete 횟수 임계치 초과 |
+| HoneypotDetector | 허니팟 디렉토리(`~/test_mount/honeypot/`) 접근 |
 
-- 원본 파일 보존
-- 시간 벌기 (ML이 재판단할 시간 확보)
-- 지속 감시
-
-트리거 발생 시 즉시 High 격상, T초 내 트리거 없으면 Low 복귀.  
-Medium 판정 즉시 ML 재평가 주기를 5초 → 1초로 단축하고 3개 레이어가 병렬 동작한다.
+**score ≥ 1** 이면 Stage2 큐에 pid 등록 → ML 평가 시작.
 
 ---
 
-### 레이어 1: 속도 늦추기 (MTD_DELAY)
+## Stage 2: ML 평가
 
-정상 프로세스는 write 빈도가 낮다는 특성을 이용한 동적 지연.
+### 모델 구성
 
-| write 빈도 | 지연 |
+| 모델 | 경로 | 입력 피처 |
+|---|---|---|
+| 동적 RF | `detect_dynamic/dataset/csv_files/best_model.pkl` | PidStats 3-gram 피처 40개 (O/C/D/E 조합) |
+| 정적 RF | `final_rf_model.pkl` | ELF 헤더·파일크기·바이트 빈도 등 |
+
+### 점수 계산
+
+```
+final_score = 0.5 × dyn_score + 0.5 × stat_score
+```
+
+- 정적 점수는 프로세스 생존 중에만 `/proc/pid/exe` 읽어서 계산하고, 캐시에 보관
+- 프로세스 종료 후에는 `stat_cache[pid]` 를 재사용 (REEVAL에서도 유효)
+
+### 임계치
+
+| 범위 | 판정 |
+|---|---|
+| `score < 0.3` | LOW |
+| `0.3 ≤ score < 0.82` | MEDIUM |
+| `score ≥ 0.82` | HIGH |
+
+### REEVAL (1초 주기 재평가)
+
+MEDIUM 상태의 pid에 대해 매 1초마다 ML을 다시 실행한다.
+
+- 최신 `_pid_features[pid]` (Stage1이 가장 최근에 저장한 동적 피처) 사용
+- `stat_cache` 우선 사용 (죽은 프로세스도 처리 가능)
+- score ≥ 0.82 → 즉시 HIGH 격상
+- 10초 경과 후에도 MEDIUM이면 → LOW 복귀 + 버퍼 커밋
+
+---
+
+## 정책별 동작
+
+### LOW 상태
+
+- write / rename / unlink / truncate 모두 즉시 디스크에 반영
+- Stage1 점수 계산 중이면 SUSPICIOUS 를 경유하여 Stage2 큐 등록 후 ML 대기
+
+---
+
+### MEDIUM 상태
+
+의심스럽지만 즉시 차단하지 않고 세 가지 레이어가 병렬 동작한다.
+
+#### 레이어 1: 속도 늦추기 (MTD_DELAY)
+
+| write 누적 횟수 | 추가 지연 |
 |---|---|
 | 1 ~ 10회 | 없음 |
-| 11 ~ 20회 | 100ms 지연 |
-| 21회 이상 | 500ms 지연 |
+| 11 ~ 20회 | 100 ms |
+| 21회 이상 | 500 ms |
 
----
+#### 레이어 2: 원본 보존
 
-### 레이어 2: 원본 보존
+소용량 파일(< 1 MB): write 요청을 메모리 버퍼에만 보관하고 디스크 원본 유지
 
-#### 소용량 파일 (< 1 MB) — 인메모리 버퍼링
-
-`write()` 요청을 메모리 버퍼에만 보관하고 디스크 원본을 유지한다.
-
-| ML 판정 | 동작 |
+| 이후 ML 판정 | 동작 |
 |---|---|
-| 정상 판정 | 버퍼 커밋 전 파일 구조 검증 수행 후 디스크에 반영 |
-| 악성 판정 | 버퍼 드롭, 원본 자동 보존 |
-| 계속 Medium | 버퍼 내용 파일 구조 검증 |
+| LOW 복귀 (10초 경과) | 버퍼 커밋 전 파일 구조 검증 → 정상이면 디스크에 반영 |
+| HIGH 격상 | 버퍼 드롭 → 원본 자동 보존 |
+| MEDIUM 유지 | 버퍼 내용 파일 구조 검증 반복 |
 
 파일 구조 검증 기준:
 
@@ -79,52 +126,41 @@ Medium 판정 즉시 ML 재평가 주기를 5초 → 1초로 단축하고 3개 �
 | `.jpg` | `FF D8 FF` 마커 유효 여부 |
 | `.png` | `\x89PNG` 마커 유효 여부 |
 
-구조가 깨진 경우 → 즉시 High 격상
+구조가 깨진 경우 → 즉시 HIGH 격상
 
-#### 대용량 파일 (≥ 1 MB)
+대용량 파일(≥ 1 MB): 메모리 버퍼 없음, MTD_DELAY로 ML 판단 시간 확보.
 
-메모리 버퍼링이 불가하므로 MTD_DELAY로 ML 판단 시간을 확보한다.  
-(실제 파일의 약 90%는 1 MB 이하)  
-High 격상 시 즉시 OBF(Obfuscation Block Filter) 적용.
+#### 레이어 3: 지속 감시 및 HIGH 격상 트리거
 
-#### 버퍼 자료구조 (병렬 요청 처리)
+매 1초마다 ML 재평가 → score ≥ 0.82 이거나 파일 구조 깨지면 즉시 HIGH 격상.
 
-```python
-self._write_buffer: Dict[int, list] = defaultdict(list)
-# pid → [(fd, off, buf, path), ...]
-```
-
-- **다중 파일 동시 요청**: 동일 PID의 여러 파일 write는 같은 PID 버퍼에 순서대로 누적
-- **다른 PID**: 별도 버퍼로 독립 관리
-- **동일 파일 다중 write**: 오프셋(off)이 다르므로 순서대로 커밋하면 올바르게 저장됨
-
-```
-pid=1234: [(test_1.txt, off=0), (test_2.txt, off=0)]
-pid=5678: [(test_3.txt, off=0), (test_4.txt, off=0)]
-```
+이벤트 로그: `~/filesecurity.log` 에 MEDIUM 판정 시각·대상 파일·사유 기록.
 
 ---
 
-### 레이어 3: 지속 감시 및 High 격상 트리거
+### HIGH 상태
 
-매 1초마다 실행:
+**모든 파일 조작을 차단하고 프로세스를 일시 정지한다.**
 
-1. 모든 Medium PID 위험도 재계산
-2. 높은 점수 순으로 정렬 후 재평가
-3. 임계치(0.7) 초과 PID → 즉시 High 격상
-4. 임계치 미만 PID → Medium 유지 + 버퍼 구조 검증 반복
-5. 점수 낮아진 PID → Low 복귀 + 버퍼 커밋
+| 동작 | 설명 |
+|---|---|
+| write 차단 | 실제 디스크에 기록하지 않음 (버퍼 응답만 반환) |
+| rename 차단 | 이름 변경 무시 |
+| unlink 차단 | 삭제 무시 |
+| truncate 차단 | 크기 변경 무시 |
+| SIGSTOP 전송 | `os.kill(pid, signal.SIGSTOP)` — 프로세스 실행 일시 정지 |
+| 이벤트 로그 | `~/filesecurity.log` 에 PID·프로세스명·대상 파일·동작·차단 사유 기록 |
 
----
+HIGH 진입 시 MEDIUM에서 보관 중이던 write 버퍼는 전량 드롭되고, 원본 파일이 보존된다.
 
-### 현재 구현 상태 (테스트 모드)
+HIGH 격상 사유 예시:
 
-실제 ML 모델 연동 전, 동작 확인을 위해 아래와 같이 임의 점수를 주입하고 있다.
-
-- **고정 위험 점수 0.5** → 모든 write가 MEDIUM 상태로 진입
-- **10초 경과** → 트리거 없으면 자동으로 Low 복귀 + 버퍼 커밋
-
-관련 코드: [stage2_worker.py:29](stage2_worker.py#L29), [passthrough.py:277](passthrough.py#L277)
+| 사유 | 의미 |
+|---|---|
+| `ml_score=0.823` | 초기 ML 점수 ≥ 0.82 |
+| `reeval_score=0.835` | REEVAL 중 ML 점수 ≥ 0.82 |
+| `magic_mismatch` | 파일 구조 검증 실패 (magic byte 불일치) |
+| `magic_mismatch_reeval` | REEVAL 중 파일 구조 검증 실패 |
 
 ---
 
@@ -132,13 +168,17 @@ pid=5678: [(test_3.txt, off=0), (test_4.txt, off=0)]
 
 ```
 Capstone/
-├── passthrough.py     # FUSE 메인 (이벤트 수집, 상태 관리, write 라우팅)
-├── medium.py          # Medium 상태 write 처리 (3개 레이어 구현)
-├── stage2_worker.py   # Stage 2 ML 재평가 워커 (1초 주기)
-├── states.py          # ProcState Enum (LOW / MEDIUM / HIGH / SUSPICIOUS)
-├── stage1/            # Stage 1 경량 탐지 모듈
-├── test.py            # 기본 쓰기 테스트 (Medium → Low 복귀 확인)
-└── test2.py           # PDF 헤더 검증 테스트 (정상/깨진 PDF)
+├── passthrough.py          # FUSE 메인 (이벤트 수집, 상태 관리, write 라우팅)
+├── medium.py               # MEDIUM 상태 write 처리 (3개 레이어 구현)
+├── high.py                 # HIGH 상태 처리 (차단·SIGSTOP·로깅)
+├── stage2_worker.py        # Stage 2 ML 평가 워커 (초기 + 1초 주기 재평가)
+├── states.py               # ProcState Enum (LOW / MEDIUM / HIGH / SUSPICIOUS)
+├── stage1/                 # Stage 1 경량 탐지 모듈
+│   └── detector.py         # EntropyDetector / FrequencyDetector / HoneypotDetector
+├── detect_dynamic/dataset/csv_files/best_model.pkl   # 동적 RF 모델
+├── final_rf_model.pkl      # 정적 RF 모델
+├── test_high_sim.py        # HIGH 시뮬레이션 (랜섬웨어 행위 모방)
+└── test_c_medium.c         # 정적 모델용 최소 C 바이너리 (MEDIUM 유도)
 ```
 
 ---
@@ -150,13 +190,14 @@ Capstone/
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install pyfuse3 trio joblib pandas
+pip install pyfuse3 trio joblib pandas scikit-learn numpy
 ```
 
 ### FUSE 마운트 포인트 및 underlay 디렉토리 생성
 
 ```bash
 mkdir -p ~/test_mount ~/test_underlay
+mkdir -p ~/test_mount/honeypot
 ```
 
 ---
@@ -188,88 +229,131 @@ fusermount -u ~/test_mount
 
 ## 테스트 방법
 
-GuardFS를 마운트한 상태에서 **별도 터미널**에서 테스트 스크립트를 실행한다.
+GuardFS를 마운트한 상태에서 **별도 터미널**에서 실행한다.
 
-### 테스트 1: Medium → Low 복귀 확인 (`test.py`)
+---
+
+### 테스트 1: LOW — 일반 파일 쓰기
 
 ```bash
-python3 test.py
+echo "hello world" > ~/test_mount/hello.txt
 ```
 
-**동작 흐름:**
+**예상 동작:**
 
-1. `~/test_mount/` 에 `test_1.txt`, `test_2.txt`, `test_3.txt` 순서로 쓰기
-2. 각 write마다 강제로 MEDIUM 상태 진입 (score=0.5 고정)
-3. write 내용은 메모리 버퍼에만 보관 (`[MEDIUM] ... → 버퍼 보관` 로그 출력)
-4. 10초 경과 후 자동으로 LOW 복귀 + 버퍼 커밋 (`[REEVAL] ... 10초 경과 → Low 복귀`)
+- Stage1 score = 0 (엔트로피 낮음, 빈도 낮음, 허니팟 아님)
+- Stage2 큐 등록 안 됨
+- 즉시 디스크에 기록
 
 **예상 로그 (터미널 1):**
 ```
-[STATE] pid=XXXX LOW → MEDIUM
-[WRITE] pid=XXXX state=MEDIUM path=.../mnt/test_1.txt
-[MEDIUM] pid=XXXX path=.../mnt/test_1.txt off=0 size=1200 → 버퍼 보관
-...
-[REEVAL] pid=XXXX score=0.500 elapsed=10.0s
+[WRITE] pid=XXXX state=LOW path=.../hello.txt
+```
+
+---
+
+### 테스트 2: MEDIUM — 허니팟 접근 (ML 점수 0.3 ~ 0.82)
+
+```bash
+echo "trap" > ~/test_mount/honeypot/trap.txt
+```
+
+**예상 동작:**
+
+1. HoneypotDetector 탐지 → score ≥ 1 → Stage2 큐 등록
+2. ML 평가: dyn 낮음 + stat 높음 → score ≈ 0.55 ~ 0.82 → MEDIUM
+3. write 버퍼 보관, MTD_DELAY 적용
+4. REEVAL 10초 동안 MEDIUM 유지 → LOW 복귀 + 버퍼 커밋
+
+**예상 로그 (터미널 1):**
+```
+[STAGE2] pid=XXXX dyn=0.xxx stat=0.xxx final=0.xxx
+[STATE]  pid=XXXX LOW → MEDIUM
+[MEDIUM] pid=XXXX path=.../honeypot/trap.txt → 버퍼 보관
+[REEVAL] pid=XXXX score=0.xxx elapsed=10.0s
 [REEVAL] pid=XXXX 10초 경과 → Low 복귀
-[COMMIT] pid=XXXX path=.../mnt/test_1.txt off=0 → 커밋 완료
 ```
 
 ---
 
-### 테스트 2: PDF 헤더 검증 (High 격상) (`test2.py`)
+### 테스트 3: HIGH — 랜섬웨어 행위 시뮬레이션
 
 ```bash
-python3 test2.py
+python3 test_high_sim.py
 ```
 
-**동작 흐름:**
+`test_high_sim.py` 는 동일 프로세스(PID) 에서 10회 반복하여 아래 행위를 수행한다:
 
-1. 정상 PDF(`%PDF-` 헤더) 쓰기 → 버퍼 보관 후 정상 커밋
-2. 깨진 PDF(헤더 없음) 쓰기 → magic number 불일치 감지 → 즉시 High 격상
+1. `/dev/urandom` 기반 고엔트로피 데이터 512 B 쓰기 (`E_sum++`)
+2. `.txt` → `.enc` 확장자 변경 (`ExtChangeDetector`)
+3. 파일 삭제 (`D_sum++`)
+4. 0.5초 대기 (REEVAL 사이클 내 누적 가능하도록)
+
+**예상 동작:**
+
+1. 첫 번째 이벤트에서 Stage2 진입 → MEDIUM
+2. REEVAL마다 ML 재평가 → `_pid_features` 누적 반영
+3. 약 2~4회 REEVAL 후 dyn_score 상승 → score ≥ 0.82 → HIGH 격상
+4. 이후 write / rename / unlink 전부 차단, SIGSTOP
 
 **예상 로그 (터미널 1):**
 ```
-[MEDIUM] pid=XXXX path=.../test_normal.pdf off=0 size=22 → 버퍼 보관
-[MEDIUM] pid=XXXX path=.../test_broken.pdf magic number 불일치 → High 격상
-[TRIGGER HIGH] pid=XXXX reason=magic_mismatch
-[STATE] pid=XXXX MEDIUM → HIGH
+[STAGE2] pid=XXXX dyn=0.xxx stat=0.xxx final=0.xxx
+[STATE]  pid=XXXX LOW → MEDIUM
+[REEVAL] pid=XXXX dyn=0.xxx stat=0.xxx score=0.xxx elapsed=1.0s
+...
+[REEVAL] pid=XXXX score=0.822 → HIGH 격상
+[TRIGGER HIGH] pid=XXXX reason=reeval_score=0.822
+[HIGH]   pid=XXXX WRITE BLOCKED path=...
+[HIGH]   pid=XXXX suspend 완료
 ```
+
+HIGH 이벤트는 `~/filesecurity.log` 에도 기록된다.
 
 ---
 
-### 수동 테스트 (마운트 포인트에 직접 파일 쓰기)
+### 테스트 4: 정적 모델 최소 바이너리 (MEDIUM 유도)
 
 ```bash
-# 일반 텍스트 쓰기
-echo "test content" > ~/test_mount/hello.txt
-
-# 정상 PDF 쓰기
-python3 -c "open(os.path.expanduser('~/test_mount/test.pdf'),'wb').write(b'%PDF-1.4 content')"
-
-# 대용량 파일 쓰기 (1 MB 이상 → MTD_DELAY 경로)
-dd if=/dev/urandom of=~/test_mount/large.bin bs=1M count=2
-
-# underlay 비우기 (테스트 재실행 전)
-rm -f ~/test_underlay/*
+gcc -o test_c_medium test_c_medium.c
+./test_c_medium ~/test_mount/c_test.txt
 ```
+
+**예상 동작:**
+
+- 동적 피처 거의 없음 (write 1회) → dyn_score 낮음
+- 정적 모델이 ELF 헤더·바이트 빈도 분석 → stat_score 기반으로 판정
+- dyn 낮고 stat 0.5 근처 → score < 0.82 → MEDIUM 또는 LOW
 
 ---
 
 ## 상태 전이 요약
 
 ```
-LOW ──(anomaly detected)──▶ SUSPICIOUS ──(ML score ≥ 0.3)──▶ MEDIUM
-                                                                 │
-                              ┌──────────────────────────────────┤
-                              │                                  │
-                   (10초 경과, score < 0.3)          (score ≥ 0.7 또는 magic 불일치)
-                              │                                  │
-                              ▼                                  ▼
-                             LOW                               HIGH
+LOW ──(Stage1 score ≥ 1)──▶ SUSPICIOUS ──(ML score ≥ 0.3)──▶ MEDIUM
+                                                                   │
+                              ┌────────────────────────────────────┤
+                              │                                    │
+                  (10초 경과, score < 0.3)           (ML score ≥ 0.82  또는
+                              │                       magic byte 불일치)
+                              ▼                                    ▼
+                             LOW                                 HIGH
+                                                    (write/rename/unlink/truncate 차단)
+                                                    (SIGSTOP + filesecurity.log 기록)
 ```
 
-| 상태 | write 동작 |
-|---|---|
-| LOW | 즉시 디스크에 쓰기 |
-| MEDIUM | 버퍼 보관 + MTD_DELAY + 1초 주기 재평가 |
-| HIGH | write 차단 (OBF 적용) |
+| 상태 | write 동작 | rename/unlink | 로깅 |
+|---|---|---|---|
+| LOW | 즉시 디스크에 쓰기 | 즉시 반영 | 없음 |
+| MEDIUM | 버퍼 보관 + MTD_DELAY | 즉시 반영 | `~/filesecurity.log` (MEDIUM 태그) |
+| HIGH | 차단 (디스크 기록 안 함) | 차단 | `~/filesecurity.log` (HIGH 태그) + SIGSTOP |
+
+---
+
+## 향후 개선 사항
+
+- 동적·정적 모델 가중치 자동 보정 (학습 데이터 기반)
+- HIGH 상태 해제 조건 및 관리자 승인 흐름 추가
+- `E_sum` / `D_sum` 누적 임계치 기반 Stage1 score 세분화
+- 대용량 파일(≥ 1 MB) 스트리밍 버퍼 지원
+- 단위 테스트 확장 (stage2_worker 모킹)

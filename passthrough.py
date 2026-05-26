@@ -165,10 +165,12 @@ class Passthrough(pyfuse3.Operations):
         self._suspended_pids: set = set()
         self._high_reason: Dict[int, str] = {}
         self._pid_override_file = "/tmp/guardfs_pid_override.json"
+        self._pid_features: Dict[int, dict] = {}  # Stage1이 보낸 최신 피처 저장
 
     # ------------------------------------------------------------------ helpers
 
-    def _get_forced_state(self, pid: int) -> ProcState:
+    def _get_forced_state(self, pid: int) -> Optional[ProcState]:
+        """override 파일 있으면 해당 상태, 없으면 None (실제 ML 탐지 모드)"""
         try:
             with open(f"/tmp/guardfs_state_{pid}", "r") as f:
                 s = f.read().strip().upper()
@@ -176,7 +178,7 @@ class Passthrough(pyfuse3.Operations):
                 return ProcState(s)
         except Exception:
             pass
-        return ProcState.MEDIUM
+        return None
 
     def _resolve_path(self, parent_inode: int, name: bytes) -> str:
         """parent_inode로부터 자식 경로를 조합해 반환한다."""
@@ -223,13 +225,22 @@ class Passthrough(pyfuse3.Operations):
         if pid <= 0:
             return
 
+        # 최신 피처 항상 저장 (REEVAL에서 사용)
+        if features:
+            self._pid_features[pid] = features
+
         async with self._pid_lock:
             prev = self._proc_state.get(pid, ProcState.LOW)
+
+            # HIGH면 재평가 불필요
+            if prev == ProcState.HIGH:
+                return
 
             # 상태 승격
             if prev == ProcState.LOW:
                 self._proc_state[pid] = ProcState.SUSPICIOUS
                 print(f"[STATE] pid={pid} LOW -> SUSPICIOUS reason={reason}")
+            # MEDIUM이면 상태 유지 (피처만 업데이트됨)
 
             # 이미 큐에 올라간 PID면 중복 전송 방지
             if pid in self._queued_stage2:
@@ -263,13 +274,6 @@ class Passthrough(pyfuse3.Operations):
         await self.set_proc_state(pid, ProcState.HIGH)
         from high import handle_high_enter
         await handle_high_enter(pid, self, reason)
-        await self._stage2_send.send({
-            "pid": pid,
-            "reason": reason,
-            "force_high": True,
-            "features": None,
-            "ts": time.time()
-        })
     
     # ------------------------------------------------------------------ FUSE ops
 
@@ -296,11 +300,14 @@ class Passthrough(pyfuse3.Operations):
         p = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
 
-        forced = self._get_forced_state(pid)
-        if forced != ProcState.LOW:
-            await self.set_proc_state(pid, forced)
-
-        state = await self.get_proc_state(pid)
+        override = self._get_forced_state(pid)
+        if override is not None:
+            await self.set_proc_state(pid, override)
+            state = override
+        else:
+            state = await self.get_proc_state(pid)
+            if state == ProcState.SUSPICIOUS:
+                state = ProcState.LOW  # ML 결과 대기 중, 일단 통과
 
         if state in (ProcState.MEDIUM, ProcState.HIGH):
             staging_path = os.path.join(self._staging_dir, f"fh_{self._next_fh}")
@@ -479,23 +486,17 @@ class Passthrough(pyfuse3.Operations):
             )
         )
 
-        forced = self._get_forced_state(pid)
-        if forced != ProcState.LOW:
-            await self.set_proc_state(pid, forced)
+        override = self._get_forced_state(pid)
+        if override is not None:
+            # override 파일 있음: 강제 상태 적용, ML 평가 없음
+            await self.set_proc_state(pid, override)
+            state = override
+        else:
+            # 실제 탐지 모드: Stage1 → mark_suspect → stage2 경로만 사용
+            state = await self.get_proc_state(pid)
+            if state == ProcState.SUSPICIOUS:
+                state = ProcState.LOW  # ML 결과 대기 중, 일단 통과
 
-        # MEDIUM일 때만 stage2 전송 (LOW/HIGH는 스킵)
-        if forced == ProcState.MEDIUM:
-            async with self._pid_lock:
-                if pid not in self._queued_stage2:
-                    self._queued_stage2.add(pid)
-                    await self._stage2_send.send({
-                        "pid": pid,
-                        "reason": "force_test",
-                        "features": None,
-                        "ts": time.time()
-                    })
-
-        state = await self.get_proc_state(pid)
         print(f"[WRITE] pid={pid} state={state} path={path}")
 
         if state == ProcState.HIGH:

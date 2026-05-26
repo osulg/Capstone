@@ -1,16 +1,131 @@
 # stage2_worker.py
 import os
+import warnings
 import trio
+import joblib
+import pandas as pd
+import numpy as np
 from states import ProcState
 
-# medium에서 직접 import 말고 함수 안에서 import
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+
 MEDIUM_THRESHOLD = 0.3
-HIGH_THRESHOLD   = 0.7
+HIGH_THRESHOLD   = 0.82
 REEVAL_S         = 1.0
 
+DYNAMIC_MODEL_PATH = "detect_dynamic/dataset/csv_files/best_model.pkl"
+STATIC_MODEL_PATH  = "final_rf_model.pkl"
+
+DYNAMIC_FEATURES = [
+    "O_sum", "C_sum", "D_sum", "E_sum",
+    "Is_System_Path", "Is_Test_Path", "is_dev",
+    "CCC", "CCD", "CCO", "CDC", "CDD", "CDO",
+    "COC", "COD", "COO", "DCC", "DCD", "DCO",
+    "DDC", "DDD", "DDO", "DOC", "DOD", "DOO",
+    "EEE", "EEO", "EOE", "EOO", "OCC", "OCD",
+    "OCO", "ODC", "ODD", "ODO", "OEE", "OOC",
+    "OOD", "OOO"
+]
+
+STATIC_FEATURES = None  # 모델 로딩 후 채움
+
+
+def load_models():
+    try:
+        dyn = joblib.load(DYNAMIC_MODEL_PATH)
+        print(f"[ML] 동적 모델 로드 완료")
+    except Exception as e:
+        print(f"[ML] 동적 모델 로드 실패: {e}")
+        dyn = None
+
+    try:
+        stat = joblib.load(STATIC_MODEL_PATH)
+        global STATIC_FEATURES
+        STATIC_FEATURES = list(stat.feature_names_in_)
+        print(f"[ML] 정적 모델 로드 완료 ({len(STATIC_FEATURES)} features)")
+    except Exception as e:
+        print(f"[ML] 정적 모델 로드 실패: {e}")
+        stat = None
+
+    return dyn, stat
+
+
+def get_exe_path(pid: int) -> str:
+    try:
+        return os.readlink(f"/proc/{pid}/exe")
+    except Exception:
+        return ""
+
+
+def predict_dynamic(model, features: dict) -> float:
+    if model is None:
+        return 0.5
+    try:
+        row = {f: features.get(f, 0) for f in DYNAMIC_FEATURES}
+        df = pd.DataFrame([row])
+        prob = model.predict_proba(df)[0]
+        # 악성(1) 클래스 확률 반환
+        classes = list(model.classes_)
+        mal_idx = classes.index(1) if 1 in classes else -1
+        return float(prob[mal_idx]) if mal_idx >= 0 else float(prob[-1])
+    except Exception as e:
+        print(f"[ML] 동적 예측 오류: {e}")
+        return 0.5
+
+
+def predict_static(model, pid: int) -> float:
+    if model is None or STATIC_FEATURES is None:
+        return 0.5
+    try:
+        exe_path = get_exe_path(pid)
+        if not exe_path or not os.path.exists(exe_path):
+            return 0.5
+
+        # 기본값 0으로 채우고 계산 가능한 값만 채움
+        row = {f: 0 for f in STATIC_FEATURES}
+        row["file_size"] = os.path.getsize(exe_path)
+        row["is_64bit"] = 1
+
+        with open(exe_path, "rb") as f:
+            header = f.read(16)
+            if header[:4] == b'\x7fELF':
+                row["is_64bit"] = 1 if header[4] == 2 else 0
+                # ELF type (ET_EXEC=2, ET_DYN=3)
+                f.seek(16)
+                e_type = int.from_bytes(f.read(2), 'little')
+                if "elf_type_ET_EXEC" in row:
+                    row["elf_type_ET_EXEC"] = 1 if e_type == 2 else 0
+                if "elf_type_ET_DYN" in row:
+                    row["elf_type_ET_DYN"] = 1 if e_type == 3 else 0
+
+            # byte frequency features
+            f.seek(0)
+            data = f.read(4096)
+            freq = [0] * 256
+            for b in data:
+                freq[b] += 1
+            for feat in STATIC_FEATURES:
+                if feat.startswith("byte_f_"):
+                    idx = int(feat.split("_")[-1])
+                    if idx < 256:
+                        row[feat] = freq[idx] / max(len(data), 1)
+
+        df = pd.DataFrame([row])
+        prob = model.predict_proba(df)[0]
+        classes = list(model.classes_)
+        mal_idx = classes.index(1) if 1 in classes else -1
+        return float(prob[mal_idx]) if mal_idx >= 0 else float(prob[-1])
+    except Exception as e:
+        print(f"[ML] 정적 예측 오류: {e}")
+        return 0.5
+
+
 async def stage2_worker(recv_chan, ops) -> None:
+    dyn_model, stat_model = load_models()
+
     medium_pids = {}
     risk_scores = {}
+    stat_cache  = {}   # 프로세스 종료 후에도 static 점수 유지
     next_reeval = trio.current_time() + REEVAL_S
 
     async with recv_chan:
@@ -24,18 +139,30 @@ async def stage2_worker(recv_chan, ops) -> None:
                     return
 
             if not scope.cancelled_caught:
-                # 새 이벤트 처리
                 pid = item["pid"]
-                score = 0.5
-                risk_scores[pid] = score
-                print(f"[STAGE2] pid={pid} score={score:.3f} (고정)")
+                features = item.get("features") or {}
 
-                if score >= MEDIUM_THRESHOLD:
+                dyn_score  = predict_dynamic(dyn_model, features)
+                stat_score = predict_static(stat_model, pid)
+                if stat_score != 0.5:          # 프로세스 살아있을 때만 캐싱
+                    stat_cache[pid] = stat_score
+                else:
+                    stat_score = stat_cache.get(pid, 0.5)  # 죽었으면 캐시 사용
+                score = 0.5 * dyn_score + 0.5 * stat_score
+
+                risk_scores[pid] = score
+                print(f"[STAGE2] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} final={score:.3f}")
+
+                if score >= HIGH_THRESHOLD:
+                    await ops.trigger_high(pid, reason=f"ml_score={score:.3f}")
+                elif score >= MEDIUM_THRESHOLD:
                     await ops.set_proc_state(pid, ProcState.MEDIUM)
                     medium_pids[pid] = trio.current_time()
-                    print(f"[STAGE2] pid={pid} → MEDIUM 진입")
+                    print(f"[STAGE2] pid={pid} → MEDIUM (score={score:.3f})")
+                else:
+                    await ops.set_proc_state(pid, ProcState.LOW)
+                    print(f"[STAGE2] pid={pid} → LOW (score={score:.3f})")
 
-            # ← continue 제거! 항상 재평가 실행
             # 1초마다 Medium PID 재평가
             if medium_pids:
                 sorted_pids = sorted(
@@ -45,9 +172,19 @@ async def stage2_worker(recv_chan, ops) -> None:
                 )
 
                 for pid in list(sorted_pids):
-                    score = risk_scores.get(pid, 0.0)
+                    # 최신 피처로 ML 재평가 (stat은 캐시 우선)
+                    features = ops._pid_features.get(pid, {})
+                    dyn_score  = predict_dynamic(dyn_model, features)
+                    stat_score = predict_static(stat_model, pid)
+                    if stat_score != 0.5:
+                        stat_cache[pid] = stat_score
+                    else:
+                        stat_score = stat_cache.get(pid, 0.5)
+                    score = 0.5 * dyn_score + 0.5 * stat_score
+                    risk_scores[pid] = score
+
                     elapsed = trio.current_time() - medium_pids[pid]
-                    print(f"[REEVAL] pid={pid} score={score:.3f} elapsed={elapsed:.1f}s")
+                    print(f"[REEVAL] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} score={score:.3f} elapsed={elapsed:.1f}s")
 
                     if elapsed > 10.0:
                         print(f"[REEVAL] pid={pid} 10초 경과 → Low 복귀")
@@ -59,7 +196,16 @@ async def stage2_worker(recv_chan, ops) -> None:
                         medium_pids.pop(pid, None)
                         continue
 
-                    from medium import validate_medium_buffers, drop_buffers, commit_buffers
+                    # HIGH 임계치 초과 시 즉시 격상
+                    if score >= HIGH_THRESHOLD:
+                        print(f"[REEVAL] pid={pid} score={score:.3f} → HIGH 격상")
+                        from medium import drop_buffers
+                        await ops.trigger_high(pid, reason=f"reeval_score={score:.3f}")
+                        await drop_buffers(pid, ops)
+                        medium_pids.pop(pid, None)
+                        continue
+
+                    from medium import validate_medium_buffers, drop_buffers
                     need_high = await validate_medium_buffers(pid, ops)
                     if need_high:
                         print(f"[REEVAL] pid={pid} 구조 깨짐 → 버퍼 드롭 + HIGH 격상")
