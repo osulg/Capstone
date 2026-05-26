@@ -3,6 +3,7 @@ import os
 import sys
 import errno
 import time
+import stat as stat_mod
 from dataclasses import dataclass
 from typing import Optional, Dict, Tuple
 from collections import defaultdict
@@ -155,6 +156,11 @@ class Passthrough(pyfuse3.Operations):
         self._write_count:  Dict[int, int]  = defaultdict(int)
         self._risk_score:   Dict[int, float] = {}
 
+        self._staging_dir = "/tmp/guardfs_staging"
+        os.makedirs(self._staging_dir, exist_ok=True)
+        self._staging_fh:  Dict[int, str]  = {}
+        self._staging_pid: Dict[int, list] = defaultdict(list)
+
     # ------------------------------------------------------------------ helpers
 
     def _resolve_path(self, parent_inode: int, name: bytes) -> str:
@@ -276,7 +282,45 @@ class Passthrough(pyfuse3.Operations):
         # ★ 테스트용 강제 MEDIUM
         await self.set_proc_state(pid, ProcState.MEDIUM)
 
-        # MEDIUM이든 LOW든 파일은 일단 만들기
+        state = await self.get_proc_state(pid)
+
+        if state == ProcState.MEDIUM:
+            staging_path = os.path.join(self._staging_dir, f"fh_{self._next_fh}")
+            try:
+                fd = os.open(staging_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, mode)
+            except OSError as e:
+                raise pyfuse3.FUSEError(e.errno)
+
+            fh = self._next_fh
+            self._next_fh += 1
+            self._fd_map[fh] = fd
+            self._fh_info[fh] = (pid, p, flags)
+            self._staging_fh[fh] = staging_path
+            self._staging_pid[pid].append(staging_path)
+            self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="create", path=p, flags=flags))
+
+            attr = pyfuse3.EntryAttributes()
+            attr.st_ino = fh + 0x80000000
+            attr.st_mode = stat_mod.S_IFREG | (mode & 0o7777)
+            attr.st_nlink = 1
+            attr.st_uid = ctx.uid if ctx is not None else os.getuid()
+            attr.st_gid = ctx.gid if ctx is not None else os.getgid()
+            attr.st_size = 0
+            attr.st_blksize = 4096
+            attr.st_blocks = 0
+            ts = time.time_ns()
+            attr.st_atime_ns = ts
+            attr.st_mtime_ns = ts
+            attr.st_ctime_ns = ts
+            attr.entry_timeout = 1.0
+            attr.attr_timeout = 1.0
+
+            print(f"[CREATE] pid={pid} path={p} → 스테이징 (underlay 미생성)")
+
+            fi = pyfuse3.FileInfo()
+            fi.fh = fh
+            return fi, attr
+
         try:
             fd = os.open(p, flags | os.O_CREAT, mode)
         except OSError as e:
@@ -514,7 +558,17 @@ class Passthrough(pyfuse3.Operations):
 
         fd = self._fd_map.pop(fh, None)
         if fd is not None:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+        staging_path = self._staging_fh.pop(fh, None)
+        if staging_path:
+            try:
+                os.unlink(staging_path)
+            except OSError:
+                pass
 
 class PidStats:
     FEATURE_COLS = [

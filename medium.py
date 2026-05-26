@@ -93,10 +93,23 @@ async def commit_buffers(pid: int, ops) -> None:
 
     ops._write_count.pop(pid, None)
 
+    for staging_path in ops._staging_pid.pop(pid, []):
+        try:
+            os.unlink(staging_path)
+        except OSError:
+            pass
+
 
 async def drop_buffers(pid: int, ops) -> None:
     dropped = ops._write_buffer.pop(pid, [])
     ops._write_count.pop(pid, None)
+
+    for staging_path in ops._staging_pid.pop(pid, []):
+        try:
+            os.unlink(staging_path)
+        except OSError:
+            pass
+
     print(f"[DROP] pid={pid} 버퍼 {len(dropped)}개 드롭 → 원본 보존")
 
 

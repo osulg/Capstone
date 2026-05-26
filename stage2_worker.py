@@ -57,11 +57,15 @@ async def stage2_worker(recv_chan, ops) -> None:
                         medium_pids.pop(pid, None)
                         continue
 
-                    from medium import validate_medium_buffers, drop_buffers
+                    from medium import validate_medium_buffers, drop_buffers, commit_buffers
                     need_high = await validate_medium_buffers(pid, ops)
                     if need_high:
-                        print(f"[REEVAL] pid={pid} 구조 깨짐 → 버퍼 드롭")
+                        print(f"[REEVAL] pid={pid} 구조 깨짐 → 버퍼 드롭 + HIGH 격상")
+                        await ops.trigger_high(pid, reason="magic_mismatch_reeval")
                         await drop_buffers(pid, ops)
                         medium_pids.pop(pid, None)
+                    elif ops._write_buffer.get(pid):
+                        print(f"[REEVAL] pid={pid} 헤더 정상 → 커밋 (MEDIUM 유지, 계속 감시)")
+                        await commit_buffers(pid, ops)
 
             next_reeval += REEVAL_S
