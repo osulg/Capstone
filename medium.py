@@ -1,7 +1,25 @@
 # medium.py
 import os
+import time
 import trio
 from states import ProcState
+
+
+def log_medium_event(pid: int, path: str, action: str, result: str, reason: str = "") -> None:
+    log_path = os.path.expanduser("~/filesecurity.log")
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    log_msg = (
+        "[MEDIUM]\n"
+        f"Time: {now}\n"
+        f"PID: {pid}\n"
+        f"Target: {path}\n"
+        f"Action: {action}\n"
+        f"Result: {result}\n"
+        f"Reason: {reason}\n"
+        "\n"
+    )
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(log_msg)
 
 MAGIC_BYTES = {
     ".pdf":  b"%PDF-",
@@ -43,11 +61,13 @@ async def handle_write_medium(
     if file_size < SIZE_LIMIT:
         if not validate_magic(path, buf, off):
             print(f"[MEDIUM] pid={pid} path={path} magic number 불일치 → High 격상")
+            log_medium_event(pid, path, "WRITE", "ESCALATED_TO_HIGH", "magic number 불일치")
             await ops.trigger_high(pid, reason="magic_mismatch")
             return len(buf)
 
         ops._write_buffer[pid].append((fd, off, buf, path))
         print(f"[MEDIUM] pid={pid} path={path} off={off} size={file_size} → 버퍼 보관")
+        log_medium_event(pid, path, "WRITE", "BUFFERED", f"size={file_size}")
 
     else:
         print(f"[MEDIUM] pid={pid} path={path} size={file_size} → 대용량 MTD_DELAY")
@@ -82,14 +102,16 @@ async def commit_buffers(pid: int, ops) -> None:
                 f.seek(off)
                 f.write(buf)
             print(f"[COMMIT] pid={pid} path={path} off={off} → 커밋 완료")
+            log_medium_event(pid, path, "COMMIT", "SUCCESS", "정상 판정 후 LOW 복귀")
         except FileNotFoundError:
-            # 파일 없으면 새로 만들기
             with open(path, "wb") as f:
                 f.seek(off)
                 f.write(buf)
             print(f"[COMMIT] pid={pid} path={path} off={off} → 새 파일 커밋 완료")
+            log_medium_event(pid, path, "COMMIT", "SUCCESS", "새 파일 생성 후 커밋")
         except OSError as e:
             print(f"[COMMIT] pid={pid} path={path} 오류: {e}")
+            log_medium_event(pid, path, "COMMIT", "FAILED", str(e))
 
     ops._write_count.pop(pid, None)
 
@@ -111,6 +133,7 @@ async def drop_buffers(pid: int, ops) -> None:
             pass
 
     print(f"[DROP] pid={pid} 버퍼 {len(dropped)}개 드롭 → 원본 보존")
+    log_medium_event(pid, "", "DROP", "BUFFER_DROPPED", f"버퍼 {len(dropped)}개 드롭, 원본 보존")
 
 
 async def validate_medium_buffers(pid: int, ops) -> bool:

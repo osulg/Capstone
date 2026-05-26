@@ -3,6 +3,7 @@ import os
 import sys
 import errno
 import time
+import json
 import stat as stat_mod
 from dataclasses import dataclass
 from typing import Optional, Dict, Tuple
@@ -161,7 +162,21 @@ class Passthrough(pyfuse3.Operations):
         self._staging_fh:  Dict[int, str]  = {}
         self._staging_pid: Dict[int, list] = defaultdict(list)
 
+        self._suspended_pids: set = set()
+        self._high_reason: Dict[int, str] = {}
+        self._pid_override_file = "/tmp/guardfs_pid_override.json"
+
     # ------------------------------------------------------------------ helpers
+
+    def _get_forced_state(self, pid: int) -> ProcState:
+        try:
+            with open(f"/tmp/guardfs_state_{pid}", "r") as f:
+                s = f.read().strip().upper()
+            if s in ("LOW", "MEDIUM", "HIGH"):
+                return ProcState(s)
+        except Exception:
+            pass
+        return ProcState.MEDIUM
 
     def _resolve_path(self, parent_inode: int, name: bytes) -> str:
         """parent_inode로부터 자식 경로를 조합해 반환한다."""
@@ -246,13 +261,15 @@ class Passthrough(pyfuse3.Operations):
     async def trigger_high(self, pid: int, reason: str = "") -> None:
         print(f"[TRIGGER HIGH] pid={pid} reason={reason}")
         await self.set_proc_state(pid, ProcState.HIGH)
+        from high import handle_high_enter
+        await handle_high_enter(pid, self, reason)
         await self._stage2_send.send({
             "pid": pid,
             "reason": reason,
             "force_high": True,
             "features": None,
             "ts": time.time()
-        })           
+        })
     
     # ------------------------------------------------------------------ FUSE ops
 
@@ -279,12 +296,13 @@ class Passthrough(pyfuse3.Operations):
         p = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
 
-        # ★ 테스트용 강제 MEDIUM
-        await self.set_proc_state(pid, ProcState.MEDIUM)
+        forced = self._get_forced_state(pid)
+        if forced != ProcState.LOW:
+            await self.set_proc_state(pid, forced)
 
         state = await self.get_proc_state(pid)
 
-        if state == ProcState.MEDIUM:
+        if state in (ProcState.MEDIUM, ProcState.HIGH):
             staging_path = os.path.join(self._staging_dir, f"fh_{self._next_fh}")
             try:
                 fd = os.open(staging_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, mode)
@@ -315,7 +333,8 @@ class Passthrough(pyfuse3.Operations):
             attr.entry_timeout = 1.0
             attr.attr_timeout = 1.0
 
-            print(f"[CREATE] pid={pid} path={p} → 스테이징 (underlay 미생성)")
+            label = "스테이징 (underlay 미생성)" if state == ProcState.MEDIUM else "HIGH 차단 (underlay 미생성)"
+            print(f"[CREATE] pid={pid} path={p} → {label}")
 
             fi = pyfuse3.FileInfo()
             fi.fh = fh
@@ -460,40 +479,36 @@ class Passthrough(pyfuse3.Operations):
             )
         )
 
-        # ★ 테스트용 강제 MEDIUM + stage2 전송
-        await self.set_proc_state(pid, ProcState.MEDIUM)
+        forced = self._get_forced_state(pid)
+        if forced != ProcState.LOW:
+            await self.set_proc_state(pid, forced)
 
-        # stage2에 전송 (중복 방지)
-        async with self._pid_lock:
-            if pid not in self._queued_stage2:
-                self._queued_stage2.add(pid)
-                await self._stage2_send.send({
-                    "pid": pid,
-                    "reason": "force_test",
-                    "features": None,
-                    "ts": time.time()
-                })
+        # MEDIUM일 때만 stage2 전송 (LOW/HIGH는 스킵)
+        if forced == ProcState.MEDIUM:
+            async with self._pid_lock:
+                if pid not in self._queued_stage2:
+                    self._queued_stage2.add(pid)
+                    await self._stage2_send.send({
+                        "pid": pid,
+                        "reason": "force_test",
+                        "features": None,
+                        "ts": time.time()
+                    })
 
         state = await self.get_proc_state(pid)
         print(f"[WRITE] pid={pid} state={state} path={path}")
 
         if state == ProcState.HIGH:
-            await trio.sleep(0.001)
-            return len(buf)
+            from high import handle_write_high
+            return await handle_write_high(fd, off, buf, path, pid, self)
 
         elif state == ProcState.MEDIUM:
             from medium import handle_write_medium
             return await handle_write_medium(fd, off, buf, path, pid, self)
 
-        try:
-            if hasattr(os, "pwrite"):
-                n = os.pwrite(fd, buf, off)
-            else:
-                os.lseek(fd, off, os.SEEK_SET)
-                n = os.write(fd, buf)
-            return n
-        except OSError as e:
-            raise pyfuse3.FUSEError(e.errno)
+        else:
+            from low import handle_write_low
+            return await handle_write_low(fd, off, buf, path, pid, self)
 
     async def truncate(self, inode, size, ctx=None):
         p = self._inode_path.get(inode)
@@ -501,6 +516,11 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         pid = ctx.pid if ctx is not None else -1
+
+        if await self.get_proc_state(pid) == ProcState.HIGH:
+            from high import handle_truncate_high
+            await handle_truncate_high(p, size, pid, self)
+            return
 
         try:
             with open(p, "r+b") as f:
@@ -517,6 +537,11 @@ class Passthrough(pyfuse3.Operations):
 
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
 
+        if await self.get_proc_state(pid) == ProcState.HIGH:
+            from high import handle_truncate_high
+            await handle_truncate_high(path, size, pid, self)
+            return
+
         try:
             os.ftruncate(fd, size)
         except OSError as e:
@@ -525,10 +550,14 @@ class Passthrough(pyfuse3.Operations):
         self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="ftruncate", path=path, size=size))
 
     async def unlink(self, parent_inode, name, ctx=None):
-        # [수정] ROOT_INODE 고정 → parent_inode 기반 경로 조합
         p = self._resolve_path(parent_inode, name)
 
         pid = ctx.pid if ctx is not None else -1
+
+        if await self.get_proc_state(pid) == ProcState.HIGH:
+            from high import handle_unlink_high
+            await handle_unlink_high(p, pid, self)
+            return
 
         try:
             os.unlink(p)
@@ -538,18 +567,21 @@ class Passthrough(pyfuse3.Operations):
         self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="unlink", path=p))
 
     async def rename(self, parent_inode_old, name_old, parent_inode_new, name_new, flags, ctx=None):
-        # [수정] ROOT_INODE 고정 → parent_inode 기반 경로 조합
         oldp = self._resolve_path(parent_inode_old, name_old)
         newp = self._resolve_path(parent_inode_new, name_new)
 
         pid = ctx.pid if ctx is not None else -1
+
+        if await self.get_proc_state(pid) == ProcState.HIGH:
+            from high import handle_rename_high
+            await handle_rename_high(oldp, newp, pid, self)
+            return
 
         try:
             os.rename(oldp, newp)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
-        # [수정 4번] from/to를 new_path 필드로 합쳐서 한 이벤트로 emit
         self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="rename", path=oldp, new_path=newp))
 
     async def release(self, fh):

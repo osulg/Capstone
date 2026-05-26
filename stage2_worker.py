@@ -54,6 +54,8 @@ async def stage2_worker(recv_chan, ops) -> None:
                         await ops.set_proc_state(pid, ProcState.LOW)
                         from medium import commit_buffers
                         await commit_buffers(pid, ops)
+                        from low import handle_low_return
+                        await handle_low_return(pid, ops)
                         medium_pids.pop(pid, None)
                         continue
 
@@ -65,7 +67,6 @@ async def stage2_worker(recv_chan, ops) -> None:
                         await drop_buffers(pid, ops)
                         medium_pids.pop(pid, None)
                     elif ops._write_buffer.get(pid):
-                        print(f"[REEVAL] pid={pid} 헤더 정상 → 커밋 (MEDIUM 유지, 계속 감시)")
-                        await commit_buffers(pid, ops)
+                        print(f"[REEVAL] pid={pid} 헤더 정상 → MEDIUM 유지, 10초 후 커밋 예정")
 
             next_reeval += REEVAL_S
