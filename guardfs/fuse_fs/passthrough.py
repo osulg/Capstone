@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import os
 import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
 import errno
 import time
 import json
@@ -16,8 +19,8 @@ import pyfuse3
 import trio
 from stage1 import Stage1Detector, EventLogger
 from stage1.entropy import shannon_entropy
-from stage2_worker import stage2_worker
-from states import ProcState
+from stage2.stage2_worker import stage2_worker
+from stage2.states import ProcState
 
 def _full_path(root: str, path: str) -> str:
     if path.startswith("/"):

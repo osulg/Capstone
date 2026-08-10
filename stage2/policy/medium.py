@@ -2,7 +2,7 @@
 import os
 import time
 import trio
-from states import ProcState
+from stage2.states import ProcState
 
 
 def log_medium_event(pid: int, path: str, action: str, result: str, reason: str = "") -> None:

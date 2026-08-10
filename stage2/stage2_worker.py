@@ -5,7 +5,7 @@ import trio
 import joblib
 import pandas as pd
 import numpy as np
-from states import ProcState
+from stage2.states import ProcState
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
@@ -14,7 +14,9 @@ HIGH_THRESHOLD   = 0.82
 REEVAL_S         = 1.0
 
 DYNAMIC_MODEL_PATH = "detect_dynamic/dataset/csv_files/best_model.pkl"
-STATIC_MODEL_PATH  = "final_rf_model.pkl"
+STATIC_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "fused_model", "final_rf_model.pkl"
+)
 
 DYNAMIC_FEATURES = [
     "O_sum", "C_sum", "D_sum", "E_sum",
