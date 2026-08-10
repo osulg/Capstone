@@ -166,19 +166,26 @@ HIGH 격상 사유 예시:
 
 ## 파일 구조
 
+## 파일 구조
+
 ```
 Capstone/
-├── passthrough.py          # FUSE 메인 (이벤트 수집, 상태 관리, write 라우팅)
-├── medium.py               # MEDIUM 상태 write 처리 (3개 레이어 구현)
-├── high.py                 # HIGH 상태 처리 (차단·SIGSTOP·로깅)
-├── stage2_worker.py        # Stage 2 ML 평가 워커 (초기 + 1초 주기 재평가)
-├── states.py               # ProcState Enum (LOW / MEDIUM / HIGH / SUSPICIOUS)
-├── stage1/                 # Stage 1 경량 탐지 모듈
-│   └── detector.py         # EntropyDetector / FrequencyDetector / HoneypotDetector
+├── guardfs/fuse_fs/
+│   └── passthrough.py          # FUSE 메인 (이벤트 수집, 상태 관리, write 라우팅)
+├── stage1/                     # Stage 1 경량 탐지 모듈
+│   └── detector.py             # EntropyDetector / FrequencyDetector / HoneypotDetector
+├── stage2/
+│   ├── stage2_worker.py        # Stage 2 ML 평가 워커 (초기 + 1초 주기 재평가)
+│   ├── states.py                # ProcState Enum (LOW / MEDIUM / HIGH / SUSPICIOUS)
+│   └── policy/
+│       ├── medium.py            # MEDIUM 상태 write 처리 (3개 레이어 구현)
+│       └── high.py              # HIGH 상태 처리 (차단·SIGSTOP·로깅)
 ├── detect_dynamic/dataset/csv_files/best_model.pkl   # 동적 RF 모델
-├── final_rf_model.pkl      # 정적 RF 모델
-├── test_high_sim.py        # HIGH 시뮬레이션 (랜섬웨어 행위 모방)
-└── test_c_medium.c         # 정적 모델용 최소 C 바이너리 (MEDIUM 유도)
+├── fused_model/
+│   └── final_rf_model.pkl      # 정적 RF 모델
+└── tests/
+    ├── test_high_sim.py        # HIGH 시뮬레이션 (랜섬웨어 행위 모방)
+    └── test_c_medium.c         # 정적 모델용 최소 C 바이너리 (MEDIUM 유도)
 ```
 
 ---
@@ -213,7 +220,7 @@ source venv/bin/activate
 ### 2. GuardFS 마운트 (터미널 1)
 
 ```bash
-python3 passthrough.py ~/test_mount ~/test_underlay
+python3 guardfs/fuse_fs/passthrough.py ~/test_mount ~/test_underlay
 ```
 
 마운트 성공 시 `~/test_mount/` 에 파일을 쓰면 GuardFS가 인터셉트한다.  
@@ -279,7 +286,7 @@ echo "trap" > ~/test_mount/honeypot/trap.txt
 ### 테스트 3: HIGH — 랜섬웨어 행위 시뮬레이션
 
 ```bash
-python3 test_high_sim.py
+python3 tests/test_high_sim.py
 ```
 
 `test_high_sim.py` 는 동일 프로세스(PID) 에서 10회 반복하여 아래 행위를 수행한다:
@@ -315,7 +322,7 @@ HIGH 이벤트는 `~/filesecurity.log` 에도 기록된다.
 ### 테스트 4: 정적 모델 최소 바이너리 (MEDIUM 유도)
 
 ```bash
-gcc -o test_c_medium test_c_medium.c
+gcc -o test_c_medium tests/test_c_medium.c
 ./test_c_medium ~/test_mount/c_test.txt
 ```
 
