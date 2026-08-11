@@ -1,8 +1,6 @@
 # low.py
 import os
-from stage2.states import ProcState
- 
- 
+
 async def handle_write_low(
     fd: int,
     off: int,
@@ -26,8 +24,7 @@ async def handle_write_low(
         import errno
         import pyfuse3
         raise pyfuse3.FUSEError(e.errno)
- 
- 
+
 async def handle_low_return(pid: int, ops) -> None:
     """
     MEDIUM → LOW 복귀 시 정리 작업.

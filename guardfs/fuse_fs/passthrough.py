@@ -17,10 +17,12 @@ import pandas as pd
 
 import pyfuse3
 import trio
-from stage1 import Stage1Detector, EventLogger
-from stage1.entropy import shannon_entropy
-from stage2.stage2_worker import stage2_worker
-from stage2.states import ProcState
+from guardfs.stage1.detector import Stage1Detector
+from guardfs.stage1.logger import EventLogger
+from guardfs.stage1.entropy import shannon_entropy
+
+from guardfs.stage2.stage2_worker import stage2_worker
+from guardfs.stage2.states import ProcState
 
 def _full_path(root: str, path: str) -> str:
     if path.startswith("/"):
@@ -275,7 +277,7 @@ class Passthrough(pyfuse3.Operations):
     async def trigger_high(self, pid: int, reason: str = "") -> None:
         print(f"[TRIGGER HIGH] pid={pid} reason={reason}")
         await self.set_proc_state(pid, ProcState.HIGH)
-        from high import handle_high_enter
+        from guardfs.stage2.policy.high import handle_high_enter
         await handle_high_enter(pid, self, reason)
     
     # ------------------------------------------------------------------ FUSE ops
@@ -503,15 +505,15 @@ class Passthrough(pyfuse3.Operations):
         print(f"[WRITE] pid={pid} state={state} path={path}")
 
         if state == ProcState.HIGH:
-            from high import handle_write_high
+            from guardfs.stage2.policy.high import handle_write_high
             return await handle_write_high(fd, off, buf, path, pid, self)
 
         elif state == ProcState.MEDIUM:
-            from medium import handle_write_medium
+            from guardfs.stage2.policy.medium import handle_write_medium
             return await handle_write_medium(fd, off, buf, path, pid, self)
 
         else:
-            from low import handle_write_low
+            from guardfs.stage2.policy.low import handle_write_low
             return await handle_write_low(fd, off, buf, path, pid, self)
 
     async def truncate(self, inode, size, ctx=None):
@@ -522,7 +524,7 @@ class Passthrough(pyfuse3.Operations):
         pid = ctx.pid if ctx is not None else -1
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
-            from high import handle_truncate_high
+            from guardfs.stage2.policy.high import handle_truncate_high
             await handle_truncate_high(p, size, pid, self)
             return
 
@@ -542,7 +544,7 @@ class Passthrough(pyfuse3.Operations):
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
-            from high import handle_truncate_high
+            from guardfs.stage2.policy.high import handle_truncate_high
             await handle_truncate_high(path, size, pid, self)
             return
 
@@ -559,7 +561,7 @@ class Passthrough(pyfuse3.Operations):
         pid = ctx.pid if ctx is not None else -1
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
-            from high import handle_unlink_high
+            from guardfs.stage2.policy.high import handle_unlink_high
             await handle_unlink_high(p, pid, self)
             return
 
@@ -577,7 +579,7 @@ class Passthrough(pyfuse3.Operations):
         pid = ctx.pid if ctx is not None else -1
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
-            from high import handle_rename_high
+            from guardfs.stage2.policy.high import handle_rename_high
             await handle_rename_high(oldp, newp, pid, self)
             return
 

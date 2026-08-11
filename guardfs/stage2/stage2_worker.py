@@ -5,7 +5,7 @@ import trio
 import joblib
 import pandas as pd
 import numpy as np
-from stage2.states import ProcState
+from guardfs.stage2.states import ProcState
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
@@ -14,7 +14,7 @@ HIGH_THRESHOLD   = 0.82
 REEVAL_S         = 1.0
 
 PROJECT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..")
+    os.path.join(os.path.dirname(__file__), "..", "..")
 )
 
 DYNAMIC_MODEL_PATH = os.path.join(
@@ -26,14 +26,11 @@ DYNAMIC_MODEL_PATH = os.path.join(
     "best_model.pkl",
 )
 
-STATIC_MODEL_PATH = os.path.abspath(
-    os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "models",
-        "fused_model",
-        "final_rf_model.pkl",
-    )
+STATIC_MODEL_PATH = os.path.join(
+    PROJECT_ROOT,
+    "models",
+    "static",
+    "final_rf_model.pkl",
 )
 
 DYNAMIC_FEATURES = [
@@ -209,9 +206,9 @@ async def stage2_worker(recv_chan, ops) -> None:
                     if elapsed > 10.0:
                         print(f"[REEVAL] pid={pid} 10초 경과 → Low 복귀")
                         await ops.set_proc_state(pid, ProcState.LOW)
-                        from stage2.policy.medium import commit_buffers
+                        from guardfs.stage2.policy.medium import commit_buffers
                         await commit_buffers(pid, ops)
-                        from stage2.policy.low import handle_low_return
+                        from guardfs.stage2.policy.low import handle_low_return
                         await handle_low_return(pid, ops)
                         medium_pids.pop(pid, None)
                         continue
@@ -219,13 +216,13 @@ async def stage2_worker(recv_chan, ops) -> None:
                     # HIGH 임계치 초과 시 즉시 격상
                     if score >= HIGH_THRESHOLD:
                         print(f"[REEVAL] pid={pid} score={score:.3f} → HIGH 격상")
-                        from stage2.policy.medium import drop_buffers
+                        from guardfs.stage2.policy.medium import drop_buffers
                         await ops.trigger_high(pid, reason=f"reeval_score={score:.3f}")
                         await drop_buffers(pid, ops)
                         medium_pids.pop(pid, None)
                         continue
 
-                    from stage2.policy.medium import validate_medium_buffers, drop_buffers
+                    from guardfs.stage2.policy.medium import validate_medium_buffers, drop_buffers
                     need_high = await validate_medium_buffers(pid, ops)
                     if need_high:
                         print(f"[REEVAL] pid={pid} 구조 깨짐 → 버퍼 드롭 + HIGH 격상")

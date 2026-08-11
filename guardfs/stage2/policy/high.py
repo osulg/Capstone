@@ -1,8 +1,6 @@
 import os
 import signal
 import time
-from stage2.states import ProcState
-
 
 def get_process_name(pid: int) -> str:
     try:
