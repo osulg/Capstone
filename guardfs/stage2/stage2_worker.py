@@ -13,9 +13,27 @@ MEDIUM_THRESHOLD = 0.3
 HIGH_THRESHOLD   = 0.82
 REEVAL_S         = 1.0
 
-DYNAMIC_MODEL_PATH = "detect_dynamic/dataset/csv_files/best_model.pkl"
-STATIC_MODEL_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "fused_model", "final_rf_model.pkl"
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+DYNAMIC_MODEL_PATH = os.path.join(
+    PROJECT_ROOT,
+    "models",
+    "dynamic",
+    "dataset",
+    "csv_files",
+    "best_model.pkl",
+)
+
+STATIC_MODEL_PATH = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "models",
+        "fused_model",
+        "final_rf_model.pkl",
+    )
 )
 
 DYNAMIC_FEATURES = [
@@ -191,9 +209,9 @@ async def stage2_worker(recv_chan, ops) -> None:
                     if elapsed > 10.0:
                         print(f"[REEVAL] pid={pid} 10초 경과 → Low 복귀")
                         await ops.set_proc_state(pid, ProcState.LOW)
-                        from medium import commit_buffers
+                        from stage2.policy.medium import commit_buffers
                         await commit_buffers(pid, ops)
-                        from low import handle_low_return
+                        from stage2.policy.low import handle_low_return
                         await handle_low_return(pid, ops)
                         medium_pids.pop(pid, None)
                         continue
@@ -201,13 +219,13 @@ async def stage2_worker(recv_chan, ops) -> None:
                     # HIGH 임계치 초과 시 즉시 격상
                     if score >= HIGH_THRESHOLD:
                         print(f"[REEVAL] pid={pid} score={score:.3f} → HIGH 격상")
-                        from medium import drop_buffers
+                        from stage2.policy.medium import drop_buffers
                         await ops.trigger_high(pid, reason=f"reeval_score={score:.3f}")
                         await drop_buffers(pid, ops)
                         medium_pids.pop(pid, None)
                         continue
 
-                    from medium import validate_medium_buffers, drop_buffers
+                    from stage2.policy.medium import validate_medium_buffers, drop_buffers
                     need_high = await validate_medium_buffers(pid, ops)
                     if need_high:
                         print(f"[REEVAL] pid={pid} 구조 깨짐 → 버퍼 드롭 + HIGH 격상")
