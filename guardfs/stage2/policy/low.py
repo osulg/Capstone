@@ -20,6 +20,7 @@ async def handle_write_low(
             os.lseek(fd, off, os.SEEK_SET)
             n = os.write(fd, buf)
         return n
+    
     except OSError as e:
         import errno
         import pyfuse3
@@ -31,6 +32,8 @@ async def handle_low_return(pid: int, ops) -> None:
     - _queued_stage2 에서 pid 제거 → 이후 재탐지 가능
     - _write_count 초기화 → 다음 MEDIUM 진입 시 딜레이 계산 오류 방지
     """
+    
     ops._queued_stage2.discard(pid)
     ops._write_count.pop(pid, None)
+    
     print(f"[LOW] pid={pid} 복귀 정리 완료 (queued_stage2 해제, write_count 초기화)")

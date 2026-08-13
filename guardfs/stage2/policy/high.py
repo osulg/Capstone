@@ -2,6 +2,8 @@ import os
 import signal
 import time
 
+from guardfs.common.paths import FILESECURITY_LOG_PATH
+
 def get_process_name(pid: int) -> str:
     try:
         with open(f"/proc/{pid}/comm", "r", encoding="utf-8") as f:
@@ -18,7 +20,7 @@ def log_high_event(
     result: str,
     reason: str,
 ) -> None:
-    log_path = os.path.expanduser("~/filesecurity.log")
+    log_path = FILESECURITY_LOG_PATH
     now = time.strftime("%Y-%m-%d %H:%M:%S")
 
     log_msg = (

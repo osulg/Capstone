@@ -4,34 +4,23 @@ import warnings
 import trio
 import joblib
 import pandas as pd
-import numpy as np
 from guardfs.stage2.states import ProcState
 
+from guardfs.common.config import (
+    STAGE2_MEDIUM_THRESHOLD,
+    STAGE2_HIGH_THRESHOLD,
+    DYNAMIC_MODEL_WEIGHT,
+    STATIC_MODEL_WEIGHT,
+    STAGE2_REEVAL_INTERVAL_SEC,
+    STAGE2_MEDIUM_TIMEOUT_SEC,
+)
+
+from guardfs.common.paths import (
+    DYNAMIC_MODEL_PATH,
+    STATIC_MODEL_PATH,
+)
+
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
-
-MEDIUM_THRESHOLD = 0.3
-HIGH_THRESHOLD   = 0.82
-REEVAL_S         = 1.0
-
-PROJECT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..")
-)
-
-DYNAMIC_MODEL_PATH = os.path.join(
-    PROJECT_ROOT,
-    "models",
-    "dynamic",
-    "dataset",
-    "csv_files",
-    "best_model.pkl",
-)
-
-STATIC_MODEL_PATH = os.path.join(
-    PROJECT_ROOT,
-    "models",
-    "static",
-    "final_rf_model.pkl",
-)
 
 DYNAMIC_FEATURES = [
     "O_sum", "C_sum", "D_sum", "E_sum",
@@ -105,6 +94,7 @@ def predict_static(model, pid: int) -> float:
 
         with open(exe_path, "rb") as f:
             header = f.read(16)
+            
             if header[:4] == b'\x7fELF':
                 row["is_64bit"] = 1 if header[4] == 2 else 0
                 # ELF type (ET_EXEC=2, ET_DYN=3)
@@ -117,8 +107,10 @@ def predict_static(model, pid: int) -> float:
 
             # byte frequency features
             f.seek(0)
+            
             data = f.read(4096)
             freq = [0] * 256
+            
             for b in data:
                 freq[b] += 1
             for feat in STATIC_FEATURES:
@@ -131,7 +123,9 @@ def predict_static(model, pid: int) -> float:
         prob = model.predict_proba(df)[0]
         classes = list(model.classes_)
         mal_idx = classes.index(1) if 1 in classes else -1
+        
         return float(prob[mal_idx]) if mal_idx >= 0 else float(prob[-1])
+    
     except Exception as e:
         print(f"[ML] 정적 예측 오류: {e}")
         return 0.5
@@ -143,7 +137,7 @@ async def stage2_worker(recv_chan, ops) -> None:
     medium_pids = {}
     risk_scores = {}
     stat_cache  = {}   # 프로세스 종료 후에도 static 점수 유지
-    next_reeval = trio.current_time() + REEVAL_S
+    next_reeval = trio.current_time() + STAGE2_REEVAL_INTERVAL_SEC
 
     async with recv_chan:
         while True:
@@ -165,14 +159,18 @@ async def stage2_worker(recv_chan, ops) -> None:
                     stat_cache[pid] = stat_score
                 else:
                     stat_score = stat_cache.get(pid, 0.5)  # 죽었으면 캐시 사용
-                score = 0.5 * dyn_score + 0.5 * stat_score
+                score = (
+                    DYNAMIC_MODEL_WEIGHT * dyn_score
+                    + STATIC_MODEL_WEIGHT * stat_score
+                )
 
                 risk_scores[pid] = score
+                
                 print(f"[STAGE2] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} final={score:.3f}")
 
-                if score >= HIGH_THRESHOLD:
+                if score >= STAGE2_HIGH_THRESHOLD:
                     await ops.trigger_high(pid, reason=f"ml_score={score:.3f}")
-                elif score >= MEDIUM_THRESHOLD:
+                elif score >= STAGE2_MEDIUM_THRESHOLD:
                     await ops.set_proc_state(pid, ProcState.MEDIUM)
                     medium_pids[pid] = trio.current_time()
                     print(f"[STAGE2] pid={pid} → MEDIUM (score={score:.3f})")
@@ -193,6 +191,7 @@ async def stage2_worker(recv_chan, ops) -> None:
                     features = ops._pid_features.get(pid, {})
                     dyn_score  = predict_dynamic(dyn_model, features)
                     stat_score = predict_static(stat_model, pid)
+                    
                     if stat_score != 0.5:
                         stat_cache[pid] = stat_score
                     else:
@@ -201,9 +200,10 @@ async def stage2_worker(recv_chan, ops) -> None:
                     risk_scores[pid] = score
 
                     elapsed = trio.current_time() - medium_pids[pid]
+                    
                     print(f"[REEVAL] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} score={score:.3f} elapsed={elapsed:.1f}s")
 
-                    if elapsed > 10.0:
+                    if elapsed > STAGE2_MEDIUM_TIMEOUT_SEC:
                         print(f"[REEVAL] pid={pid} 10초 경과 → Low 복귀")
                         await ops.set_proc_state(pid, ProcState.LOW)
                         from guardfs.stage2.policy.medium import commit_buffers
@@ -214,22 +214,32 @@ async def stage2_worker(recv_chan, ops) -> None:
                         continue
 
                     # HIGH 임계치 초과 시 즉시 격상
-                    if score >= HIGH_THRESHOLD:
-                        print(f"[REEVAL] pid={pid} score={score:.3f} → HIGH 격상")
+                    if score >= STAGE2_HIGH_THRESHOLD:
+                        print(
+                            f"[REEVAL] pid={pid} "
+                            f"{STAGE2_MEDIUM_TIMEOUT_SEC:.0f}초 경과 → LOW 복귀"
+                        )
+                        
                         from guardfs.stage2.policy.medium import drop_buffers
                         await ops.trigger_high(pid, reason=f"reeval_score={score:.3f}")
                         await drop_buffers(pid, ops)
                         medium_pids.pop(pid, None)
+                        
                         continue
 
                     from guardfs.stage2.policy.medium import validate_medium_buffers, drop_buffers
+                    
                     need_high = await validate_medium_buffers(pid, ops)
+                    
                     if need_high:
                         print(f"[REEVAL] pid={pid} 구조 깨짐 → 버퍼 드롭 + HIGH 격상")
                         await ops.trigger_high(pid, reason="magic_mismatch_reeval")
                         await drop_buffers(pid, ops)
                         medium_pids.pop(pid, None)
                     elif ops._write_buffer.get(pid):
-                        print(f"[REEVAL] pid={pid} 헤더 정상 → MEDIUM 유지, 10초 후 커밋 예정")
+                        print(
+                            f"[REEVAL] pid={pid} 헤더 정상 → MEDIUM 유지, "
+                            f"{STAGE2_MEDIUM_TIMEOUT_SEC:.0f}초 후 커밋 예정"
+                        )
 
-            next_reeval += REEVAL_S
+            next_reeval += STAGE2_REEVAL_INTERVAL_SEC

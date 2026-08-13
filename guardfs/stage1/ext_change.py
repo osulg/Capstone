@@ -8,6 +8,12 @@ ExtChangeDetector
 import os
 import time
 
+from guardfs.common.config import (
+    EXT_CHANGE_WINDOW_SEC,
+    EXT_CHANGE_THRESHOLD,
+)
+
+
 # 랜섬웨어 및 악성코드에서 자주 관찰되는 확장자 블랙리스트
 SUSPICIOUS_EXTENSIONS = {
     ".locked", ".enc", ".encrypted", ".crypt", ".crypted",
@@ -24,9 +30,12 @@ NORMAL_EXTENSIONS = {
     ".js", ".html", ".css", ".json", ".xml", ".csv",
 }
 
-
 class ExtChangeDetector:
-    def __init__(self, window_sec=10, threshold=5):
+    def __init__(
+        self, 
+        window_sec: float = EXT_CHANGE_WINDOW_SEC,
+        threshold: float = EXT_CHANGE_WINDOW_SEC,
+    ):
         self.window_sec = window_sec
         self.threshold = threshold
         self.history = {}  # pid -> timestamps

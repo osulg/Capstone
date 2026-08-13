@@ -9,15 +9,17 @@ EntropyDetector
 
 import math
 
+from guardfs.common.config import (
+    ENTROPY_THRESHOLD,
+    ENTROPY_HEADER_SIZE,
+)
+
 # Shannon 엔트로피 탐지 임계값
-# 근거: Zainodin et al. (2022) Table III - 256바이트 기준 WannaCry 7.166,
-#        ZIP/7z 7.002로 분포, 7.0을 경계값으로 사용
-ENTROPY_THRESHOLD = 7.0
+# 근거: Zainodin et al. (2022) Table III - 256바이트 기준 WannaCry 7.166
+# ZIP/7z 7.002로 분포, 7.0을 경계값으로 사용
 
 # 논문 방식: 첫 256바이트 기준으로 엔트로피 계산
 # 근거: Zainodin et al. (2022) - 파일 헤더(256바이트) 분석 방식
-HEADER_SIZE = 256
-
 
 def shannon_entropy(data: bytes) -> float:
     """
@@ -25,6 +27,7 @@ def shannon_entropy(data: bytes) -> float:
     반환값 범위: 0.0 (완전 규칙적) ~ 8.0 (완전 무작위)
     수식: H = -sum(p(x) * log2(p(x)))
     """
+    
     if not data:
         return 0.0
 
@@ -41,9 +44,12 @@ def shannon_entropy(data: bytes) -> float:
 
     return ent
 
-
 class EntropyDetector:
-    def __init__(self, threshold: float = ENTROPY_THRESHOLD, header_size: int = HEADER_SIZE):
+    def __init__(
+        self,
+        threshold: float = ENTROPY_THRESHOLD,
+        header_size: int = ENTROPY_HEADER_SIZE
+    ):
         self.threshold = threshold
         self.header_size = header_size
 
@@ -53,6 +59,7 @@ class EntropyDetector:
         Zainodin et al. (2022) 256바이트 헤더 분석 방식을 실시간 FUSE 환경에 적용
         임계값 7.0 초과 시 True 반환
         """
+        
         if ev.op != "write":
             return False
 

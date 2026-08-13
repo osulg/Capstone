@@ -6,7 +6,6 @@ HoneypotDetector
 
 import os
 
-
 class HoneypotDetector:
     def __init__(self, honeypot_dir: str):
         # honeypot 디렉토리의 절대 경로를 정규화해서 저장
