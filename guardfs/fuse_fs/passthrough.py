@@ -433,9 +433,13 @@ class Passthrough(pyfuse3.Operations):
             os.mkdir(p, mode)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
+        
+        st = self._register_inode(p)
 
         self._register_inode(p)
         self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="mkdir", path=p))
+        
+        return self._stat_to_attr(st)
 
 
     async def rmdir(self, parent_inode, name, ctx=None):
