@@ -167,3 +167,82 @@ async def handle_high_enter(pid: int, ops, reason: str = "") -> None:
         f"[HIGH] pid={pid} 진입 정리 완료 "
         f"(buffer {len(dropped)}개 드롭, write_count 초기화, reason={ops._high_reason[pid]})"
     )
+
+
+async def handle_open_trunc_high(
+    path: str,
+    flags: int,
+    pid: int,
+    ops,
+) -> None:
+    process = get_process_name(pid)
+    reason = ops._high_reason.get(
+        pid,
+        "High-risk process detected",
+    )
+
+    log_high_event(
+        pid=pid,
+        process=process,
+        path=path,
+        action="OPEN(O_TRUNC)",
+        result="BLOCKED",
+        reason=reason,
+    )
+
+    suspend_process_once(pid, ops)
+
+    print(
+        f"[HIGH] pid={pid} path={path} "
+        f"open(O_TRUNC) 차단 flags={flags}"
+    )
+
+
+async def handle_mkdir_high(
+    path: str,
+    pid: int,
+    ops,
+) -> None:
+    process = get_process_name(pid)
+    reason = ops._high_reason.get(
+        pid,
+        "High-risk process detected",
+    )
+
+    log_high_event(
+        pid=pid,
+        process=process,
+        path=path,
+        action="MKDIR",
+        result="BLOCKED",
+        reason=reason,
+    )
+
+    suspend_process_once(pid, ops)
+
+    print(f"[HIGH] pid={pid} path={path} mkdir 차단")
+
+
+async def handle_rmdir_high(
+    path: str,
+    pid: int,
+    ops,
+) -> None:
+    process = get_process_name(pid)
+    reason = ops._high_reason.get(
+        pid,
+        "High-risk process detected",
+    )
+
+    log_high_event(
+        pid=pid,
+        process=process,
+        path=path,
+        action="RMDIR",
+        result="BLOCKED",
+        reason=reason,
+    )
+
+    suspend_process_once(pid, ops)
+
+    print(f"[HIGH] pid={pid} path={path} rmdir 차단")

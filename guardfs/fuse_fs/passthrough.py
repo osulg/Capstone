@@ -453,9 +453,30 @@ class Passthrough(pyfuse3.Operations):
 
 
     async def mkdir(self, parent_inode, name, mode, ctx=None):
-        # ROOT_INODE 고정 → parent_inode 기반 경로 조합
         p = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
+
+        override = self._get_forced_state(pid)
+
+        if override is not None:
+            await self.set_proc_state(pid, override)
+            state = override
+        else:
+            state = await self.get_proc_state(pid)
+
+            if state == ProcState.SUSPICIOUS:
+                state = ProcState.LOW
+
+        if state == ProcState.HIGH:
+            from guardfs.stage2.policy.high import handle_mkdir_high
+
+            await handle_mkdir_high(
+                path=p,
+                pid=pid,
+                ops=self,
+            )
+
+            raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
             os.mkdir(p, mode)
@@ -463,23 +484,58 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(e.errno)
 
         st = self._register_inode(p)
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="mkdir", path=p))
+
+        self._emit(
+            FsEvent(
+                ts_ns=time.time_ns(),
+                pid=pid,
+                op="mkdir",
+                path=p,
+            )
+        )
 
         return self._stat_to_attr(st)
 
 
     async def rmdir(self, parent_inode, name, ctx=None):
-        # ROOT_INODE 고정 → parent_inode 기반 경로 조합
         p = self._resolve_path(parent_inode, name)
-
         pid = ctx.pid if ctx is not None else -1
+
+        override = self._get_forced_state(pid)
+
+        if override is not None:
+            await self.set_proc_state(pid, override)
+            state = override
+        else:
+            state = await self.get_proc_state(pid)
+
+            if state == ProcState.SUSPICIOUS:
+                state = ProcState.LOW
+
+        if state == ProcState.HIGH:
+            from guardfs.stage2.policy.high import handle_rmdir_high
+
+            await handle_rmdir_high(
+                path=p,
+                pid=pid,
+                ops=self,
+            )
+
+            raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
             os.rmdir(p)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="rmdir", path=p))
+        self._emit(
+            FsEvent(
+                ts_ns=time.time_ns(),
+                pid=pid,
+                op="rmdir",
+                path=p,
+            )
+        )
 
 
     async def opendir(self, inode, ctx=None):
@@ -533,6 +589,35 @@ class Passthrough(pyfuse3.Operations):
         if p is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
+        # os.open() 전에 요청 PID 확인
+        pid = ctx.pid if ctx is not None else -1
+
+        override = self._get_forced_state(pid)
+
+        if override is not None:
+            await self.set_proc_state(pid, override)
+            state = override
+        else:
+            state = await self.get_proc_state(pid)
+
+            if state == ProcState.SUSPICIOUS:
+                state = ProcState.LOW
+
+        # O_TRUNC는 os.open() 순간 원본 파일을 비우므로 사전 차단
+        if state == ProcState.HIGH and flags & os.O_TRUNC:
+            from guardfs.stage2.policy.high import (
+                handle_open_trunc_high,
+            )
+
+            await handle_open_trunc_high(
+                path=p,
+                flags=flags,
+                pid=pid,
+                ops=self,
+            )
+
+            raise pyfuse3.FUSEError(errno.EACCES)
+
         try:
             fd = os.open(p, flags)
         except OSError as e:
@@ -540,11 +625,19 @@ class Passthrough(pyfuse3.Operations):
 
         fh = self._next_fh
         self._next_fh += 1
-        self._fd_map[fh] = fd
 
-        pid = ctx.pid if ctx is not None else -1
+        self._fd_map[fh] = fd
         self._fh_info[fh] = (pid, p, flags)
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="open", path=p, flags=flags))
+
+        self._emit(
+            FsEvent(
+                ts_ns=time.time_ns(),
+                pid=pid,
+                op="open",
+                path=p,
+                flags=flags,
+            )
+        )
 
         fi = pyfuse3.FileInfo()
         fi.fh = fh
