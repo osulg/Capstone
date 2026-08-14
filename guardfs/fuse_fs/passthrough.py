@@ -616,6 +616,31 @@ class Passthrough(pyfuse3.Operations):
         else:
             from guardfs.stage2.policy.low import handle_write_low
             return await handle_write_low(fd, off, buf, path, pid, self)
+    
+    async def setattr(
+        self,
+        inode,
+        attr,
+        fields,
+        fh,
+        ctx=None,
+    ):
+        if not fields.update_size:
+            raise pyfuse3.FUSEError(errno.ENOSYS)
+
+        if fh is None:
+            await self.truncate(
+                inode,
+                attr.st_size,
+                ctx,
+            )
+        else:
+            await self.ftruncate(
+                fh,
+                attr.st_size,
+            )
+
+        return await self.getattr(inode, ctx)
 
 
     async def truncate(self, inode, size, ctx=None):
