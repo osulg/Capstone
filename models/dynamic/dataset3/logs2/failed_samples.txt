@@ -1,0 +1,1 @@
+[FAIL] 2026-03-19 17:27:51 | REvil | a322b230a3451fd11dcfe72af4da1df07183d6aaf1ab9e062f0e6b14cf6d23cd.elf | [FAIL] 2026-03-19 17:28:07 | REvil | a322b230a3451fd11dcfe72af4da1df07183d6aaf1ab9e062f0e6b14cf6d23cd.elf | 실행 실패 (exit code: 139) | 명령: sudo ./a322b230a3451fd11dcfe72af4da1df07183d6aaf1ab9e062f0e6b14cf6d23cd.elf --path /home/capstone/project/test_files
