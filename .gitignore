@@ -6,3 +6,36 @@ underlay/
 honeypot/
 .venv/
 venv/
+
+# ML experiment artifacts
+detect_dynamic/dataset/csv_files/*_behavior.pkl
+detect_dynamic/dataset/csv_files/*_behavior.png
+detect_dynamic/dataset/csv_files/*_behavior.csv
+detect_dynamic/dataset/csv_files/*_type_holdout.pkl
+detect_dynamic/dataset/csv_files/*_type_holdout.png
+detect_dynamic/dataset/csv_files/*_type_holdout.csv
+detect_dynamic/dataset/csv_files/conflict_rows.csv
+
+# GuardFS lineage development backups
+detect_dynamic/bpf.c.backup
+detect_dynamic/bpf.c.lineage_working
+detect_dynamic/bpf.c.uid_lineage_ok
+detect_dynamic/bpf.c.lineage_v1_ok
+detect_dynamic/bpf.py.backup
+detect_dynamic/bpf.py.lineage_base
+detect_dynamic/bpf.py.uid_lineage_ok
+detect_dynamic/bpf.py.lineage_v1_ok
+detect_dynamic/lineage_to_csv.pre_instance
+detect_dynamic/lineage_to_csv.v1_ok
+
+# GuardFS lineage test datasets
+detect_dynamic/lifecycle_dataset.csv
+detect_dynamic/lifecycle_dataset_audit.csv
+detect_dynamic/lineage_3state_dataset.csv
+detect_dynamic/lineage_3state_dataset_audit.csv
+detect_dynamic/lineage_dataset_test.csv
+detect_dynamic/lineage_dataset_test_audit.csv
+detect_dynamic/normal_dataset_test.csv
+detect_dynamic/normal_dataset_test_audit.csv
+detect_dynamic/pid_reuse_dataset.csv
+detect_dynamic/pid_reuse_dataset_audit.csv
