@@ -39,3 +39,11 @@ detect_dynamic/normal_dataset_test.csv
 detect_dynamic/normal_dataset_test_audit.csv
 detect_dynamic/pid_reuse_dataset.csv
 detect_dynamic/pid_reuse_dataset_audit.csv
+
+# dataset_v2 temporary artifacts
+detect_dynamic/dataset_v2/__pycache__/
+detect_dynamic/dataset_v2/csv/benign_v2_part1.csv
+detect_dynamic/dataset_v2/csv/benign_v2_model_check.csv
+
+# Keep raw lineage logs for dataset_v2
+!detect_dynamic/dataset_v2/raw/**/*.jsonl

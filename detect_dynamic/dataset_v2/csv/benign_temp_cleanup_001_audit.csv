@@ -1,0 +1,2 @@
+Type,PID,Instance_No,Instance_ID,Started_By,Exit_Seen,PPID,Root_TGID,Relation,Label,Event_Count,Exec_Chain,Start_ns,End_ns
+benign_temp_cleanup_001,2544,1,2544:1,F,0,2174,,benign,0,60,/usr/bin/python3,2069272367801,2069351545319
