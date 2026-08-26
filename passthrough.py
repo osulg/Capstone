@@ -155,7 +155,7 @@ async def stats_collector(
                                 reason="stat_anomaly",
                                 path="",
                                 features=feature_row,
-                                exe_path=None
+                                exe_path=st.exe_path
                             )
 
                         st.reset()
@@ -698,6 +698,7 @@ class PidStats:
 
     def __init__(self):
         self.counts = {col: 0 for col in self.FEATURE_COLS}
+        self.exe_path: Optional[str] = None
         self.seq = []   # 최근 O/C/D/E 이벤트 흐름 저장
 
     def reset(self) -> None:
@@ -730,6 +731,9 @@ class PidStats:
         return None
 
     def update(self, ev) -> None:
+        if self.exe_path is None and ev.exe_path:
+            self.exe_path = ev.exe_path
+
         code = self._map_event(ev)
         if code is None:
             return
