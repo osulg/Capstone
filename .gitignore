@@ -47,3 +47,7 @@ detect_dynamic/dataset_v2/csv/benign_v2_model_check.csv
 
 # Keep raw lineage logs for dataset_v2
 !detect_dynamic/dataset_v2/raw/**/*.jsonl
+
+# dataset_v2 pipeline validation artifacts (not training data)
+detect_dynamic/dataset_v2/raw/attack/pipeline_validation_*.jsonl
+detect_dynamic/dataset_v2/csv/validation/
