@@ -184,9 +184,8 @@ class ExtensionChangeDetectorTests(unittest.TestCase):
         detector = ExtChangeDetector()
         self.assertEqual(detector.window_sec, EXT_CHANGE_WINDOW_SEC)
 
-    @unittest.expectedFailure
     def test_default_threshold_follows_common_config(self):
-        """알려진 결함: 현재 기본 threshold가 window 값에 잘못 연결됨"""
+        """알려진 결함: 현재 기본 threshold가 window 값에 잘못 연결됨 (해결)"""
 
         detector = ExtChangeDetector()
         self.assertEqual(detector.threshold, EXT_CHANGE_THRESHOLD)

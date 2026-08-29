@@ -34,7 +34,7 @@ class ExtChangeDetector:
     def __init__(
         self, 
         window_sec: float = EXT_CHANGE_WINDOW_SEC,
-        threshold: float = EXT_CHANGE_WINDOW_SEC,
+        threshold: float = EXT_CHANGE_THRESHOLD,
     ):
         self.window_sec = window_sec
         self.threshold = threshold
