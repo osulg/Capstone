@@ -28,13 +28,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
 
-
 # 어느 디렉터리에서 실행하더라도 guardfs 패키지를 찾을 수 있도록 설정
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from guardfs.common.config import (  # noqa: E402
+    ENTROPY_ACCUMULATION_WINDOW_SEC,
     ENTROPY_HEADER_SIZE,
     ENTROPY_THRESHOLD,
     EXT_CHANGE_THRESHOLD,
@@ -119,6 +119,10 @@ class EntropyDetectorTests(unittest.TestCase):
     def test_defaults_follow_common_config(self):
         self.assertEqual(self.detector.threshold, ENTROPY_THRESHOLD)
         self.assertEqual(self.detector.header_size, ENTROPY_HEADER_SIZE)
+        self.assertEqual(
+            self.detector.accumulation_window_sec,
+            ENTROPY_ACCUMULATION_WINDOW_SEC,
+        )
 
     def test_non_write_operation_is_ignored(self):
         for op in ("open", "read", "create", "rename", "unlink", "truncate"):
@@ -155,16 +159,113 @@ class EntropyDetectorTests(unittest.TestCase):
         self.assertTrue(detector.check(event(size=64, entropy=6.5)))
         self.assertFalse(detector.check(event(size=63, entropy=8.0)))
 
-    @unittest.expectedFailure
     def test_repeated_small_high_entropy_writes_are_eventually_detected(self):
-        """알려진 공백: 256B 미만 조각 write는 누적되지 않아 계속 우회됨"""
+        detector = EntropyDetector(
+            threshold=7.0,
+            header_size=256,
+            accumulation_window_sec=1.0,
+            accumulation_size=256,
+        )
 
         detected = False
-        for offset in range(0, ENTROPY_HEADER_SIZE * 2, 64):
-            detected |= self.detector.check(
-                event(size=64, off=offset, entropy=8.0)
-            )
+
+        with patch(
+            "guardfs.stage1.entropy.time.monotonic",
+            side_effect=[0.0, 0.1, 0.2, 0.3],
+        ):
+            for offset in range(0, 256, 64):
+                detected = (
+                    detector.check(
+                        event(
+                            pid=1234,
+                            path="/underlay/file.bin",
+                            size=64,
+                            off=offset,
+                            entropy=8.0,
+                        )
+                    )
+                    or detected
+                )
+
         self.assertTrue(detected)
+
+    def test_partial_writes_are_isolated_by_pid_and_path(self):
+        for _ in range(3):
+            self.assertFalse(
+                self.detector.check(event(pid=10, path="/a", size=64, entropy=8.0))
+            )
+        self.assertFalse(
+            self.detector.check(event(pid=20, path="/a", size=64, entropy=8.0))
+        )
+        self.assertFalse(
+            self.detector.check(event(pid=10, path="/b", size=64, entropy=8.0))
+        )
+        self.assertTrue(
+            self.detector.check(event(pid=10, path="/a", size=64, entropy=8.0))
+        )
+
+    def test_low_entropy_fragment_dilutes_partial_accumulation(self):
+        path = "/underlay/reset.bin"
+        self.assertFalse(self.detector.check(event(path=path, size=128, entropy=8.0)))
+        self.assertFalse(self.detector.check(event(path=path, size=64, entropy=1.0)))
+        self.assertFalse(self.detector.check(event(path=path, size=128, entropy=8.0)))
+
+    def test_expired_partial_accumulation_is_removed(self):
+        path = "/underlay/expiry.bin"
+        # 구현은 FsEvent.ts_ns가 아니라 monotonic()을 사용하므로
+        # 테스트에서는 monotonic 시간을 직접 고정해야 한다.
+        with patch(
+            "guardfs.stage1.entropy.time.monotonic",
+            side_effect=[0.0, ENTROPY_ACCUMULATION_WINDOW_SEC + 0.1],
+        ):
+            self.assertFalse(
+                self.detector.check(event(path=path, size=128, entropy=8.0))
+            )
+            self.assertFalse(
+                self.detector.check(event(path=path, size=128, entropy=8.0))
+            )
+
+        # 첫 write가 만료되어 폐기되었으므로 두 번째 write만 남아야 한다.
+        key = (1000, os.path.realpath(path))
+        state = self.detector._accumulators.get(key)
+        self.assertIsNotNone(state)
+        self.assertEqual(state.total_size, 128)
+
+    def test_large_write_clears_previous_partial_state(self):
+        """큰 write 뒤에 이전 작은 write가 다음 판정에 섞이지 않아야 한다.
+
+        큰 write가 즉시 판정되면 기존 accumulator도 삭제되어야 한다.
+        """
+        detector = EntropyDetector(accumulation_size=256)
+        path = "/underlay/large-write-reset.bin"
+
+        with patch(
+            "guardfs.stage1.entropy.time.monotonic",
+            side_effect=[0.0, 0.1, 0.2],
+        ):
+            # 이전 작은 write를 누적한다.
+            self.assertFalse(detector.check(event(path=path, size=128, entropy=8.0)))
+
+            # 큰 write는 즉시 판정되고, 기존 누적 상태를 끊어야 한다.
+            self.assertFalse(detector.check(event(path=path, size=256, entropy=1.0)))
+
+            # 이전 128B가 남아 있다면 이 write와 합쳐져 잘못 탐지된다.
+            self.assertFalse(detector.check(event(path=path, size=128, entropy=8.0)))
+
+    def test_accumulator_is_removed_after_non_detection_evaluation(self):
+        """누적 크기에 도달해 판정한 뒤에는 상태가 다음 흐름으로 넘어가면 안 된다."""
+        detector = EntropyDetector(accumulation_size=256)
+        path = "/underlay/non-detected-evaluation.bin"
+
+        with patch(
+            "guardfs.stage1.entropy.time.monotonic",
+            side_effect=[0.0, 0.1, 0.2, 0.3],
+        ):
+            for _ in range(4):
+                self.assertFalse(detector.check(event(path=path, size=64, entropy=2.0)))
+
+        key = (1000, os.path.realpath(path))
+        self.assertNotIn(key, detector._accumulators)
 
 
 class ExtensionChangeDetectorTests(unittest.TestCase):
@@ -261,7 +362,9 @@ class ExtensionChangeDetectorTests(unittest.TestCase):
     def test_path_with_multiple_dots_uses_last_extension(self):
         detector = ExtChangeDetector(threshold=1)
         self.assertTrue(
-            detector.check(self.rename_event("archive.backup.txt", "archive.backup.enc"))
+            detector.check(
+                self.rename_event("archive.backup.txt", "archive.backup.enc")
+            )
         )
 
 
@@ -279,7 +382,9 @@ class HoneypotDetectorTests(unittest.TestCase):
         self.tempdir.cleanup()
 
     def test_exact_honeypot_directory_is_detected(self):
-        self.assertTrue(self.detector.check(event(op="lookup", path=str(self.honeypot))))
+        self.assertTrue(
+            self.detector.check(event(op="lookup", path=str(self.honeypot)))
+        )
 
     def test_supported_operations_inside_honeypot_are_detected(self):
         target = str(self.honeypot / "bait.txt")

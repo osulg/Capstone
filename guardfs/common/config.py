@@ -2,6 +2,12 @@
 ENTROPY_THRESHOLD = 7.0
 ENTROPY_HEADER_SIZE = 256
 
+# ========== Stage 1 - Entropy Accumulation ========== #
+ENTROPY_ACCUMULATION_WINDOW_SEC = 1.0  # 작은 write을 같은 공격 흐름으로 묶어볼 시간 창
+ENTROPY_ACCUMULATION_SIZE = (
+    ENTROPY_HEADER_SIZE  # 누적 write가 이 크기 이상이면 entropy 재평가
+)
+
 # ========== Stage 1 - Extension Change Detection ========== #
 EXT_CHANGE_WINDOW_SEC = 10
 EXT_CHANGE_THRESHOLD = 5
