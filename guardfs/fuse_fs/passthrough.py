@@ -544,7 +544,6 @@ class Passthrough(pyfuse3.Operations):
 
             raise pyfuse3.FUSEError(errno.EACCES)
 
-
         override = self._get_forced_state(pid)
 
         if override is not None:
@@ -755,6 +754,19 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EBADF)
 
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
+
+        # create로 발급된 핸들을 통한 허니팟 write도 실제 기록 전에 차단
+        if self._is_honeypot_path(path):
+            self._emit_honeypot_event(
+                pid=pid,
+                op="write",
+                path=path,
+                size=len(buf),
+                off=off,
+            )
+
+            raise pyfuse3.FUSEError(errno.EACCES)
+
         ent = shannon_entropy(buf[:ENTROPY_HEADER_SIZE])
 
         self._emit(

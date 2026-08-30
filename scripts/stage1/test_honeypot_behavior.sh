@@ -186,8 +186,9 @@ cleanup() {
     for extra in "${EXTRA_DIRS[@]}"; do
         rmdir -- "$extra" 2>/dev/null || true
     done
-    run_fuse_command 3 rmdir -- "$UNDERLAY_HONEYPOT_DIR" "$UNDERLAY_NORMAL_DIR" \
-        "$TEST_ROOT" 2>/dev/null || true
+    # 공용 허니팟 루트는 GuardFS 런타임 구성 요소이므로 삭제하지 않는다.
+    run_fuse_command 3 rmdir -- "$UNDERLAY_NORMAL_DIR" "$TEST_ROOT" \
+        2>/dev/null || true
     rm -f -- "$RESULT_FILE"
 }
 
