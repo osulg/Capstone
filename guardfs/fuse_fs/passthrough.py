@@ -862,22 +862,31 @@ class Passthrough(pyfuse3.Operations):
         )
 
     async def unlink(self, parent_inode, name, ctx=None):
-        p = self._resolve_path(parent_inode, name)
+        path = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
+
+        # 실제 파일을 삭제하기 전에 허니팟 경로를 차단
+        if self._is_honeypot_path(path):
+            self._emit_honeypot_event(
+                pid=pid,
+                op="unlink",
+                path=path,
+            )
+
+            raise pyfuse3.FUSEError(errno.EACCES)
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_unlink_high
 
-            await handle_unlink_high(p, pid, self)
-
+            await handle_unlink_high(path, pid, self)
             return
 
         try:
-            os.unlink(p)
+            os.unlink(path)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="unlink", path=p))
+        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="unlink", path=path))
 
     async def rename(
         self, parent_inode_old, name_old, parent_inode_new, name_new, flags, ctx=None
@@ -886,6 +895,22 @@ class Passthrough(pyfuse3.Operations):
         newp = self._resolve_path(parent_inode_new, name_new)
 
         pid = ctx.pid if ctx is not None else -1
+
+        # 출발지 또는 목적지가 허니팟이면 실제 rename 전에 차단
+        if self._is_honeypot_path(oldp) or self._is_honeypot_path(newp):
+            self._emit(
+                FsEvent(
+                    ts_ns=time.time_ns(),
+                    pid=pid,
+                    op="rename",
+                    path=oldp,
+                    new_path=newp,
+                )
+            )
+
+            print(f"[HONEYPOT] pid={pid} op=rename blocked path={oldp} new_path={newp}")
+
+            raise pyfuse3.FUSEError(errno.EACCES)
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_rename_high
