@@ -164,10 +164,20 @@ class HoneypotRuleTests(unittest.TestCase):
     def test_missing_new_path_for_rename_is_not_detected(self):
         self.assertFalse(self.check("rename", self.normal_file))
 
+    def test_truncate_operations_on_honeypot_are_detected(self):
+        for op in ("truncate", "ftruncate"):
+            with self.subTest(op=op):
+                self.assertTrue(self.check(op, self.honeypot_file))
+
+    def test_truncate_operations_on_normal_file_are_not_detected(self):
+        for op in ("truncate", "ftruncate"):
+            with self.subTest(op=op):
+                self.assertFalse(self.check(op, self.normal_file))
+
     def test_currently_unsupported_operations_are_not_reported(self):
         # 이 결과는 보안적으로 충분하다는 뜻이 아니라, 현재 구현의
         # 지원 연산 목록을 고정해 두기 위한 기준선이다.
-        unsupported_operations = ("create", "mkdir", "rmdir", "truncate", "ftruncate")
+        unsupported_operations = ("create", "mkdir", "rmdir")
 
         for op in unsupported_operations:
             with self.subTest(op=op):

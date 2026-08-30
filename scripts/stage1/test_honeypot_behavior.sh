@@ -375,22 +375,49 @@ FTRUNC_FILE="$UNDERLAY_HONEYPOT_DIR/ftruncate_$STAMP.txt"
 EXTRA_FILES+=("$FTRUNC_FILE")
 printf 'FTRUNCATE-ORIGINAL-%s\n' "$STAMP" > "$FTRUNC_FILE"
 FTRUNC_ORIGINAL="$(cat "$FTRUNC_FILE")"
-run_fuse_command 5 python3 - "$MOUNT/honeypot/ftruncate_$STAMP.txt" <<'PY' 2>/dev/null || true
+FTRUNC_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-ftruncate.XXXXXX)"
+if run_fuse_command 5 python3 - "$MOUNT/honeypot/ftruncate_$STAMP.txt" \
+    > "$FTRUNC_OUTPUT_FILE" 2>&1 <<'PY'
 import os
 import sys
+
 path = sys.argv[1]
 try:
     fd = os.open(path, os.O_RDWR)
+except OSError as exc:
+    print(f"OPEN_ERROR errno={exc.errno} message={exc}")
+    raise SystemExit(10)
+
+try:
     os.ftruncate(fd, 0)
+except OSError as exc:
+    print(f"FTRUNCATE_ERROR errno={exc.errno} message={exc}")
+    raise SystemExit(11)
+else:
+    print("FTRUNCATE_SUCCESS")
+finally:
     os.close(fd)
-except OSError:
-    pass
 PY
-FTRUNC_AFTER="$(cat "$FTRUNC_FILE" 2>/dev/null || true)"
-if [ "$FTRUNC_AFTER" = "$FTRUNC_ORIGINAL" ]; then
-    record "PASS" "Honeypot ftruncate blocked" "underlay unchanged"
+then
+    FTRUNC_RC=0
 else
-    record "FAIL" "Honeypot ftruncate blocked" "underlay content changed"
+    FTRUNC_RC=$?
+fi
+FTRUNC_OUTPUT="$(<"$FTRUNC_OUTPUT_FILE")"
+rm -f -- "$FTRUNC_OUTPUT_FILE"
+FTRUNC_AFTER="$(cat "$FTRUNC_FILE" 2>/dev/null || true)"
+if [ "$FTRUNC_AFTER" != "$FTRUNC_ORIGINAL" ]; then
+    record "FAIL" "Honeypot ftruncate blocked" "underlay changed; rc=$FTRUNC_RC output=$FTRUNC_OUTPUT"
+elif [[ "$FTRUNC_OUTPUT" == *"OPEN_ERROR errno=13"* ]]; then
+    record "PASS" "Honeypot ftruncate blocked" "open blocked before ftruncate; rc=$FTRUNC_RC"
+elif [[ "$FTRUNC_OUTPUT" == *"FTRUNCATE_ERROR errno=13"* ]]; then
+    record "PASS" "Honeypot ftruncate blocked" "ftruncate rejected with EACCES; rc=$FTRUNC_RC"
+elif [[ "$FTRUNC_OUTPUT" == *"FTRUNCATE_SUCCESS"* ]]; then
+    record "FAIL" "Honeypot ftruncate blocked" "ftruncate succeeded unexpectedly; underlay unchanged"
+elif [ -z "$FTRUNC_OUTPUT" ]; then
+    record "FAIL" "Honeypot ftruncate blocked" "no operation result; rc=$FTRUNC_RC"
+else
+    record "FAIL" "Honeypot ftruncate blocked" "unexpected result; rc=$FTRUNC_RC output=$FTRUNC_OUTPUT"
 fi
 fi
 
@@ -429,19 +456,49 @@ HANDLE_WRITE_FILE="$UNDERLAY_HONEYPOT_DIR/handle_write_$STAMP.txt"
 EXTRA_FILES+=("$HANDLE_WRITE_FILE")
 printf 'HANDLE-WRITE-ORIGINAL-%s\n' "$STAMP" > "$HANDLE_WRITE_FILE"
 HANDLE_WRITE_ORIGINAL="$(cat "$HANDLE_WRITE_FILE")"
-run_fuse_command 5 python3 - "$MOUNT/honeypot/handle_write_$STAMP.txt" <<'PY' 2>/dev/null || true
+HANDLE_WRITE_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-handle-write.XXXXXX)"
+if run_fuse_command 5 python3 - "$MOUNT/honeypot/handle_write_$STAMP.txt" \
+    > "$HANDLE_WRITE_OUTPUT_FILE" 2>&1 <<'PY'
+import os
 import sys
+
 path = sys.argv[1]
 try:
-    with open(path, "r+b", buffering=0) as handle:
-        handle.write(b"HANDLE-WRITE-ATTEMPT")
-except OSError:
-    pass
+    fd = os.open(path, os.O_RDWR)
+except OSError as exc:
+    print(f"OPEN_ERROR errno={exc.errno} message={exc}")
+    raise SystemExit(10)
+
+try:
+    written = os.write(fd, b"HANDLE-WRITE-ATTEMPT")
+except OSError as exc:
+    print(f"WRITE_ERROR errno={exc.errno} message={exc}")
+    raise SystemExit(11)
+else:
+    print(f"WRITE_SUCCESS bytes={written}")
+finally:
+    os.close(fd)
 PY
-if [ "$(cat "$HANDLE_WRITE_FILE" 2>/dev/null || true)" = "$HANDLE_WRITE_ORIGINAL" ]; then
-    record "PASS" "Opened handle write blocked" "underlay unchanged"
+then
+    HANDLE_WRITE_RC=0
 else
-    record "FAIL" "Opened handle write blocked" "underlay content changed"
+    HANDLE_WRITE_RC=$?
+fi
+HANDLE_WRITE_OUTPUT="$(<"$HANDLE_WRITE_OUTPUT_FILE")"
+rm -f -- "$HANDLE_WRITE_OUTPUT_FILE"
+HANDLE_WRITE_AFTER="$(cat "$HANDLE_WRITE_FILE" 2>/dev/null || true)"
+if [ "$HANDLE_WRITE_AFTER" != "$HANDLE_WRITE_ORIGINAL" ]; then
+    record "FAIL" "Opened handle write blocked" "underlay changed; rc=$HANDLE_WRITE_RC output=$HANDLE_WRITE_OUTPUT"
+elif [[ "$HANDLE_WRITE_OUTPUT" == *"OPEN_ERROR errno=13"* ]]; then
+    record "PASS" "Opened handle write blocked" "open blocked before write; rc=$HANDLE_WRITE_RC"
+elif [[ "$HANDLE_WRITE_OUTPUT" == *"WRITE_ERROR errno=13"* ]]; then
+    record "PASS" "Opened handle write blocked" "write rejected with EACCES; rc=$HANDLE_WRITE_RC"
+elif [[ "$HANDLE_WRITE_OUTPUT" == *"WRITE_SUCCESS"* ]]; then
+    record "FAIL" "Opened handle write blocked" "write succeeded unexpectedly; underlay unchanged"
+elif [ -z "$HANDLE_WRITE_OUTPUT" ]; then
+    record "FAIL" "Opened handle write blocked" "no operation result; rc=$HANDLE_WRITE_RC"
+else
+    record "FAIL" "Opened handle write blocked" "unexpected result; rc=$HANDLE_WRITE_RC output=$HANDLE_WRITE_OUTPUT"
 fi
 fi
 
@@ -451,21 +508,49 @@ HANDLE_FTRUNC_FILE="$UNDERLAY_HONEYPOT_DIR/handle_ftruncate_$STAMP.txt"
 EXTRA_FILES+=("$HANDLE_FTRUNC_FILE")
 printf 'HANDLE-FTRUNCATE-ORIGINAL-%s\n' "$STAMP" > "$HANDLE_FTRUNC_FILE"
 HANDLE_FTRUNC_ORIGINAL="$(cat "$HANDLE_FTRUNC_FILE")"
-run_fuse_command 5 python3 - "$MOUNT/honeypot/handle_ftruncate_$STAMP.txt" <<'PY' 2>/dev/null || true
+HANDLE_FTRUNC_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-handle-ftruncate.XXXXXX)"
+if run_fuse_command 5 python3 - "$MOUNT/honeypot/handle_ftruncate_$STAMP.txt" \
+    > "$HANDLE_FTRUNC_OUTPUT_FILE" 2>&1 <<'PY'
 import os
 import sys
+
 path = sys.argv[1]
 try:
     fd = os.open(path, os.O_RDWR)
+except OSError as exc:
+    print(f"OPEN_ERROR errno={exc.errno} message={exc}")
+    raise SystemExit(10)
+
+try:
     os.ftruncate(fd, 0)
+except OSError as exc:
+    print(f"FTRUNCATE_ERROR errno={exc.errno} message={exc}")
+    raise SystemExit(11)
+else:
+    print("FTRUNCATE_SUCCESS")
+finally:
     os.close(fd)
-except OSError:
-    pass
 PY
-if [ "$(cat "$HANDLE_FTRUNC_FILE" 2>/dev/null || true)" = "$HANDLE_FTRUNC_ORIGINAL" ]; then
-    record "PASS" "Opened handle ftruncate blocked" "underlay unchanged"
+then
+    HANDLE_FTRUNC_RC=0
 else
-    record "FAIL" "Opened handle ftruncate blocked" "underlay content changed"
+    HANDLE_FTRUNC_RC=$?
+fi
+HANDLE_FTRUNC_OUTPUT="$(<"$HANDLE_FTRUNC_OUTPUT_FILE")"
+rm -f -- "$HANDLE_FTRUNC_OUTPUT_FILE"
+HANDLE_FTRUNC_AFTER="$(cat "$HANDLE_FTRUNC_FILE" 2>/dev/null || true)"
+if [ "$HANDLE_FTRUNC_AFTER" != "$HANDLE_FTRUNC_ORIGINAL" ]; then
+    record "FAIL" "Opened handle ftruncate blocked" "underlay changed; rc=$HANDLE_FTRUNC_RC output=$HANDLE_FTRUNC_OUTPUT"
+elif [[ "$HANDLE_FTRUNC_OUTPUT" == *"OPEN_ERROR errno=13"* ]]; then
+    record "PASS" "Opened handle ftruncate blocked" "open blocked before ftruncate; rc=$HANDLE_FTRUNC_RC"
+elif [[ "$HANDLE_FTRUNC_OUTPUT" == *"FTRUNCATE_ERROR errno=13"* ]]; then
+    record "PASS" "Opened handle ftruncate blocked" "ftruncate rejected with EACCES; rc=$HANDLE_FTRUNC_RC"
+elif [[ "$HANDLE_FTRUNC_OUTPUT" == *"FTRUNCATE_SUCCESS"* ]]; then
+    record "FAIL" "Opened handle ftruncate blocked" "ftruncate succeeded unexpectedly; underlay unchanged"
+elif [ -z "$HANDLE_FTRUNC_OUTPUT" ]; then
+    record "FAIL" "Opened handle ftruncate blocked" "no operation result; rc=$HANDLE_FTRUNC_RC"
+else
+    record "FAIL" "Opened handle ftruncate blocked" "unexpected result; rc=$HANDLE_FTRUNC_RC output=$HANDLE_FTRUNC_OUTPUT"
 fi
 fi
 

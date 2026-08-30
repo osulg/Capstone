@@ -820,6 +820,17 @@ class Passthrough(pyfuse3.Operations):
 
         pid = ctx.pid if ctx is not None else -1
 
+        # 실제 파일 크기를 변경하기 전에 허니팟 경로를 차단
+        if self._is_honeypot_path(p):
+            self._emit_honeypot_event(
+                pid=pid,
+                op="truncate",
+                path=p,
+                size=size,
+            )
+
+            raise pyfuse3.FUSEError(errno.EACCES)
+
         if await self.get_proc_state(pid) == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_truncate_high
 
@@ -844,6 +855,17 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EBADF)
 
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
+
+        # 열린 핸들을 통한 크기 변경도 실제 변경 전에 허니팟 경로를 차단
+        if self._is_honeypot_path(path):
+            self._emit_honeypot_event(
+                pid=pid,
+                op="ftruncate",
+                path=path,
+                size=size,
+            )
+
+            raise pyfuse3.FUSEError(errno.EACCES)
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_truncate_high

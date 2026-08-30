@@ -12,7 +12,16 @@ class HoneypotDetector:
         self._honeypot_dir = os.path.realpath(honeypot_dir)
 
     def check(self, ev) -> bool:
-        if ev.op not in ("open", "read", "write", "lookup", "rename", "unlink"):
+        if ev.op not in (
+            "open",
+            "read",
+            "write",
+            "lookup",
+            "truncate",
+            "ftruncate",
+            "rename",
+            "unlink",
+        ):
             return False
 
         # 현재 경로 확인
