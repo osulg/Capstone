@@ -6,6 +6,7 @@ HoneypotDetector
 
 import os
 
+
 class HoneypotDetector:
     def __init__(self, honeypot_dir: str):
         # honeypot 디렉토리의 절대 경로를 정규화해서 저장
@@ -17,22 +18,31 @@ class HoneypotDetector:
             "read",
             "write",
             "lookup",
+            "create",
+            "mkdir",
             "truncate",
             "ftruncate",
             "rename",
             "unlink",
+            "rmdir",
         ):
             return False
 
         # 현재 경로 확인
         target = os.path.realpath(ev.path)
-        if target.startswith(self._honeypot_dir + os.sep) or target == self._honeypot_dir:
+        if (
+            target.startswith(self._honeypot_dir + os.sep)
+            or target == self._honeypot_dir
+        ):
             return True
 
         # rename의 목적지 경로도 확인
         if getattr(ev, "new_path", None):
             new_target = os.path.realpath(ev.new_path)
-            if new_target.startswith(self._honeypot_dir + os.sep) or new_target == self._honeypot_dir:
+            if (
+                new_target.startswith(self._honeypot_dir + os.sep)
+                or new_target == self._honeypot_dir
+            ):
                 return True
 
         return False

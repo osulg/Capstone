@@ -534,6 +534,17 @@ class Passthrough(pyfuse3.Operations):
         p = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
 
+        # 허니팟 디렉터리는 실제 삭제 전에 이벤트를 기록 및 차단
+        if self._is_honeypot_path(p):
+            self._emit_honeypot_event(
+                pid=pid,
+                op="rmdir",
+                path=p,
+            )
+
+            raise pyfuse3.FUSEError(errno.EACCES)
+
+
         override = self._get_forced_state(pid)
 
         if override is not None:

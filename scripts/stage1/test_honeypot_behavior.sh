@@ -19,6 +19,7 @@ set -u
 
 MOUNT="${MOUNT:-$HOME/guardfs_runtime/mount}"
 UNDERLAY="${UNDERLAY:-$HOME/guardfs_runtime/underlay}"
+EVENT_LOG="${EVENT_LOG:-$(dirname "$UNDERLAY")/guardfs_log.jsonl}"
 TEST_NO="${1:-all}"
 STAMP="$(date +%Y%m%d_%H%M%S)_$$"
 TEST_ROOT="$UNDERLAY/.guardfs_honeypot_behavior_$STAMP"
@@ -28,9 +29,10 @@ PASS_COUNT=0
 FAIL_COUNT=0
 SKIP_COUNT=0
 EXTRA_FILES=()
+EXTRA_DIRS=()
 
 usage() {
-    echo "Usage: $0 [all|1-13]"
+    echo "Usage: $0 [all|1-19]"
     echo "  1  허니팟 cat 내용 노출/차단"
     echo "  2  Python open/read 차단"
     echo "  3  열린 file handle read 차단"
@@ -44,18 +46,24 @@ usage() {
     echo " 11  허니팟 rename 차단"
     echo " 12  열린 핸들의 write 차단"
     echo " 13  열린 핸들의 ftruncate 차단"
+    echo " 14  허니팟 내부 create 관찰"
+    echo " 15  허니팟 내부 mkdir 관찰"
+    echo " 16  허니팟 내부 rmdir 차단"
+    echo " 17  정상 경로 create 성공"
+    echo " 18  정상 경로 mkdir 성공"
+    echo " 19  정상 경로 rmdir 성공"
 }
 
-if [[ "$TEST_NO" != "all" && ! "$TEST_NO" =~ ^(1[0-3]|[1-9])$ ]]; then
+if [[ "$TEST_NO" != "all" && ! "$TEST_NO" =~ ^(1[0-9]|[1-9])$ ]]; then
     usage
     exit 2
 fi
 
 run_test() {
     [ "$TEST_NO" = "all" ] || [ "$TEST_NO" = "$1" ] || return 1
-    # 7~13번은 언더레이 허니팟 디렉터리에 테스트 파일을 만들 수 있어야 한다.
+    # 7~16번은 언더레이 허니팟 디렉터리에 테스트 파일을 만들 수 있어야 한다.
     # 디렉터리가 잠겨 있으면 해당 변경 테스트를 실행하지 않고 건너뛴다.
-    if [ "$1" -ge 7 ]; then
+    if [ "$1" -ge 7 ] && [ "$1" -le 16 ]; then
         # 권한 비트만으로는 FUSE/ACL 상태를 정확히 알 수 없으므로 실제 확인용 파일을
         # 잠시 생성한다. 생성에 실패해도 스크립트의 나머지 테스트는 계속 진행한다.
         if ! timeout 2 sh -c 'p="$1/.guardfs_mutation_probe_$$"; : > "$p" && rm -f -- "$p"' sh "$UNDERLAY_HONEYPOT_DIR" 2>/dev/null; then
@@ -64,6 +72,38 @@ run_test() {
         fi
     fi
     return 0
+}
+
+wait_for_event() {
+    local op="$1"
+    local path="$2"
+    local attempt
+
+    for attempt in $(seq 1 20); do
+        if python3 - "$EVENT_LOG" "$op" "$path" <<'PY' 2>/dev/null
+import json
+import sys
+
+log_path, expected_op, expected_path = sys.argv[1:]
+try:
+    with open(log_path, "r", encoding="utf-8") as handle:
+        found = any(
+            event.get("op") == expected_op and event.get("path") == expected_path
+            for line in handle
+            if (event := json.loads(line))
+        )
+except (OSError, json.JSONDecodeError):
+    found = False
+
+raise SystemExit(0 if found else 1)
+PY
+        then
+            return 0
+        fi
+        sleep 0.1
+    done
+
+    return 1
 }
 
 run_fuse_command() {
@@ -115,6 +155,12 @@ record() {
         *"Honeypot rename"*) label="[TEST 11]" ;;
         *"Opened handle write"*) label="[TEST 12]" ;;
         *"Opened handle ftruncate"*) label="[TEST 13]" ;;
+        *"Honeypot create"*) label="[TEST 14]" ;;
+        *"Honeypot mkdir"*) label="[TEST 15]" ;;
+        *"Honeypot rmdir"*) label="[TEST 16]" ;;
+        *"Normal create"*) label="[TEST 17]" ;;
+        *"Normal mkdir"*) label="[TEST 18]" ;;
+        *"Normal rmdir"*) label="[TEST 19]" ;;
     esac
 
     case "$status" in
@@ -134,11 +180,14 @@ cleanup() {
     # FUSE 정리 명령이 멈추지 않도록 안전 실행 함수를 사용하며, 정리 실패는 무시한다.
     run_fuse_command 3 rm -f -- "$UNDERLAY_HONEYPOT_FILE" "$UNDERLAY_NORMAL_FILE" \
         "$MOUNT_HONEYPOT_FILE" "$MOUNT_NORMAL_FILE" 2>/dev/null || true
-    run_fuse_command 3 rmdir -- "$UNDERLAY_HONEYPOT_DIR" "$UNDERLAY_NORMAL_DIR" \
-        "$TEST_ROOT" 2>/dev/null || true
     for extra in "${EXTRA_FILES[@]}"; do
         rm -f -- "$extra" 2>/dev/null || true
     done
+    for extra in "${EXTRA_DIRS[@]}"; do
+        rmdir -- "$extra" 2>/dev/null || true
+    done
+    run_fuse_command 3 rmdir -- "$UNDERLAY_HONEYPOT_DIR" "$UNDERLAY_NORMAL_DIR" \
+        "$TEST_ROOT" 2>/dev/null || true
     rm -f -- "$RESULT_FILE"
 }
 
@@ -156,6 +205,7 @@ MOUNT_NORMAL_FILE="$MOUNT/.guardfs_honeypot_behavior_$STAMP/normal/report.txt"
 echo "GuardFS Honeypot behavior test"
 echo "MOUNT   : $MOUNT"
 echo "UNDERLAY: $UNDERLAY"
+echo "EVENT LOG: $EVENT_LOG"
 echo "TEST ID : $STAMP"
 echo
 
@@ -187,13 +237,13 @@ ORIGINAL_HONEYPOT_CONTENT="$(cat "$UNDERLAY_HONEYPOT_FILE")"
 ORIGINAL_NORMAL_CONTENT="$(cat "$UNDERLAY_NORMAL_FILE")"
 
 # 허니팟 픽스처를 만든 직후 언더레이 디렉터리의 쓰기 권한을 확인한다.
-# 쓸 수 없으면 7~13번 테스트용 파일을 언더레이에 만들 수 없으므로 해당 테스트를
+# 쓸 수 없으면 7~16번 테스트용 파일을 언더레이에 만들 수 없으므로 해당 테스트를
 # SKIP으로 기록한다. 읽기 차단(1~3번)과 정상 경로 및 상태 확인(4~6번)은 계속 실행한다.
 if [ -w "$UNDERLAY_HONEYPOT_DIR" ]; then
     HONEYPOT_MUTATION_ALLOWED=1
 else
     HONEYPOT_MUTATION_ALLOWED=0
-    echo "WARNING: honeypot underlay directory is not writable; tests 7-13 will be skipped."
+    echo "WARNING: honeypot underlay directory is not writable; tests 7-16 will be skipped."
 fi
 
 skip_mutation_test() {
@@ -551,6 +601,168 @@ elif [ -z "$HANDLE_FTRUNC_OUTPUT" ]; then
     record "FAIL" "Opened handle ftruncate blocked" "no operation result; rc=$HANDLE_FTRUNC_RC"
 else
     record "FAIL" "Opened handle ftruncate blocked" "unexpected result; rc=$HANDLE_FTRUNC_RC output=$HANDLE_FTRUNC_OUTPUT"
+fi
+fi
+
+# 14) 허니팟 내부 create: 생성은 허용하되 create 이벤트가 기록되는지 확인한다.
+if run_test 14; then
+HONEYPOT_CREATE_FILE="$UNDERLAY_HONEYPOT_DIR/create_$STAMP.txt"
+MOUNT_HONEYPOT_CREATE_FILE="$MOUNT/honeypot/create_$STAMP.txt"
+EXTRA_FILES+=("$HONEYPOT_CREATE_FILE")
+HONEYPOT_CREATE_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-create.XXXXXX)"
+if run_fuse_command 5 python3 - "$MOUNT_HONEYPOT_CREATE_FILE" \
+    > "$HONEYPOT_CREATE_OUTPUT_FILE" 2>&1 <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+except OSError as exc:
+    print(f"CREATE_ERROR errno={exc.errno} message={exc}")
+    raise SystemExit(10)
+else:
+    os.close(fd)
+    print("CREATE_SUCCESS")
+PY
+then
+    HONEYPOT_CREATE_RC=0
+else
+    HONEYPOT_CREATE_RC=$?
+fi
+HONEYPOT_CREATE_OUTPUT="$(<"$HONEYPOT_CREATE_OUTPUT_FILE")"
+rm -f -- "$HONEYPOT_CREATE_OUTPUT_FILE"
+
+if [ "$HONEYPOT_CREATE_RC" -ne 0 ]; then
+    record "FAIL" "Honeypot create observed" "create failed; rc=$HONEYPOT_CREATE_RC output=$HONEYPOT_CREATE_OUTPUT"
+elif [[ "$HONEYPOT_CREATE_OUTPUT" != *"CREATE_SUCCESS"* ]]; then
+    record "FAIL" "Honeypot create observed" "unexpected result; rc=$HONEYPOT_CREATE_RC output=$HONEYPOT_CREATE_OUTPUT"
+elif [ ! -f "$HONEYPOT_CREATE_FILE" ]; then
+    record "FAIL" "Honeypot create observed" "underlay file was not created"
+elif wait_for_event "create" "$HONEYPOT_CREATE_FILE"; then
+    record "PASS" "Honeypot create observed" "create succeeded and event recorded"
+else
+    record "FAIL" "Honeypot create observed" "create succeeded but event was not recorded"
+fi
+fi
+
+# 15) 허니팟 내부 mkdir: 생성은 허용하되 mkdir 이벤트가 기록되는지 확인한다.
+if run_test 15; then
+HONEYPOT_MKDIR_DIR="$UNDERLAY_HONEYPOT_DIR/mkdir_$STAMP"
+MOUNT_HONEYPOT_MKDIR_DIR="$MOUNT/honeypot/mkdir_$STAMP"
+EXTRA_DIRS+=("$HONEYPOT_MKDIR_DIR")
+if run_fuse_command 5 mkdir -- "$MOUNT_HONEYPOT_MKDIR_DIR" 2>/dev/null; then
+    HONEYPOT_MKDIR_RC=0
+else
+    HONEYPOT_MKDIR_RC=$?
+fi
+
+if [ "$HONEYPOT_MKDIR_RC" -ne 0 ]; then
+    record "FAIL" "Honeypot mkdir observed" "mkdir failed; rc=$HONEYPOT_MKDIR_RC"
+elif [ ! -d "$HONEYPOT_MKDIR_DIR" ]; then
+    record "FAIL" "Honeypot mkdir observed" "underlay directory was not created"
+elif wait_for_event "mkdir" "$HONEYPOT_MKDIR_DIR"; then
+    record "PASS" "Honeypot mkdir observed" "mkdir succeeded and event recorded"
+else
+    record "FAIL" "Honeypot mkdir observed" "mkdir succeeded but event was not recorded"
+fi
+fi
+
+# 16) 허니팟 내부 rmdir: 빈 하위 디렉터리도 실제 삭제 전에 EACCES로 차단하는지 확인한다.
+if run_test 16; then
+HONEYPOT_RMDIR_DIR="$UNDERLAY_HONEYPOT_DIR/rmdir_$STAMP"
+MOUNT_HONEYPOT_RMDIR_DIR="$MOUNT/honeypot/rmdir_$STAMP"
+EXTRA_DIRS+=("$HONEYPOT_RMDIR_DIR")
+mkdir -p -- "$HONEYPOT_RMDIR_DIR"
+HONEYPOT_RMDIR_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-rmdir.XXXXXX)"
+if run_fuse_command 5 python3 - "$MOUNT_HONEYPOT_RMDIR_DIR" \
+    > "$HONEYPOT_RMDIR_OUTPUT_FILE" 2>&1 <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    os.rmdir(path)
+except OSError as exc:
+    print(f"RMDIR_ERROR errno={exc.errno} message={exc}")
+    raise SystemExit(10)
+else:
+    print("RMDIR_SUCCESS")
+PY
+then
+    HONEYPOT_RMDIR_RC=0
+else
+    HONEYPOT_RMDIR_RC=$?
+fi
+HONEYPOT_RMDIR_OUTPUT="$(<"$HONEYPOT_RMDIR_OUTPUT_FILE")"
+rm -f -- "$HONEYPOT_RMDIR_OUTPUT_FILE"
+
+if [ ! -d "$HONEYPOT_RMDIR_DIR" ]; then
+    record "FAIL" "Honeypot rmdir blocked" "underlay directory was deleted; output=$HONEYPOT_RMDIR_OUTPUT"
+elif [[ "$HONEYPOT_RMDIR_OUTPUT" != *"RMDIR_ERROR errno=13"* ]]; then
+    record "FAIL" "Honeypot rmdir blocked" "expected EACCES; rc=$HONEYPOT_RMDIR_RC output=$HONEYPOT_RMDIR_OUTPUT"
+elif wait_for_event "rmdir" "$HONEYPOT_RMDIR_DIR"; then
+    record "PASS" "Honeypot rmdir blocked" "EACCES returned, directory preserved, and event recorded"
+else
+    record "FAIL" "Honeypot rmdir blocked" "blocked but event was not recorded"
+fi
+fi
+
+# 17) 정상 경로 create: 파일 생성과 내용이 언더레이에 정상 반영되는지 확인한다.
+if run_test 17; then
+NORMAL_CREATE_FILE="$UNDERLAY_NORMAL_DIR/create_$STAMP.txt"
+MOUNT_NORMAL_CREATE_FILE="$MOUNT/.guardfs_honeypot_behavior_$STAMP/normal/create_$STAMP.txt"
+NORMAL_CREATE_CONTENT="NORMAL-CREATE-$STAMP"
+EXTRA_FILES+=("$NORMAL_CREATE_FILE")
+if run_fuse_command 5 sh -c 'printf "%s\n" "$1" > "$2"' sh \
+    "$NORMAL_CREATE_CONTENT" "$MOUNT_NORMAL_CREATE_FILE" 2>/dev/null; then
+    NORMAL_CREATE_RC=0
+else
+    NORMAL_CREATE_RC=$?
+fi
+
+NORMAL_CREATE_AFTER="$(cat "$NORMAL_CREATE_FILE" 2>/dev/null || true)"
+if [ "$NORMAL_CREATE_RC" -eq 0 ] && [ "$NORMAL_CREATE_AFTER" = "$NORMAL_CREATE_CONTENT" ]; then
+    record "PASS" "Normal create succeeds" "underlay content matches"
+else
+    record "FAIL" "Normal create succeeds" "rc=$NORMAL_CREATE_RC expected=$NORMAL_CREATE_CONTENT actual=$NORMAL_CREATE_AFTER"
+fi
+fi
+
+# 18) 정상 경로 mkdir: 생성한 디렉터리가 마운트와 언더레이 양쪽에 보이는지 확인한다.
+if run_test 18; then
+NORMAL_MKDIR_DIR="$UNDERLAY_NORMAL_DIR/mkdir_$STAMP"
+MOUNT_NORMAL_MKDIR_DIR="$MOUNT/.guardfs_honeypot_behavior_$STAMP/normal/mkdir_$STAMP"
+EXTRA_DIRS+=("$NORMAL_MKDIR_DIR")
+if run_fuse_command 5 mkdir -- "$MOUNT_NORMAL_MKDIR_DIR" 2>/dev/null; then
+    NORMAL_MKDIR_RC=0
+else
+    NORMAL_MKDIR_RC=$?
+fi
+
+if [ "$NORMAL_MKDIR_RC" -eq 0 ] && [ -d "$NORMAL_MKDIR_DIR" ] && [ -d "$MOUNT_NORMAL_MKDIR_DIR" ]; then
+    record "PASS" "Normal mkdir succeeds" "mount and underlay directories exist"
+else
+    record "FAIL" "Normal mkdir succeeds" "rc=$NORMAL_MKDIR_RC or directory missing"
+fi
+fi
+
+# 19) 정상 경로 rmdir: 빈 디렉터리 삭제가 마운트와 언더레이에 정상 반영되는지 확인한다.
+if run_test 19; then
+NORMAL_RMDIR_DIR="$UNDERLAY_NORMAL_DIR/rmdir_$STAMP"
+MOUNT_NORMAL_RMDIR_DIR="$MOUNT/.guardfs_honeypot_behavior_$STAMP/normal/rmdir_$STAMP"
+EXTRA_DIRS+=("$NORMAL_RMDIR_DIR")
+mkdir -p -- "$NORMAL_RMDIR_DIR"
+if run_fuse_command 5 rmdir -- "$MOUNT_NORMAL_RMDIR_DIR" 2>/dev/null; then
+    NORMAL_RMDIR_RC=0
+else
+    NORMAL_RMDIR_RC=$?
+fi
+
+if [ "$NORMAL_RMDIR_RC" -eq 0 ] && [ ! -d "$NORMAL_RMDIR_DIR" ] && [ ! -d "$MOUNT_NORMAL_RMDIR_DIR" ]; then
+    record "PASS" "Normal rmdir succeeds" "mount and underlay directories removed"
+else
+    record "FAIL" "Normal rmdir succeeds" "rc=$NORMAL_RMDIR_RC or directory remains"
 fi
 fi
 
