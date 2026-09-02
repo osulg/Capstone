@@ -53,22 +53,49 @@ def _get_start_time(pid: int):
         return None
 
 
-def _check_package_sync(exe_path: str) -> bool:
-    """
-    dpkg 패키지 소속 여부 + 체크섬 무결성 검증 (블로킹, 서브프로세스 사용).
-    - dpkg -S: 이 파일이 어느 apt 패키지 소속인지 확인 (소속 없으면 미검증 처리)
-    - dpkg -V: 그 패키지의 파일들이 설치 당시와 다른지(변조) 확인
-    반드시 trio.to_thread.run_sync를 통해서만 호출할 것 (이벤트 루프 블로킹 방지).
-    """
+def _dpkg_query_owner(exe_path: str) -> str | None:
+    """dpkg -S로 해당 경로 소속 패키지명을 조회. 못 찾으면 None."""
     try:
         owner = subprocess.run(
             ["dpkg", "-S", exe_path],
             capture_output=True, text=True, timeout=2
         )
         if owner.returncode != 0 or not owner.stdout.strip():
-            return False  # 어떤 패키지에도 속하지 않음 → 서명/검증 불가로 간주
+            return None
+        return owner.stdout.split(":")[0].strip().split(",")[0].strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+        return None
 
-        package = owner.stdout.split(":")[0].strip().split(",")[0].strip()
+
+def _check_package_sync(exe_path: str) -> bool:
+    """
+    dpkg 패키지 소속 여부 + 체크섬 무결성 검증 (블로킹, 서브프로세스 사용).
+    - dpkg -S: 이 파일이 어느 apt 패키지 소속인지 확인 (소속 없으면 미검증 처리)
+    - dpkg -V: 그 패키지의 파일들이 설치 당시와 다른지(변조) 확인
+    - /usr/bin, /usr/sbin 경로는 dpkg 메타데이터가 옛 경로(/bin, /sbin) 기준으로
+      등록된 경우가 많아(우분투의 usr-merge) 실패하면 대응 경로로 재시도한다.
+    반드시 trio.to_thread.run_sync를 통해서만 호출할 것 (이벤트 루프 블로킹 방지).
+    """
+    try:
+        package = _dpkg_query_owner(exe_path)
+
+        if package is None:
+            # usr-merge 대응: /usr/bin -> /bin, /usr/sbin -> /sbin 등으로 재시도
+            alt_path = None
+            if exe_path.startswith("/usr/bin/"):
+                alt_path = "/bin/" + exe_path[len("/usr/bin/"):]
+            elif exe_path.startswith("/usr/sbin/"):
+                alt_path = "/sbin/" + exe_path[len("/usr/sbin/"):]
+            elif exe_path.startswith("/bin/"):
+                alt_path = "/usr/bin/" + exe_path[len("/bin/"):]
+            elif exe_path.startswith("/sbin/"):
+                alt_path = "/usr/sbin/" + exe_path[len("/sbin/"):]
+
+            if alt_path:
+                package = _dpkg_query_owner(alt_path)
+
+        if package is None:
+            return False  # 어떤 패키지에도 속하지 않음 → 서명/검증 불가로 간주
 
         verify = subprocess.run(
             ["dpkg", "-V", package],

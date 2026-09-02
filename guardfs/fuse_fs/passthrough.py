@@ -329,6 +329,45 @@ class Passthrough(pyfuse3.Operations):
         from guardfs.stage2.policy.high import handle_high_enter
         await handle_high_enter(pid, self, reason)
 
+    async def _resolve_effective_state(self, pid: int) -> ProcState:
+        """
+        호출 시점의 '실제 적용 상태'를 계산한다.
+
+        순서:
+        1. override 파일이 있으면 그걸 그대로 사용 (테스트/시뮬레이션용)
+        2. SUSPICIOUS는 LOW로 취급 (Stage2 ML 결과 대기 중이므로 일단 통과)
+        3. HIGH는 그대로 반환 (재평가 불필요)
+        4. 신뢰도 낮은 PID(exe 경로 + 부모 프로세스 + 패키지 무결성 기준)는
+           상태(LOW/SUSPICIOUS)와 무관하게 최소 MEDIUM으로 강제 승격
+           → 랜섬웨어의 '진짜 첫 write'가 Stage1 판정 이전에
+             underlay로 바로 반영되는 문제를 원천 차단
+
+        MEDIUM으로 강제 승격된 PID는 self._medium_pids에 시각을 기록해서
+        stage2_worker.py의 REEVAL 루프(10초 타임아웃, HIGH 격상 등)가
+        동일하게 적용되도록 한다.
+        """
+        override = self._get_forced_state(pid)
+        if override is not None:
+            await self.set_proc_state(pid, override)
+            return override
+
+        state = await self.get_proc_state(pid)
+        if state == ProcState.SUSPICIOUS:
+            state = ProcState.LOW
+
+        if state == ProcState.HIGH:
+            return state
+
+        if state != ProcState.MEDIUM and not await is_trusted_pid(pid):
+            state = ProcState.MEDIUM
+            await self.set_proc_state(pid, ProcState.MEDIUM)
+
+        if state == ProcState.MEDIUM and pid not in self._medium_pids:
+            self._medium_pids[pid] = trio.current_time()
+            print(f"[TRUST] pid={pid} untrusted origin → forced MEDIUM (staging)")
+
+        return state
+
     def _find_open_fd_for_path(self, path: str) -> Optional[int]:
         """열린 fd 검색 helper"""
         for fh, (_pid, fh_path, _flags) in self._fh_info.items():
