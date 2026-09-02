@@ -134,7 +134,7 @@ def predict_static(model, pid: int) -> float:
 async def stage2_worker(recv_chan, ops) -> None:
     dyn_model, stat_model = load_models()
 
-    medium_pids = {}
+    medium_pids = ops._medium_pids
     risk_scores = {}
     stat_cache  = {}   # 프로세스 종료 후에도 static 점수 유지
     next_reeval = trio.current_time() + STAGE2_REEVAL_INTERVAL_SEC
@@ -215,22 +215,16 @@ async def stage2_worker(recv_chan, ops) -> None:
 
                     # HIGH 임계치 초과 시 즉시 격상
                     if score >= STAGE2_HIGH_THRESHOLD:
-                        print(
-                            f"[REEVAL] pid={pid} "
-                            f"{STAGE2_MEDIUM_TIMEOUT_SEC:.0f}초 경과 → LOW 복귀"
-                        )
-                        
+                        print(f"[REEVAL] pid={pid} score={score:.3f} → HIGH 격상")
                         from guardfs.stage2.policy.medium import drop_buffers
                         await ops.trigger_high(pid, reason=f"reeval_score={score:.3f}")
                         await drop_buffers(pid, ops)
                         medium_pids.pop(pid, None)
-                        
                         continue
 
                     from guardfs.stage2.policy.medium import validate_medium_buffers, drop_buffers
-                    
                     need_high = await validate_medium_buffers(pid, ops)
-                    
+
                     if need_high:
                         print(f"[REEVAL] pid={pid} 구조 깨짐 → 버퍼 드롭 + HIGH 격상")
                         await ops.trigger_high(pid, reason="magic_mismatch_reeval")
