@@ -16,7 +16,6 @@ sys.path.insert(
 
 import pyfuse3
 import trio
-
 from guardfs.common.config import (
     ENTROPY_HEADER_SIZE,
     ENTROPY_THRESHOLD,
@@ -36,6 +35,7 @@ from guardfs.common.paths import (
 from guardfs.stage1.detector import Stage1Detector
 from guardfs.stage1.entropy import shannon_entropy
 from guardfs.stage1.logger import EventLogger
+from guardfs.stage1.trust import is_trusted_pid
 from guardfs.stage2.stage2_worker import stage2_worker
 from guardfs.stage2.states import ProcState
 
@@ -184,6 +184,11 @@ class Passthrough(pyfuse3.Operations):
         self._write_count:  Dict[int, int]  = defaultdict(int)
         self._risk_score:   Dict[int, float] = {}
 
+        # [원본 보호] 신뢰도 낮은 PID를 강제로 MEDIUM 편입시킨 시각 기록
+        # stage2_worker.py의 REEVAL 루프와 동일한 딕셔너리를 공유해서
+        # 10초 타임아웃 정책이 그대로 적용되도록 함
+        self._medium_pids: Dict[int, float] = {}
+
         # MEDIUM/HIGH create 시 사용할 staging 영역
         self._staging_dir = STAGING_DIR
         os.makedirs(self._staging_dir, exist_ok=True)
@@ -316,7 +321,7 @@ class Passthrough(pyfuse3.Operations):
             
             print(f"[STATE] pid={pid} {prev} → {state}")
 
-
+    # 여기도 추가 (High 격상 트리거용)
     async def trigger_high(self, pid: int, reason: str = "") -> None:
         print(f"[TRIGGER HIGH] pid={pid} reason={reason}")
         
@@ -338,7 +343,6 @@ class Passthrough(pyfuse3.Operations):
         return None
     
     # ---------------------------------- FUSE ops ---------------------------------- #
-
     async def access(self, inode, mode, ctx=None):
         return
 
@@ -384,16 +388,7 @@ class Passthrough(pyfuse3.Operations):
         p = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
 
-        override = self._get_forced_state(pid)
-        
-        if override is not None:
-            await self.set_proc_state(pid, override)
-            state = override
-        else:
-            state = await self.get_proc_state(pid)
-            if state == ProcState.SUSPICIOUS:
-                state = ProcState.LOW  # ML 결과 대기 중, 일단 통과
-
+        state = await self._resolve_effective_state(pid)
         if state in (ProcState.MEDIUM, ProcState.HIGH):
             staging_path = os.path.join(self._staging_dir, f"fh_{self._next_fh}")
             
@@ -684,18 +679,7 @@ class Passthrough(pyfuse3.Operations):
             )
         )
 
-        override = self._get_forced_state(pid)
-        
-        if override is not None:
-            # override 파일 있음: 강제 상태 적용, ML 평가 없음
-            await self.set_proc_state(pid, override)
-            state = override
-        else:
-            # 실제 탐지 모드: Stage1 → mark_suspect → stage2 경로만 사용
-            state = await self.get_proc_state(pid)
-            if state == ProcState.SUSPICIOUS:
-                state = ProcState.LOW  # ML 결과 대기 중, 일단 통과
-
+        state = await self._resolve_effective_state(pid)
         print(f"[WRITE] pid={pid} state={state} path={path}")
 
         if state == ProcState.HIGH:
@@ -707,7 +691,7 @@ class Passthrough(pyfuse3.Operations):
             return await handle_write_medium(fd, off, buf, path, pid, self)
 
         else:
-            from guardfs.stage2.policy.low import handle_write_low
+            from guardfs.stage2.policy.low import handle_write_low            
             return await handle_write_low(fd, off, buf, path, pid, self)
     
     async def setattr(
@@ -745,7 +729,7 @@ class Passthrough(pyfuse3.Operations):
         pid = ctx.pid if ctx is not None else -1
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_truncate_high
+            from guardfs.stage2.policy.high import handle_truncate_high            
             await handle_truncate_high(p, size, pid, self)
             
             return
@@ -767,7 +751,7 @@ class Passthrough(pyfuse3.Operations):
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_truncate_high
+            from guardfs.stage2.policy.high import handle_truncate_high            
             await handle_truncate_high(path, size, pid, self)
             
             return
@@ -784,7 +768,7 @@ class Passthrough(pyfuse3.Operations):
         pid = ctx.pid if ctx is not None else -1
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_unlink_high
+            from guardfs.stage2.policy.high import handle_unlink_high            
             await handle_unlink_high(p, pid, self)
             
             return
@@ -805,7 +789,6 @@ class Passthrough(pyfuse3.Operations):
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_rename_high
-
             await handle_rename_high(oldp, newp, pid, self)
             return
 
@@ -1030,13 +1013,7 @@ async def main(mountpoint: str, root: str):
                 honeypot_dir,
                 ops,
             )
-            
-            nursery.start_soon(
-                stage2_worker,
-                ops._stage2_recv,
-                ops
-            )
-            
+            nursery.start_soon(stage2_worker, ops._stage2_recv, ops)
             await pyfuse3.main()
             
     finally:
@@ -1047,5 +1024,4 @@ if __name__ == "__main__":
     if len(sys.argv) != 3:
         print("Usage: python passthrough.py <MOUNTPOINT> <UNDERLAY>")
         sys.exit(2)
-        
     trio.run(main, sys.argv[1], sys.argv[2])
