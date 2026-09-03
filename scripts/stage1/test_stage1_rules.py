@@ -319,6 +319,24 @@ class ExtensionChangeDetectorTests(unittest.TestCase):
         detector = ExtChangeDetector(threshold=999)
         self.assertTrue(detector.check(self.rename_event("a.txt", "a.ENC")))
 
+    def test_suspicious_double_extension_is_detected_immediately(self):
+        detector = ExtChangeDetector(threshold=999)
+        self.assertTrue(
+            detector.check(self.rename_event("report.pdf", "report.pdf.exe"))
+        )
+
+    def test_new_double_extension_is_detected_when_final_extension_is_unchanged(self):
+        detector = ExtChangeDetector(threshold=999)
+        self.assertTrue(
+            detector.check(self.rename_event("report.exe", "report.pdf.exe"))
+        )
+
+    def test_existing_double_extension_is_not_detected_again(self):
+        detector = ExtChangeDetector(threshold=999)
+        self.assertFalse(
+            detector.check(self.rename_event("report.pdf.exe", "renamed.pdf.exe"))
+        )
+
     def test_normal_to_normal_change_is_not_detected(self):
         detector = ExtChangeDetector(threshold=1)
         self.assertFalse(detector.check(self.rename_event("a.txt", "a.pdf")))
@@ -330,34 +348,64 @@ class ExtensionChangeDetectorTests(unittest.TestCase):
 
     def test_unknown_extension_detects_exactly_at_threshold(self):
         detector = ExtChangeDetector(window_sec=10, threshold=3)
-        with patch("guardfs.stage1.ext_change.time.time", side_effect=[1.0, 2.0, 3.0]):
+        with patch(
+            "guardfs.stage1.ext_change.time.monotonic",
+            side_effect=[1.0, 2.0, 3.0],
+        ):
             self.assertFalse(detector.check(self.rename_event("a.txt", "a.x1")))
             self.assertFalse(detector.check(self.rename_event("b.txt", "b.x2")))
             self.assertTrue(detector.check(self.rename_event("c.txt", "c.x3")))
+        self.assertNotIn(1000, detector.history)
+
+    def test_same_path_does_not_fill_distinct_path_threshold(self):
+        detector = ExtChangeDetector(window_sec=10, threshold=2)
+        with patch(
+            "guardfs.stage1.ext_change.time.monotonic",
+            side_effect=[1.0, 2.0],
+        ):
+            self.assertFalse(detector.check(self.rename_event("a.txt", "a.x")))
+            self.assertFalse(detector.check(self.rename_event("a.txt", "a.y")))
 
     def test_counts_are_isolated_by_pid(self):
         detector = ExtChangeDetector(window_sec=10, threshold=2)
-        with patch("guardfs.stage1.ext_change.time.time", side_effect=[1.0, 2.0, 3.0]):
+        with patch(
+            "guardfs.stage1.ext_change.time.monotonic",
+            side_effect=[1.0, 2.0, 3.0],
+        ):
             self.assertFalse(detector.check(self.rename_event("a.txt", "a.x", pid=10)))
             self.assertFalse(detector.check(self.rename_event("b.txt", "b.x", pid=20)))
             self.assertTrue(detector.check(self.rename_event("c.txt", "c.x", pid=10)))
 
     def test_expired_events_do_not_contribute(self):
         detector = ExtChangeDetector(window_sec=10, threshold=2)
-        with patch("guardfs.stage1.ext_change.time.time", side_effect=[1.0, 12.1]):
+        with patch(
+            "guardfs.stage1.ext_change.time.monotonic",
+            side_effect=[1.0, 12.1],
+        ):
             self.assertFalse(detector.check(self.rename_event("a.txt", "a.x")))
             self.assertFalse(detector.check(self.rename_event("b.txt", "b.y")))
         self.assertEqual(len(detector.history[1000]), 1)
 
     def test_event_on_window_boundary_still_contributes(self):
         detector = ExtChangeDetector(window_sec=10, threshold=2)
-        with patch("guardfs.stage1.ext_change.time.time", side_effect=[1.0, 11.0]):
+        with patch(
+            "guardfs.stage1.ext_change.time.monotonic",
+            side_effect=[1.0, 11.0],
+        ):
             self.assertFalse(detector.check(self.rename_event("a.txt", "a.x")))
             self.assertTrue(detector.check(self.rename_event("b.txt", "b.y")))
 
-    def test_zero_threshold_does_not_detect_unrelated_rename(self):
-        detector = ExtChangeDetector(threshold=0)
-        self.assertFalse(detector.check(self.rename_event("a.txt", "b.txt")))
+    def test_zero_threshold_is_rejected(self):
+        with self.assertRaises(ValueError):
+            ExtChangeDetector(threshold=0)
+
+    def test_zero_window_is_rejected(self):
+        with self.assertRaises(ValueError):
+            ExtChangeDetector(window_sec=0)
+
+    def test_extension_removal_contributes_to_threshold(self):
+        detector = ExtChangeDetector(threshold=1)
+        self.assertTrue(detector.check(self.rename_event("report.txt", "report")))
 
     def test_path_with_multiple_dots_uses_last_extension(self):
         detector = ExtChangeDetector(threshold=1)
@@ -388,13 +436,25 @@ class HoneypotDetectorTests(unittest.TestCase):
 
     def test_supported_operations_inside_honeypot_are_detected(self):
         target = str(self.honeypot / "bait.txt")
-        for op in ("open", "read", "write", "lookup", "rename", "unlink"):
+        for op in (
+            "open",
+            "read",
+            "write",
+            "lookup",
+            "create",
+            "mkdir",
+            "truncate",
+            "ftruncate",
+            "rename",
+            "unlink",
+            "rmdir",
+        ):
             with self.subTest(op=op):
                 self.assertTrue(self.detector.check(event(op=op, path=target)))
 
     def test_unsupported_operations_are_ignored(self):
         target = str(self.honeypot / "bait.txt")
-        for op in ("create", "mkdir", "rmdir", "truncate", "ftruncate"):
+        for op in ("getattr", "readdir", "release"):
             with self.subTest(op=op):
                 self.assertFalse(self.detector.check(event(op=op, path=target)))
 
