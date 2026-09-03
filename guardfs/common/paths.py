@@ -19,7 +19,14 @@ STATIC_MODEL_PATH = os.path.join(
     PROJECT_ROOT,
     "models",
     "static",
-    "final_rf_model.pkl",
+    "static_rf_n3_k1000.pkl",
+)
+
+STATIC_VOCAB_PATH = os.path.join(
+    PROJECT_ROOT,
+    "models",
+    "static",
+    "byte_ngram_vocab_n3_k1000.json",
 )
 
 # ========== Runtime ========== #

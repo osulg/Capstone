@@ -18,7 +18,10 @@ from guardfs.common.config import (
 from guardfs.common.paths import (
     DYNAMIC_MODEL_PATH,
     STATIC_MODEL_PATH,
+    STATIC_VOCAB_PATH,
 )
+
+from guardfs.stage2.static_analyzer import StaticAnalyzer
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
@@ -33,9 +36,6 @@ DYNAMIC_FEATURES = [
     "OOD", "OOO"
 ]
 
-STATIC_FEATURES = None  # 모델 로딩 후 채움
-
-
 def load_models():
     try:
         dyn = joblib.load(DYNAMIC_MODEL_PATH)
@@ -45,10 +45,8 @@ def load_models():
         dyn = None
 
     try:
-        stat = joblib.load(STATIC_MODEL_PATH)
-        global STATIC_FEATURES
-        STATIC_FEATURES = list(stat.feature_names_in_)
-        print(f"[ML] 정적 모델 로드 완료 ({len(STATIC_FEATURES)} features)")
+        stat = StaticAnalyzer(STATIC_VOCAB_PATH, STATIC_MODEL_PATH)
+        print(f"[ML] 정적 모델 로드 완료 (byte 3-gram k={stat.k})")
     except Exception as e:
         print(f"[ML] 정적 모델 로드 실패: {e}")
         stat = None
@@ -79,53 +77,17 @@ def predict_dynamic(model, features: dict) -> float:
         return 0.5
 
 
-def predict_static(model, pid: int) -> float:
-    if model is None or STATIC_FEATURES is None:
+def predict_static(analyzer, pid: int) -> float:
+    """
+    byte 3-gram 정적 분석. 분석 불가(ELF 아님/접근 불가)면 0.5 반환
+    (기존 worker의 sentinel 규약 유지: 0.5 = 판단 불가 → stat_cache 폴백).
+    exe 단위 캐시는 analyzer 내부에서 처리된다.
+    """
+    if analyzer is None:
         return 0.5
     try:
-        exe_path = get_exe_path(pid)
-        if not exe_path or not os.path.exists(exe_path):
-            return 0.5
-
-        # 기본값 0으로 채우고 계산 가능한 값만 채움
-        row = {f: 0 for f in STATIC_FEATURES}
-        row["file_size"] = os.path.getsize(exe_path)
-        row["is_64bit"] = 1
-
-        with open(exe_path, "rb") as f:
-            header = f.read(16)
-            
-            if header[:4] == b'\x7fELF':
-                row["is_64bit"] = 1 if header[4] == 2 else 0
-                # ELF type (ET_EXEC=2, ET_DYN=3)
-                f.seek(16)
-                e_type = int.from_bytes(f.read(2), 'little')
-                if "elf_type_ET_EXEC" in row:
-                    row["elf_type_ET_EXEC"] = 1 if e_type == 2 else 0
-                if "elf_type_ET_DYN" in row:
-                    row["elf_type_ET_DYN"] = 1 if e_type == 3 else 0
-
-            # byte frequency features
-            f.seek(0)
-            
-            data = f.read(4096)
-            freq = [0] * 256
-            
-            for b in data:
-                freq[b] += 1
-            for feat in STATIC_FEATURES:
-                if feat.startswith("byte_f_"):
-                    idx = int(feat.split("_")[-1])
-                    if idx < 256:
-                        row[feat] = freq[idx] / max(len(data), 1)
-
-        df = pd.DataFrame([row])
-        prob = model.predict_proba(df)[0]
-        classes = list(model.classes_)
-        mal_idx = classes.index(1) if 1 in classes else -1
-        
-        return float(prob[mal_idx]) if mal_idx >= 0 else float(prob[-1])
-    
+        prob = analyzer.predict_pid(pid)
+        return 0.5 if prob is None else prob
     except Exception as e:
         print(f"[ML] 정적 예측 오류: {e}")
         return 0.5
