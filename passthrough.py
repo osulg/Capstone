@@ -568,6 +568,12 @@ async def stage2_worker(recv_chan, ops: "Passthrough"):
         print(f"[STAGE2] static analyzer unavailable, dynamic-only mode: {e}")
 
     # -----------------------
+    # 정적 예측 캐시 (exe 경로 → 악성 확률)
+    #   같은 바이너리는 결과가 불변이므로 재계산하지 않는다
+    # -----------------------
+    static_cache: Dict[str, Optional[float]] = {}
+
+    # -----------------------
     # 메인 루프
     # -----------------------
     async with recv_chan:
@@ -593,20 +599,37 @@ async def stage2_worker(recv_chan, ops: "Passthrough"):
             dynamic_prob = dynamic_model.predict_proba(X_dynamic_scaled)[0][1]
 
             # -----------------------
-            # 2. Static ML (byte 3-gram k=1000)
+            # 2. Static ML (byte 3-gram k=1000, exe 단위 캐시)
             # -----------------------
             static_pred = None
             static_prob = None
+            static_cached = False
 
             if static_analyzer is not None:
                 try:
-                    # 1순위: /proc/{pid}/exe 직접 읽기
-                    #   - self-deleting malware도 프로세스 생존 중엔 읽힘
-                    static_prob = static_analyzer.predict_proba_pid(pid)
+                    # 캐시 키: 실제 exe 경로 (PID 재사용/동일 바이너리 다중 실행 대응)
+                    try:
+                        real_exe = os.path.realpath(f"/proc/{pid}/exe")
+                        if real_exe.startswith("/proc/"):
+                            real_exe = None  # 링크 미해석 = 프로세스 이미 종료
+                    except OSError:
+                        real_exe = None
+                    cache_key = real_exe or exe_path
 
-                    # 2순위: 프로세스가 이미 죽었으면 기록해둔 exe_path로
-                    if static_prob is None and exe_path and os.path.exists(exe_path):
-                        static_prob = static_analyzer.predict_proba_path(exe_path)
+                    if cache_key is not None and cache_key in static_cache:
+                        static_prob = static_cache[cache_key]
+                        static_cached = True
+                    else:
+                        # 1순위: /proc/{pid}/exe 직접 읽기
+                        #   - self-deleting malware도 프로세스 생존 중엔 읽힘
+                        static_prob = static_analyzer.predict_proba_pid(pid)
+
+                        # 2순위: 프로세스가 이미 죽었으면 기록해둔 exe_path로
+                        if static_prob is None and exe_path and os.path.exists(exe_path):
+                            static_prob = static_analyzer.predict_proba_path(exe_path)
+
+                        if cache_key is not None:
+                            static_cache[cache_key] = static_prob
 
                     if static_prob is not None:
                         static_pred = 1 if static_prob >= 0.5 else 0
@@ -630,7 +653,8 @@ async def stage2_worker(recv_chan, ops: "Passthrough"):
             print(
                 f"[RESULT] pid={pid} "
                 f"dynamic_pred={dynamic_pred} dynamic_prob={dynamic_prob:.4f} "
-                f"static_pred={static_pred} static_prob={static_prob if static_prob is not None else 'N/A'} "
+                f"static_pred={static_pred} static_prob={static_prob if static_prob is not None else 'N/A'}"
+                f"{' (cached)' if static_cached else ''} "
                 f"final_score={final_score:.4f} final_pred={final_pred}"
             )
 
