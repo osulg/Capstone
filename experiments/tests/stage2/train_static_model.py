@@ -21,7 +21,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 STATIC_TEST = os.path.expanduser("~/static_test")
 BYTE_DIR = os.path.join(STATIC_TEST, "result", "byte_ngram")
-OUT_DIR = os.path.expanduser("~/Capstone/models/static")
+OUT_DIR = os.path.expanduser("~/Capstone/guardfs/models/static")
 
 VOCAB_SRC = os.path.join(BYTE_DIR, "global_vocab_n3_k1000.json")
 VOCAB_DST = os.path.join(OUT_DIR, "byte_ngram_vocab_n3_k1000.json")
@@ -127,10 +127,9 @@ def main():
     # 5) 즉석 sanity check: 정상/악성 각 1개 예측
     print("\n--- sanity check ---")
     sys.path.insert(0, os.path.expanduser("~/Capstone"))
-    from static_feature import StaticAnalyzer
+    from guardfs.stage2.calculation.ml_risk import StaticAnalyzer
 
-    analyzer = StaticAnalyzer(VOCAB_DST, MODEL_DST,
-                              feature_prefix=common_prefix(feature_cols))
+    analyzer = StaticAnalyzer()
     p_benign = analyzer.predict_proba_path("/bin/ls")
     print(f"/bin/ls (정상)     → 악성 확률 {p_benign}")
 
