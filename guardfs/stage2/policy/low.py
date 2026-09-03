@@ -30,10 +30,11 @@ async def handle_low_return(pid: int, ops) -> None:
     """
     MEDIUM → LOW 복귀 시 정리 작업.
     - _queued_stage2 에서 pid 제거 → 이후 재탐지 가능
-    - _write_count 초기화 → 다음 MEDIUM 진입 시 딜레이 계산 오류 방지
+    - _medium_entered_at 초기화 → 다음 MEDIUM 진입 시 지연 계산 오류 방지
+      (버퍼 자체의 정리는 commit_buffers가 먼저 담당하므로 여기선 안전망)
     """
-    
+
     ops._queued_stage2.discard(pid)
-    ops._write_count.pop(pid, None)
-    
-    print(f"[LOW] pid={pid} 복귀 정리 완료 (queued_stage2 해제, write_count 초기화)")
+    ops._medium_entered_at.pop(pid, None)
+
+    print(f"[LOW] pid={pid} 복귀 정리 완료 (queued_stage2 해제, medium_entered_at 초기화)")
