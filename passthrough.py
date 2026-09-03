@@ -542,53 +542,12 @@ class Passthrough(pyfuse3.Operations):
         if fd is not None:
             os.close(fd)
 
-def extract_static_features(exe_path: str) -> dict:
-    import os
-    from collections import Counter
-
-    try:
-        with open(exe_path, "rb") as f:
-            data = f.read()
-    except Exception:
-        return None
-
-    if not data.startswith(b"\x7fELF"):
-        return None
-
-    # label 제외한 모든 정적 모델 컬럼을 0으로 초기화
-    features = {col: 0 for col in STATIC_COLS}
-
-    if "file_size" in features:
-        features["file_size"] = os.path.getsize(exe_path)
-
-    if "is_64bit" in features:
-        features["is_64bit"] = 1.0 if len(data) > 4 and data[4] == 2 else 0.0
-
-    byte_counts = Counter(data)
-
-    for col in STATIC_COLS:
-        if col.startswith("byte_f_"):
-            try:
-                idx = int(col.replace("byte_f_", ""))
-                features[col] = byte_counts.get(idx % 256, 0)
-            except Exception:
-                features[col] = 0
-
-        elif col.startswith("opcode_f_"):
-            features[col] = 0
-
-    if "elf_type_ET_DYN" in features:
-        features["elf_type_ET_DYN"] = 1 if b".interp" in data else 0
-
-    if "elf_type_ET_EXEC" in features:
-        features["elf_type_ET_EXEC"] = 0 if features.get("elf_type_ET_DYN", 0) else 1
-
-    return features
-
 async def stage2_worker(recv_chan, ops: "Passthrough"):
     import os
     import pandas as pd
     import joblib
+
+    from static_feature import StaticAnalyzer
 
     # -----------------------
     # 모델 로드
@@ -596,19 +555,17 @@ async def stage2_worker(recv_chan, ops: "Passthrough"):
     dynamic_model = joblib.load("detect_dynamic/dataset/csv_files/best_model.pkl")
     dynamic_scaler = joblib.load("detect_dynamic/dataset/csv_files/scaler.pkl")
 
-    static_model = joblib.load("final_rf_model.pkl")
-
-    # -----------------------
-    # 정적 CSV 컬럼 로드
-    # -----------------------
-    global STATIC_COLS
-
-    STATIC_COLS = pd.read_csv(
-        "fused_model/merged_topk_balanced_k200.csv",
-        nrows=0
-    ).columns.tolist()
-
-    STATIC_COLS = [c for c in STATIC_COLS if c.strip().lower() != "label"]
+    # 정적: byte 3-gram (n=3, k=1000, 정규화) 최종 모델
+    # vocab/모델 경로는 models/static/ 에 배치 (없으면 정적 분석 비활성)
+    static_analyzer = None
+    try:
+        static_analyzer = StaticAnalyzer(
+            vocab_path="models/static/byte_ngram_vocab_n3_k1000.json",
+            model_path="models/static/static_rf_n3_k1000.pkl",
+        )
+        print("[STAGE2] static analyzer loaded (byte 3-gram k=1000)")
+    except Exception as e:
+        print(f"[STAGE2] static analyzer unavailable, dynamic-only mode: {e}")
 
     # -----------------------
     # 메인 루프
@@ -636,27 +593,26 @@ async def stage2_worker(recv_chan, ops: "Passthrough"):
             dynamic_prob = dynamic_model.predict_proba(X_dynamic_scaled)[0][1]
 
             # -----------------------
-            # 2. Static ML
+            # 2. Static ML (byte 3-gram k=1000)
             # -----------------------
             static_pred = None
             static_prob = None
 
-            if exe_path and os.path.exists(exe_path):
+            if static_analyzer is not None:
                 try:
-                    static_features = extract_static_features(exe_path)
+                    # 1순위: /proc/{pid}/exe 직접 읽기
+                    #   - self-deleting malware도 프로세스 생존 중엔 읽힘
+                    static_prob = static_analyzer.predict_proba_pid(pid)
 
-                    if static_features is not None:
-                        X_static = pd.DataFrame([static_features])
+                    # 2순위: 프로세스가 이미 죽었으면 기록해둔 exe_path로
+                    if static_prob is None and exe_path and os.path.exists(exe_path):
+                        static_prob = static_analyzer.predict_proba_path(exe_path)
 
-                        # 🔥 컬럼 맞추기 (핵심)
-                        # 🔥 컬럼 맞추기
-                        X_static = X_static.reindex(columns=STATIC_COLS, fill_value=0)
-
-                        static_pred = static_model.predict(X_static)[0]
-                        static_prob = static_model.predict_proba(X_static)[0][1]
+                    if static_prob is not None:
+                        static_pred = 1 if static_prob >= 0.5 else 0
 
                 except Exception as e:
-                    print(f"[STATIC ERROR] exe={exe_path} error={e}")
+                    print(f"[STATIC ERROR] pid={pid} exe={exe_path} error={e}")
 
             # -----------------------
             # 3. Fusion (1/2)
