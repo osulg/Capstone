@@ -226,11 +226,38 @@ class ExtChangeDetector:
 
         return False
 
+    def check_immediate(self, ev) -> bool:
+        """한 번의 rename으로 판단 가능한 강한 위험 신호 검사"""
+
+        if ev.op != "rename" or not ev.new_path:
+            return False
+
+        old_extension = self._get_ext(ev.path)
+        new_extension = self._get_ext(ev.new_path)
+
+        # 새롭게 생성된 위험한 이중 확장자
+        if self._is_new_suspicious_double_extension(
+            ev.path,
+            ev.new_path,
+        ):
+            return True
+
+        # 마지막 확장자가 동일한 일반 rename
+        if old_extension == new_extension:
+            return False
+
+        # 알려진 랜섬웨어 확장자
+        return self._is_suspicious_extension(new_extension)
+
     def check(self, ev) -> bool:
         """확장자 변경 이벤트가 의심스러운지 판정"""
 
         if ev.op != "rename" or not ev.new_path:
             return False
+
+        # 강한 신호는 즉시 탐지
+        if self.check_immediate(ev):
+            return True
 
         old_path = ev.path
         new_path = ev.new_path
@@ -238,19 +265,11 @@ class ExtChangeDetector:
         old_extension = self._get_ext(old_path)
         new_extension = self._get_ext(new_path)
 
-        # 마지막 확장자가 같더라도 새 이중 확장자 만들어질 수 있으므로 먼저 검사
-        if self._is_new_suspicious_double_extension(old_path, new_path):
-            return True
-
         # 실제 확장자 변화가 없는 일반 rename
         if old_extension == new_extension:
             return False
 
-        # 규칙 1: 알려진 악성 확장자는 즉시 탐지
-        if self._is_suspicious_extension(new_extension):
-            return True
-
-        # 규칙 2: 정상 -> unknown 변경이 아니면 누적하지 않음
+        # 정상 -> unknown 변경이 아니면 누적하지 않음
         if not self._should_accumulate(
             old_extension,
             new_extension,

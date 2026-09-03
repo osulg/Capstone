@@ -64,7 +64,7 @@ class FsEvent:
 async def stats_collector(
     recv_chan: trio.MemoryReceiveChannel,
     log_path: str,
-    honeypot_dir: str,
+    stage1: Stage1Detector,
     ops: "Passthrough",
 ) -> None:
     """
@@ -76,7 +76,6 @@ async def stats_collector(
 
     stats = defaultdict(PidStats)
     logger = EventLogger(log_path)
-    stage1 = Stage1Detector(honeypot_dir)
 
     next_tick = trio.current_time() + STATS_WINDOW_SEC
 
@@ -147,9 +146,15 @@ async def stats_collector(
 class Passthrough(pyfuse3.Operations):
     """underlay에 파일 연산을 전달하고 탐지 상태에 따라 정책을 적용한다."""
 
-    def __init__(self, root: str):
+    def __init__(
+        self,
+        root: str,
+        stage1: Stage1Detector,
+    ):
         super().__init__()
+
         self.root = os.path.realpath(root)
+        self._stage1 = stage1
 
         self._inode_path: Dict[int, str] = {pyfuse3.ROOT_INODE: self.root}
         self._fd_map: Dict[int, int] = {}
@@ -963,6 +968,27 @@ class Passthrough(pyfuse3.Operations):
             await handle_rename_high(oldp, newp, pid, self)
             return
 
+        ev = FsEvent(
+            ts_ns=time.time_ns(),
+            pid=pid,
+            op="rename",
+            path=oldp,
+            new_path=newp,
+        )
+
+        blocked, reason = self._stage1.precheck(ev)
+
+        if blocked:
+            self._emit(ev)
+
+            print(
+                f"[PRECHECK] pid={pid} op=rename "
+                f"path={oldp} new_path={newp} "
+                f"reason={reason} blocked"
+            )
+
+            raise pyfuse3.FUSEError(errno.EACCES)
+
         try:
             os.rename(oldp, newp)
         except OSError as e:
@@ -1188,17 +1214,22 @@ class PidStats:
 async def main(mountpoint: str, root: str):
     honeypot_dir = get_honeypot_dir(root)
 
-    ops = Passthrough(root)
+    # 하나의 Stage1Detector를 생성해서 공유
+    stage1 = Stage1Detector(honeypot_dir)
+
+    # 동일한 탐지기를 Passthrough에 전달
+    ops = Passthrough(root, stage1)
 
     pyfuse3.init(ops, mountpoint, set())
 
     try:
         async with trio.open_nursery() as nursery:
+            # stats_collector에도 동일한 탐지기 전달
             nursery.start_soon(
                 stats_collector,
                 ops._recv_chan,
                 ops._log_path,
-                honeypot_dir,
+                stage1,
                 ops,
             )
 
