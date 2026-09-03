@@ -1,30 +1,42 @@
 #!/usr/bin/env python3
+"""
+GuardFS FUSE 파일시스템 계층
+- 파일 연산 가로채기(FsEvent 발행)
+- PID별 행동 통계 집계(PidStats) 및 Stage 1 경량 탐지 연동(stats_collector)
+- 의심 PID를 Stage 2 큐로 전달(mark_suspect)
+
+실행은 guardfs/main.py(run_fuse)를 통해서 한다.
+"""
 import os
-import sys
 import errno
 import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Tuple
 from collections import defaultdict
 from enum import Enum
-import joblib
-import pandas as pd
 
 import pyfuse3
 import trio
-from stage1 import Stage1Detector, EventLogger
-from stage1.entropy import shannon_entropy
+
+from guardfs import config
+from guardfs.common import paths
+from guardfs.stage1 import Stage1Detector, EventLogger
+from guardfs.stage1.entropy import shannon_entropy
+from guardfs.stage2.stage2_worker import stage2_worker
+
 
 def _full_path(root: str, path: str) -> str:
     if path.startswith("/"):
         path = path[1:]
     return os.path.join(root, path)
 
+
 def get_exe_path(pid: int) -> Optional[str]:
     try:
         return os.readlink(f"/proc/{pid}/exe")
     except Exception:
         return None
+
 
 @dataclass
 class FsEvent:
@@ -39,64 +51,102 @@ class FsEvent:
     new_path: Optional[str] = None
     exe_path: Optional[str] = None
 
+
 class ProcState(str, Enum):
     LOW = "LOW"
     SUSPICIOUS = "SUSPICIOUS"
 
+
 class PidStats:
+    """PID별 최근 행동을 동적 모델 feature(O/C/D/E) 구조로 집계"""
+
+    FEATURE_COLS = [
+        "O_sum", "C_sum", "D_sum", "E_sum",
+        "Is_System_Path", "Is_Test_Path", "is_dev",
+        "CCC", "CCD", "CCO", "CDC", "CDD", "CDO",
+        "COC", "COD", "COO", "DCC", "DCD", "DCO",
+        "DDC", "DDD", "DDO", "DOC", "DOD", "DOO",
+        "EEE", "EEO", "EOE", "EOO", "OCC", "OCD",
+        "OCO", "ODC", "ODD", "ODO", "OEE", "OOC",
+        "OOD", "OOO"
+    ]
+
     def __init__(self):
-        self.write_count = 0
-        self.read_count = 0
-        self.rename_count = 0
-        self.unlink_count = 0
-        self.open_count = 0
-
-        self.total_write_bytes = 0
-        self.entropy_sum = 0.0
-        self.max_entropy = 0.0
-
-        self.files = set()
+        self.counts = {col: 0 for col in self.FEATURE_COLS}
+        self.exe_path: Optional[str] = None
+        self.seq = []   # 최근 O/C/D/E 이벤트 흐름 저장
 
     def reset(self) -> None:
         self.__init__()
 
-    def mean_entropy(self) -> float:
-        return self.entropy_sum / self.write_count if self.write_count else 0.0
+    def _map_event(self, ev):
+        """
+        이벤트를 O/C/D/E로 변환
+        O = open/read/write 계열 파일 접근
+        C = create/mkdir 계열 생성
+        D = unlink/rmdir 계열 삭제
+        E = entropy high write (config.ENTROPY_THRESHOLD 이상)
+        """
+        if ev.op in ("create", "mkdir"):
+            return "C"
+
+        if ev.op in ("unlink", "rmdir"):
+            return "D"
+
+        if (
+            ev.op == "write"
+            and ev.entropy is not None
+            and ev.entropy >= config.ENTROPY_THRESHOLD
+        ):
+            return "E"
+
+        if ev.op in ("open", "read", "write", "lookup", "release", "rename"):
+            return "O"
+
+        return None
 
     def update(self, ev) -> None:
-        self.files.add(ev.path)
+        if self.exe_path is None and ev.exe_path:
+            self.exe_path = ev.exe_path
 
-        if ev.op == "write":
-            self.write_count += 1
-            self.total_write_bytes += ev.size
-            if ev.entropy is not None:
-                self.entropy_sum += ev.entropy
-                self.max_entropy = max(self.max_entropy, ev.entropy)
+        code = self._map_event(ev)
+        if code is None:
+            return
 
-        elif ev.op == "read":
-            self.read_count += 1
+        # 단일 이벤트 합계
+        self.counts[f"{code}_sum"] += 1
 
-        elif ev.op == "open":
-            self.open_count += 1
+        # 경로 기반 feature
+        path = ev.path or ""
 
-        elif ev.op == "rename":
-            self.rename_count += 1
+        if (
+            path.startswith("/usr") or path.startswith("/bin")
+            or path.startswith("/sbin") or path.startswith("/etc")
+        ):
+            self.counts["Is_System_Path"] = 1
 
-        elif ev.op == "unlink":
-            self.unlink_count += 1
+        if (
+            "test" in path.lower() or "underlay" in path.lower()
+            or "mnt" in path.lower()
+        ):
+            self.counts["Is_Test_Path"] = 1
+
+        if "/dev/" in path:
+            self.counts["is_dev"] = 1
+
+        # 3-gram sequence feature
+        self.seq.append(code)
+        if len(self.seq) >= 3:
+            tri = "".join(self.seq[-3:])
+            if tri in self.counts:
+                self.counts[tri] += 1
+
+        # 너무 길어지지 않게 최근 100개만 유지
+        if len(self.seq) > 100:
+            self.seq = self.seq[-100:]
 
     def to_feature_row(self) -> dict:
-        return {
-            "write_count": self.write_count,
-            "read_count": self.read_count,
-            "open_count": self.open_count,
-            "rename_count": self.rename_count,
-            "unlink_count": self.unlink_count,
-            "total_write_bytes": self.total_write_bytes,
-            "avg_entropy": self.mean_entropy(),
-            "max_entropy": self.max_entropy,
-            "unique_file_count": len(self.files),
-        }
+        return {col: self.counts.get(col, 0) for col in self.FEATURE_COLS}
 
 
 async def stats_collector(
@@ -107,18 +157,14 @@ async def stats_collector(
 ) -> None:
     """
     - EventLogger   : 모든 이벤트를 JSONL로 저장
-    - PidStats      : PID별 최근 행동을 malware_dataset.csv feature 구조로 집계
+    - PidStats      : PID별 최근 행동을 동적 feature 구조로 집계
     - Stage1Detector: 경량 탐지 수행
     """
-    WINDOW_S = 1.0
-    C_TH = 10
-    D_TH = 10
-
     stats = defaultdict(PidStats)
     logger = EventLogger(log_path)
     stage1 = Stage1Detector(honeypot_dir)
 
-    next_tick = trio.current_time() + WINDOW_S
+    next_tick = trio.current_time() + config.STATS_WINDOW_S
 
     try:
         async with recv_chan:
@@ -137,8 +183,8 @@ async def stats_collector(
 
                         suspicious = (
                             feature_row["E_sum"] >= 1
-                            or feature_row["D_sum"] >= D_TH
-                            or feature_row["C_sum"] >= C_TH
+                            or feature_row["D_sum"] >= config.D_THRESHOLD
+                            or feature_row["C_sum"] >= config.C_THRESHOLD
                         )
 
                         if suspicious and pid > 0:
@@ -160,7 +206,7 @@ async def stats_collector(
 
                         st.reset()
 
-                    next_tick += WINDOW_S
+                    next_tick += config.STATS_WINDOW_S
                     continue
 
                 logger.write(ev)
@@ -196,14 +242,14 @@ class Passthrough(pyfuse3.Operations):
 
         self._fh_info: Dict[int, Tuple[int, str, int]] = {}
 
-        # [수정] opendir에서 발급한 fh → 해당 디렉토리 경로 매핑
+        # opendir에서 발급한 fh → 해당 디렉토리 경로 매핑
         self._dir_fh_path: Dict[int, str] = {}
 
         self._send_chan, self._recv_chan = trio.open_memory_channel(10000)
         self._stage2_send, self._stage2_recv = trio.open_memory_channel(1000)
 
-        # [수정 2번] 로그 파일을 underlay 바깥(프로젝트 루트)에 저장
-        self._log_path = os.path.join(os.path.dirname(self.root), "guardfs_log.jsonl")
+        # 로그 파일은 runtime 디렉토리(underlay 바깥)에 저장
+        self._log_path = str(paths.LOG_PATH)
 
         self._pid_lock = trio.Lock()
 
@@ -220,7 +266,9 @@ class Passthrough(pyfuse3.Operations):
         parent_path = self._inode_path.get(parent_inode)
         if parent_path is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
-        return os.path.join(parent_path, name.decode("utf-8", "surrogateescape"))
+        return os.path.join(
+            parent_path, name.decode("utf-8", "surrogateescape")
+        )
 
     def _register_inode(self, path: str) -> os.stat_result:
         """path를 stat하고 inode → path 매핑에 등록한 뒤 stat 결과를 반환한다."""
@@ -259,7 +307,10 @@ class Passthrough(pyfuse3.Operations):
         except trio.WouldBlock:
             pass
 
-    async def mark_suspect(self, pid: int, reason: str = "", path: str = "", features=None, exe_path: Optional[str] = None) -> None:
+    async def mark_suspect(
+        self, pid: int, reason: str = "", path: str = "",
+        features=None, exe_path: Optional[str] = None
+    ) -> None:
         if pid <= 0:
             return
 
@@ -305,7 +356,6 @@ class Passthrough(pyfuse3.Operations):
         return self._stat_to_attr(st)
 
     async def lookup(self, parent_inode, name, ctx=None):
-        # [수정] ROOT_INODE 고정 → parent_inode 기반 경로 조합
         p = self._resolve_path(parent_inode, name)
         st = self._register_inode(p)
 
@@ -314,7 +364,6 @@ class Passthrough(pyfuse3.Operations):
         return self._stat_to_attr(st)
 
     async def create(self, parent_inode, name, mode, flags, ctx=None):
-        # [수정] ROOT_INODE 고정 → parent_inode 기반 경로 조합
         p = self._resolve_path(parent_inode, name)
 
         pid = ctx.pid if ctx is not None else -1
@@ -330,14 +379,15 @@ class Passthrough(pyfuse3.Operations):
         self._next_fh += 1
         self._fd_map[fh] = fd
         self._fh_info[fh] = (pid, p, flags)
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="create", path=p, flags=flags))
+        self._emit(FsEvent(
+            ts_ns=time.time_ns(), pid=pid, op="create", path=p, flags=flags
+        ))
 
         fi = pyfuse3.FileInfo()
         fi.fh = fh
         return fi, self._stat_to_attr(st)
 
     async def mkdir(self, parent_inode, name, mode, ctx=None):
-        # [수정] ROOT_INODE 고정 → parent_inode 기반 경로 조합
         p = self._resolve_path(parent_inode, name)
 
         pid = ctx.pid if ctx is not None else -1
@@ -351,7 +401,6 @@ class Passthrough(pyfuse3.Operations):
         self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="mkdir", path=p))
 
     async def rmdir(self, parent_inode, name, ctx=None):
-        # [수정] ROOT_INODE 고정 → parent_inode 기반 경로 조합
         p = self._resolve_path(parent_inode, name)
 
         pid = ctx.pid if ctx is not None else -1
@@ -364,7 +413,6 @@ class Passthrough(pyfuse3.Operations):
         self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="rmdir", path=p))
 
     async def opendir(self, inode, ctx=None):
-        # [수정] fh 고정값 1 → inode별 fh 발급, 경로 매핑 저장
         p = self._inode_path.get(inode)
         if p is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
@@ -378,7 +426,6 @@ class Passthrough(pyfuse3.Operations):
         return fh
 
     async def readdir(self, fh, off, token):
-        # [수정] fh == 1 고정 → fh로 경로 조회
         dir_path = self._dir_fh_path.get(fh)
         if dir_path is None:
             raise pyfuse3.FUSEError(errno.EBADF)
@@ -393,14 +440,16 @@ class Passthrough(pyfuse3.Operations):
 
                 full = os.path.join(dir_path, e.name)
                 self._inode_path[st.st_ino] = full
-                entries.append((e.name.encode("utf-8", "surrogateescape"), self._stat_to_attr(st)))
+                entries.append((
+                    e.name.encode("utf-8", "surrogateescape"),
+                    self._stat_to_attr(st)
+                ))
 
         for i, (name_b, attr) in enumerate(entries[int(off):], start=int(off)):
             if not pyfuse3.readdir_reply(token, name_b, attr, i + 1):
                 break
 
     async def releasedir(self, fh):
-        # [수정] opendir에서 발급한 fh 정리
         self._dir_fh_path.pop(fh, None)
 
     async def open(self, inode, flags, ctx=None):
@@ -419,7 +468,9 @@ class Passthrough(pyfuse3.Operations):
 
         pid = ctx.pid if ctx is not None else -1
         self._fh_info[fh] = (pid, p, flags)
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="open", path=p, flags=flags))
+        self._emit(FsEvent(
+            ts_ns=time.time_ns(), pid=pid, op="open", path=p, flags=flags
+        ))
 
         fi = pyfuse3.FileInfo()
         fi.fh = fh
@@ -432,7 +483,10 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EBADF)
 
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="read", path=path, size=size, off=off))
+        self._emit(FsEvent(
+            ts_ns=time.time_ns(), pid=pid, op="read",
+            path=path, size=size, off=off
+        ))
 
         os.lseek(fd, off, os.SEEK_SET)
         try:
@@ -482,7 +536,9 @@ class Passthrough(pyfuse3.Operations):
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="truncate", path=p, size=size))
+        self._emit(FsEvent(
+            ts_ns=time.time_ns(), pid=pid, op="truncate", path=p, size=size
+        ))
 
     async def ftruncate(self, fh, size):
         fd = self._fd_map.get(fh)
@@ -496,10 +552,11 @@ class Passthrough(pyfuse3.Operations):
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="ftruncate", path=path, size=size))
+        self._emit(FsEvent(
+            ts_ns=time.time_ns(), pid=pid, op="ftruncate", path=path, size=size
+        ))
 
     async def unlink(self, parent_inode, name, ctx=None):
-        # [수정] ROOT_INODE 고정 → parent_inode 기반 경로 조합
         p = self._resolve_path(parent_inode, name)
 
         pid = ctx.pid if ctx is not None else -1
@@ -511,12 +568,15 @@ class Passthrough(pyfuse3.Operations):
 
         self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="unlink", path=p))
 
-    async def rename(self, parent_inode_old, name_old, parent_inode_new, name_new, flags, ctx=None):
+    async def rename(
+        self, parent_inode_old, name_old,
+        parent_inode_new, name_new, flags, ctx=None
+    ):
         oldp = self._resolve_path(parent_inode_old, name_old)
         newp = self._resolve_path(parent_inode_new, name_new)
 
         pid = ctx.pid if ctx is not None else -1
-        exe_path = get_exe_path(pid)   # 이 줄 추가
+        exe_path = get_exe_path(pid)
 
         try:
             os.rename(oldp, newp)
@@ -536,218 +596,16 @@ class Passthrough(pyfuse3.Operations):
 
     async def release(self, fh):
         pid, path, flags = self._fh_info.pop(fh, (-1, "?", 0))
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="release", path=path, flags=flags))
+        self._emit(FsEvent(
+            ts_ns=time.time_ns(), pid=pid, op="release", path=path, flags=flags
+        ))
 
         fd = self._fd_map.pop(fh, None)
         if fd is not None:
             os.close(fd)
 
-async def stage2_worker(recv_chan, ops: "Passthrough"):
-    import os
-    import pandas as pd
-    import joblib
 
-    from static_feature import StaticAnalyzer
-
-    # -----------------------
-    # 모델 로드
-    # -----------------------
-    dynamic_model = joblib.load("detect_dynamic/dataset/csv_files/best_model.pkl")
-    dynamic_scaler = joblib.load("detect_dynamic/dataset/csv_files/scaler.pkl")
-
-    # 정적: byte 3-gram (n=3, k=1000, 정규화) 최종 모델
-    # vocab/모델 경로는 models/static/ 에 배치 (없으면 정적 분석 비활성)
-    static_analyzer = None
-    try:
-        static_analyzer = StaticAnalyzer(
-            vocab_path="models/static/byte_ngram_vocab_n3_k1000.json",
-            model_path="models/static/static_rf_n3_k1000.pkl",
-        )
-        print("[STAGE2] static analyzer loaded (byte 3-gram k=1000)")
-    except Exception as e:
-        print(f"[STAGE2] static analyzer unavailable, dynamic-only mode: {e}")
-
-    # -----------------------
-    # 정적 예측 캐시 (exe 경로 → 악성 확률)
-    #   같은 바이너리는 결과가 불변이므로 재계산하지 않는다
-    # -----------------------
-    static_cache: Dict[str, Optional[float]] = {}
-
-    # -----------------------
-    # 메인 루프
-    # -----------------------
-    async with recv_chan:
-        async for item in recv_chan:
-            pid = item["pid"]
-            reason = item["reason"]
-            path = item["path"]
-            features = item["features"]
-            exe_path = item.get("exe_path")
-
-            print(
-                f"[STAGE1.5] pid={pid} reason={reason} "
-                f"path={path} exe={exe_path}"
-            )
-
-            # -----------------------
-            # 1. Dynamic ML
-            # -----------------------
-            X_dynamic = pd.DataFrame([features])
-            X_dynamic_scaled = dynamic_scaler.transform(X_dynamic.values)
-
-            dynamic_pred = dynamic_model.predict(X_dynamic_scaled)[0]
-            dynamic_prob = dynamic_model.predict_proba(X_dynamic_scaled)[0][1]
-
-            # -----------------------
-            # 2. Static ML (byte 3-gram k=1000, exe 단위 캐시)
-            # -----------------------
-            static_pred = None
-            static_prob = None
-            static_cached = False
-
-            if static_analyzer is not None:
-                try:
-                    # 캐시 키: 실제 exe 경로 (PID 재사용/동일 바이너리 다중 실행 대응)
-                    try:
-                        real_exe = os.path.realpath(f"/proc/{pid}/exe")
-                        if real_exe.startswith("/proc/"):
-                            real_exe = None  # 링크 미해석 = 프로세스 이미 종료
-                    except OSError:
-                        real_exe = None
-                    cache_key = real_exe or exe_path
-
-                    if cache_key is not None and cache_key in static_cache:
-                        static_prob = static_cache[cache_key]
-                        static_cached = True
-                    else:
-                        # 1순위: /proc/{pid}/exe 직접 읽기
-                        #   - self-deleting malware도 프로세스 생존 중엔 읽힘
-                        static_prob = static_analyzer.predict_proba_pid(pid)
-
-                        # 2순위: 프로세스가 이미 죽었으면 기록해둔 exe_path로
-                        if static_prob is None and exe_path and os.path.exists(exe_path):
-                            static_prob = static_analyzer.predict_proba_path(exe_path)
-
-                        if cache_key is not None:
-                            static_cache[cache_key] = static_prob
-
-                    if static_prob is not None:
-                        static_pred = 1 if static_prob >= 0.5 else 0
-
-                except Exception as e:
-                    print(f"[STATIC ERROR] pid={pid} exe={exe_path} error={e}")
-
-            # -----------------------
-            # 3. Fusion (1/2)
-            # -----------------------
-            if static_prob is not None:
-                final_score = 0.5 * dynamic_prob + 0.5 * static_prob
-            else:
-                final_score = dynamic_prob
-
-            final_pred = 1 if final_score >= 0.5 else 0
-
-            # -----------------------
-            # 출력
-            # -----------------------
-            print(
-                f"[RESULT] pid={pid} "
-                f"dynamic_pred={dynamic_pred} dynamic_prob={dynamic_prob:.4f} "
-                f"static_pred={static_pred} static_prob={static_prob if static_prob is not None else 'N/A'}"
-                f"{' (cached)' if static_cached else ''} "
-                f"final_score={final_score:.4f} final_pred={final_pred}"
-            )
-
-            # -----------------------
-            # 큐 정리
-            # -----------------------
-            async with ops._pid_lock:
-                ops._queued_stage2.discard(pid)
-
-class PidStats:
-    FEATURE_COLS = [
-        "O_sum", "C_sum", "D_sum", "E_sum",
-        "Is_System_Path", "Is_Test_Path", "is_dev",
-        "CCC", "CCD", "CCO", "CDC", "CDD", "CDO",
-        "COC", "COD", "COO", "DCC", "DCD", "DCO",
-        "DDC", "DDD", "DDO", "DOC", "DOD", "DOO",
-        "EEE", "EEO", "EOE", "EOO", "OCC", "OCD",
-        "OCO", "ODC", "ODD", "ODO", "OEE", "OOC",
-        "OOD", "OOO"
-    ]
-
-    def __init__(self):
-        self.counts = {col: 0 for col in self.FEATURE_COLS}
-        self.exe_path: Optional[str] = None
-        self.seq = []   # 최근 O/C/D/E 이벤트 흐름 저장
-
-    def reset(self) -> None:
-        self.__init__()
-
-    def mean_entropy(self) -> float:
-        # 기존 stat_anomaly 조건에서 쓰이므로 임시 유지
-        return float(self.counts["E_sum"])
-
-    def _map_event(self, ev):
-        """
-        CSV feature 기준으로 이벤트를 O/C/D/E로 변환
-        O = open/read/write 계열 파일 접근
-        C = create/mkdir 계열 생성
-        D = unlink/rmdir 계열 삭제
-        E = entropy high write 또는 suspicious encryption-like event
-        """
-        if ev.op in ("create", "mkdir"):
-            return "C"
-
-        if ev.op in ("unlink", "rmdir"):
-            return "D"
-
-        if ev.op == "write" and ev.entropy is not None and ev.entropy >= 7.0:
-            return "E"
-
-        if ev.op in ("open", "read", "write", "lookup", "release", "rename"):
-            return "O"
-
-        return None
-
-    def update(self, ev) -> None:
-        if self.exe_path is None and ev.exe_path:
-            self.exe_path = ev.exe_path
-
-        code = self._map_event(ev)
-        if code is None:
-            return
-
-        # 단일 이벤트 합계
-        self.counts[f"{code}_sum"] += 1
-
-        # 경로 기반 feature
-        path = ev.path or ""
-
-        if path.startswith("/usr") or path.startswith("/bin") or path.startswith("/sbin") or path.startswith("/etc"):
-            self.counts["Is_System_Path"] = 1
-
-        if "test" in path.lower() or "underlay" in path.lower() or "mnt" in path.lower():
-            self.counts["Is_Test_Path"] = 1
-
-        if "/dev/" in path:
-            self.counts["is_dev"] = 1
-
-        # 3-gram sequence feature
-        self.seq.append(code)
-        if len(self.seq) >= 3:
-            tri = "".join(self.seq[-3:])
-            if tri in self.counts:
-                self.counts[tri] += 1
-
-        # 너무 길어지지 않게 최근 100개만 유지
-        if len(self.seq) > 100:
-            self.seq = self.seq[-100:]
-
-    def to_feature_row(self) -> dict:
-        return {col: self.counts.get(col, 0) for col in self.FEATURE_COLS}
-
-async def main(mountpoint: str, root: str):
+async def _run(mountpoint: str, root: str):
     honeypot_dir = os.path.join(os.path.realpath(root), "honeypot")
     ops = Passthrough(root)
     pyfuse3.init(ops, mountpoint, set())
@@ -761,14 +619,12 @@ async def main(mountpoint: str, root: str):
                 ops,
             )
             nursery.start_soon(stage2_worker, ops._stage2_recv, ops)
-            
+
             await pyfuse3.main()
     finally:
         pyfuse3.close(unmount=True)
 
 
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python passthrough.py <MOUNTPOINT> <UNDERLAY>")
-        sys.exit(2)
-    trio.run(main, sys.argv[1], sys.argv[2])
+def run_fuse(mount_dir: str, underlay_dir: str) -> None:
+    """main.py에서 호출하는 GuardFS 실행 진입점"""
+    trio.run(_run, str(mount_dir), str(underlay_dir))

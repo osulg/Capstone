@@ -15,7 +15,7 @@ import os
 import time
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-MOUNT    = "mnt"
+MOUNT    = os.path.expanduser("~/guardfs_runtime/mount")
 KEY      = os.urandom(32)   # AES-256 키 (랜섬웨어는 이 키를 C2 서버로 전송)
 IV       = os.urandom(16)
 
