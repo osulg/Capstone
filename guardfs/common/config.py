@@ -45,6 +45,20 @@ ENTROPY_BURST_MIN_BYTES = 1280
 # PID 하나에서 유지할 최대 Burst 상태 수
 ENTROPY_BURST_MAX_PIDS = 10000
 
+# ========== Stage 1 - Entropy Delta ========== #
+
+# 원본과 write 데이터를 비교할 최대 샘플 크기
+ENTROPY_DELTA_SAMPLE_SIZE = 256
+
+# 최소 비교 가능한 데이터 크기
+ENTROPY_DELTA_MIN_SAMPLE_SIZE = 128
+
+# 초기에는 관측만 수행
+ENTROPY_DELTA_OBSERVE_ONLY = True
+
+# 실험 데이터 수집 후 결정할 값
+ENTROPY_DELTA_THRESHOLD = 1.5
+
 # ========== Stage 1 - Extension Change Detection ========== #
 EXT_CHANGE_WINDOW_SEC = 10
 EXT_CHANGE_THRESHOLD = 5

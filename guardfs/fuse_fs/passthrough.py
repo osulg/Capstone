@@ -58,9 +58,12 @@ class FsEvent:
     off: int = -1
     flags: int = 0
     entropy: Optional[float] = None
-    new_path: Optional[str] = None  # rename 시 목적지 경로
+    new_path: Optional[str] = None
     sample_data: Optional[bytes] = None
-
+    original_data: Optional[bytes] = None
+    entropy_before: Optional[float] = None
+    entropy_after: Optional[float] = None
+    entropy_delta: Optional[float] = None
     applied: bool = True
 
 
@@ -785,6 +788,8 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         sample_data = None
+        original_data = None
+        sample_size = 0
 
         if off >= 0 and buf:
             sample_size = min(
@@ -793,6 +798,12 @@ class Passthrough(pyfuse3.Operations):
             )
 
             sample_data = bytes(buf[:sample_size])
+
+            # write 이전 원본 샘플: Entropy Delta 계산용
+            try:
+                original_data = os.pread(fd, sample_size, off)
+            except OSError:
+                original_data = None
 
         self._emit(
             FsEvent(
@@ -804,6 +815,7 @@ class Passthrough(pyfuse3.Operations):
                 off=off,
                 entropy=None,
                 sample_data=sample_data,
+                original_data=original_data,
             )
         )
 

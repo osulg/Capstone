@@ -18,6 +18,7 @@ from guardfs.common.config import (
 
 from .entropy import EntropyDetector
 from .entropy_burst import EntropyBurstDetector
+from .entropy_delta import EntropyDeltaDetector
 from .ext_change import ExtChangeDetector
 from .honeypot import HoneypotDetector
 
@@ -29,6 +30,7 @@ class Stage1Detector:
         self.honeypot = HoneypotDetector(honeypot_dir)
         self.ext_change = ExtChangeDetector()
         self.entropy = EntropyDetector()
+        self.entropy_delta = EntropyDeltaDetector()
 
         # 먼저 탐지된 탐지기의 결과를 최종 탐지 이유로 사용
         self._detectors = [
@@ -117,6 +119,19 @@ class Stage1Detector:
 
         if burst_suspicious:
             return True, "EntropyBurstDetector"
+
+        if entropy_suspicious:
+            return True, "EntropyDetector"
+
+        entropy_suspicious = self.entropy.check(ev)
+        delta_result = self.entropy_delta.check(ev)
+
+        if (
+            delta_result is not None
+            and delta_result.is_suspicious
+            and not self.entropy_delta.observe_only
+        ):
+            return True, "EntropyDeltaDetector"
 
         if entropy_suspicious:
             return True, "EntropyDetector"
