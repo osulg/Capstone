@@ -7,3 +7,4 @@ honeypot/
 .venv/
 venv/
 .vscode/
+.toml
