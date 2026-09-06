@@ -28,6 +28,23 @@ ENTROPY_MAX_FILES_PER_PID = 100
 # 하나의 write 이벤트에서 Stage 1으로 전달할 최대 표본 크기
 ENTROPY_MAX_EVENT_SAMPLE_SIZE = ENTROPY_HEADER_SIZE * ENTROPY_MAX_BLOCKS_PER_FILE
 
+# ========== Stage 1 - High-Entropy Burst ========== #
+
+# PID별 고엔트로피 이벤트를 묶는 시간 창
+ENTROPY_BURST_WINDOW_SEC = 5.0
+
+# 시간 창 안에서 필요한 고엔트로피 write 횟수
+ENTROPY_BURST_MIN_WRITES = 5
+
+# 시간 창 안에서 필요한 서로 다른 파일 수
+ENTROPY_BURST_MIN_FILES = 3
+
+# 시간 창 안에서 필요한 고엔트로피 write byte 수
+ENTROPY_BURST_MIN_BYTES = 1280
+
+# PID 하나에서 유지할 최대 Burst 상태 수
+ENTROPY_BURST_MAX_PIDS = 10000
+
 # ========== Stage 1 - Extension Change Detection ========== #
 EXT_CHANGE_WINDOW_SEC = 10
 EXT_CHANGE_THRESHOLD = 5

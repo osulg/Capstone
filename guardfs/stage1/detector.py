@@ -7,7 +7,17 @@ Stage1Detector
 - 탐지 여부와 탐지기 이름 반환
 """
 
+from guardfs.common.config import (
+    ENTROPY_BURST_MAX_PIDS,
+    ENTROPY_BURST_MIN_BYTES,
+    ENTROPY_BURST_MIN_FILES,
+    ENTROPY_BURST_MIN_WRITES,
+    ENTROPY_BURST_WINDOW_SEC,
+    ENTROPY_THRESHOLD,
+)
+
 from .entropy import EntropyDetector
+from .entropy_burst import EntropyBurstDetector
 from .ext_change import ExtChangeDetector
 from .honeypot import HoneypotDetector
 
@@ -26,6 +36,16 @@ class Stage1Detector:
             self.ext_change,
             self.entropy,
         ]
+
+        self.entropy_burst = EntropyBurstDetector(
+            entropy_threshold=ENTROPY_THRESHOLD,
+            window_sec=ENTROPY_BURST_WINDOW_SEC,
+            min_writes=ENTROPY_BURST_MIN_WRITES,
+            min_files=ENTROPY_BURST_MIN_FILES,
+            min_bytes=ENTROPY_BURST_MIN_BYTES,
+            max_pids=ENTROPY_BURST_MAX_PIDS,
+            observe_only=True,
+        )
 
     def precheck(self, ev):
         """
@@ -83,20 +103,22 @@ class Stage1Detector:
 
         """
 
-        for detector in self._detectors:
-            if detector.check(ev):
-                reason = detector.__class__.__name__
+        if self.honeypot.check(ev):
+            reason = "HoneypotDetector"
+            return True, reason
 
-                entropy_str = f"{ev.entropy:.4f}" if ev.entropy is not None else "N/A"
+        if self.ext_change.check_immediate(ev):
+            reason = "ExtChangeDetector"
+            return True, reason
 
-                print(
-                    f"[STAGE1] pid={ev.pid} "
-                    f"op={ev.op} "
-                    f"path={ev.path} "
-                    f"entropy={entropy_str} "
-                    f"reason={reason}"
-                )
+        entropy_suspicious = self.entropy.check(ev)
 
-                return True, reason
+        burst_suspicious = self.entropy_burst.observe(ev)
+
+        if burst_suspicious:
+            return True, "EntropyBurstDetector"
+
+        if entropy_suspicious:
+            return True, "EntropyDetector"
 
         return False, None

@@ -48,6 +48,9 @@ from guardfs.stage1.entropy import (  # noqa: E402
     EntropyDetector,
     shannon_entropy,
 )
+from guardfs.stage1.entropy_burst import (  # noqa: E402
+    EntropyBurstDetector,
+)
 from guardfs.stage1.ext_change import ExtChangeDetector  # noqa: E402
 from guardfs.stage1.honeypot import HoneypotDetector  # noqa: E402
 
@@ -750,6 +753,166 @@ class EntropyDetectorTests(unittest.TestCase):
         )
         self.assertTrue(self.detector.check(final_event))
         self.assertEqual(final_event.entropy, 8.0)
+
+
+class EntropyBurstDetectorTests(unittest.TestCase):
+    def make_event(
+        self,
+        pid=1234,
+        path="/underlay/file.bin",
+        entropy=7.5,
+        size=256,
+        op="write",
+        applied=True,
+    ):
+        return event(
+            pid=pid,
+            op=op,
+            path=path,
+            size=size,
+            entropy=entropy,
+            sample_data=bytes(range(256)),
+            applied=applied,
+        )
+
+    def test_single_high_entropy_write_is_not_burst(self):
+        detector = EntropyBurstDetector(
+            min_writes=2,
+            min_files=2,
+            min_bytes=512,
+            observe_only=False,
+        )
+
+        self.assertFalse(
+            detector.observe(self.make_event())
+        )
+
+        snapshot = detector.snapshot(1234)
+        self.assertEqual(snapshot.high_entropy_writes, 1)
+        self.assertEqual(snapshot.high_entropy_files, 1)
+        self.assertEqual(snapshot.high_entropy_bytes, 256)
+
+    def test_multiple_files_form_burst(self):
+        detector = EntropyBurstDetector(
+            min_writes=3,
+            min_files=3,
+            min_bytes=768,
+            observe_only=False,
+        )
+
+        self.assertFalse(
+            detector.observe(self.make_event(path="/underlay/a.bin"))
+        )
+        self.assertFalse(
+            detector.observe(self.make_event(path="/underlay/b.bin"))
+        )
+        self.assertTrue(
+            detector.observe(self.make_event(path="/underlay/c.bin"))
+        )
+
+    def test_same_file_does_not_count_as_multiple_files(self):
+        detector = EntropyBurstDetector(
+            min_writes=3,
+            min_files=2,
+            min_bytes=768,
+            observe_only=False,
+        )
+
+        results = [
+            detector.observe(
+                self.make_event(path="/underlay/same.bin")
+            )
+            for _ in range(3)
+        ]
+
+        self.assertFalse(any(results))
+        self.assertEqual(
+            detector.snapshot(1234).high_entropy_files,
+            1,
+        )
+
+    def test_low_entropy_and_non_write_are_not_added(self):
+        detector = EntropyBurstDetector(
+            min_writes=1,
+            min_files=1,
+            min_bytes=1,
+            observe_only=False,
+        )
+
+        self.assertFalse(
+            detector.observe(self.make_event(entropy=6.9))
+        )
+        self.assertFalse(
+            detector.observe(self.make_event(op="read"))
+        )
+
+        snapshot = detector.snapshot(1234)
+        self.assertEqual(snapshot.high_entropy_writes, 0)
+
+    def test_failed_event_is_not_added(self):
+        detector = EntropyBurstDetector(
+            min_writes=1,
+            min_files=1,
+            min_bytes=1,
+            observe_only=False,
+        )
+
+        self.assertFalse(
+            detector.observe(self.make_event(applied=False))
+        )
+        self.assertEqual(
+            detector.snapshot(1234).high_entropy_writes,
+            0,
+        )
+
+    def test_events_expire_after_window(self):
+        detector = EntropyBurstDetector(
+            min_writes=2,
+            min_files=2,
+            min_bytes=512,
+            window_sec=5.0,
+            observe_only=False,
+        )
+
+        with patch(
+            "guardfs.stage1.entropy_burst.time.monotonic",
+            side_effect=[0.0, 6.0, 6.0],
+        ):
+            detector.observe(
+                self.make_event(path="/underlay/a.bin")
+            )
+            detected = detector.observe(
+                self.make_event(path="/underlay/b.bin")
+            )
+            snapshot = detector.snapshot(1234)
+
+        self.assertFalse(detected)
+        self.assertEqual(snapshot.high_entropy_writes, 1)
+
+    def test_observe_only_collects_without_detection(self):
+        detector = EntropyBurstDetector(
+            min_writes=1,
+            min_files=1,
+            min_bytes=1,
+            observe_only=True,
+        )
+
+        self.assertFalse(
+            detector.observe(self.make_event())
+        )
+        self.assertEqual(
+            detector.snapshot(1234).high_entropy_writes,
+            1,
+        )
+
+    def test_discard_removes_pid_state(self):
+        detector = EntropyBurstDetector()
+
+        detector.observe(self.make_event())
+        detector.discard(1234)
+
+        snapshot = detector.snapshot(1234)
+        self.assertEqual(snapshot.high_entropy_writes, 0)
 
 
 class ExtensionChangeDetectorTests(unittest.TestCase):
