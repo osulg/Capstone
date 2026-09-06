@@ -2,11 +2,31 @@
 ENTROPY_THRESHOLD = 7.0
 ENTROPY_HEADER_SIZE = 256
 
+# 256바이트 미만 파일을 release 시 평가하기 위한 별도 정책
+ENTROPY_MIN_SAMPLE_SIZE = 128
+ENTROPY_SHORT_SAMPLE_THRESHOLD = 6.5
+
 # ========== Stage 1 - Entropy Accumulation ========== #
-ENTROPY_ACCUMULATION_WINDOW_SEC = 1.0  # 작은 write을 같은 공격 흐름으로 묶어볼 시간 창
-ENTROPY_ACCUMULATION_SIZE = (
-    ENTROPY_HEADER_SIZE  # 누적 write가 이 크기 이상이면 entropy 재평가
-)
+
+# 마지막 write 이후 불완전한 블록을 유지하는 최대 비활성 시간
+ENTROPY_ACCUMULATION_WINDOW_SEC = 5.0
+
+# 첫 write 이후 불완전한 블록을 유지하는 최대 전체 수명
+ENTROPY_ACCUMULATION_MAX_LIFETIME_SEC = 30.0
+
+# 블록 완성 및 엔트로피 평가에 필요한 누적 크기
+ENTROPY_ACCUMULATION_SIZE = ENTROPY_HEADER_SIZE
+
+# ========== Stage 1 - Entropy Block Sampling ========== #
+
+# 파일 하나에서 동시에 추적할 최대 256B block 수
+ENTROPY_MAX_BLOCKS_PER_FILE = 4
+
+# PID 하나에서 동시에 추적할 최대 파일 수
+ENTROPY_MAX_FILES_PER_PID = 100
+
+# 하나의 write 이벤트에서 Stage 1으로 전달할 최대 표본 크기
+ENTROPY_MAX_EVENT_SAMPLE_SIZE = ENTROPY_HEADER_SIZE * ENTROPY_MAX_BLOCKS_PER_FILE
 
 # ========== Stage 1 - Extension Change Detection ========== #
 EXT_CHANGE_WINDOW_SEC = 10

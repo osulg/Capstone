@@ -18,7 +18,8 @@ import pyfuse3
 import trio
 
 from guardfs.common.config import (
-    ENTROPY_HEADER_SIZE,
+    ENTROPY_MAX_EVENT_SAMPLE_SIZE,
+    ENTROPY_SHORT_SAMPLE_THRESHOLD,
     ENTROPY_THRESHOLD,
     STATS_E_SUM_THRESHOLD,
     STATS_RENAME_THRESHOLD,
@@ -34,7 +35,6 @@ from guardfs.common.paths import (
     get_honeypot_dir,
 )
 from guardfs.stage1.detector import Stage1Detector
-from guardfs.stage1.entropy import shannon_entropy
 from guardfs.stage1.logger import EventLogger
 from guardfs.stage2.stage2_worker import stage2_worker
 from guardfs.stage2.states import ProcState
@@ -48,7 +48,7 @@ def _full_path(root: str, path: str) -> str:
 
 @dataclass
 class FsEvent:
-    """통계 수집기 및 Stage 1 탐지기에 전달하는 파일 시스템 이벤트이다."""
+    """통계 수집기 및 Stage 1 탐지기에 전달하는 파일 시스템 이벤트이다"""
 
     ts_ns: int
     pid: int
@@ -59,6 +59,9 @@ class FsEvent:
     flags: int = 0
     entropy: Optional[float] = None
     new_path: Optional[str] = None  # rename 시 목적지 경로
+    sample_data: Optional[bytes] = None
+
+    applied: bool = True
 
 
 async def stats_collector(
@@ -124,13 +127,18 @@ async def stats_collector(
                     next_tick += STATS_WINDOW_SEC
                     continue
 
-                # 동일 이벤트를 로그, 통계, Stage 1(경량) 순서로 처리
+                # 파일 생명주기 먼저 반영
+                stage1.update_lifecycle(ev)
+
+                # Stage 1이 누적 엔트로피를 계산한 뒤
+                # 갱신된 이벤트를 로그와 PID 통계에 반영
+                is_suspicious, reason = await stage1.check(ev)
+
+                # Stage 1에서 갱신된 이벤트를 로그와 PID 통계에 반영
                 logger.write(ev)
 
                 st = stats[ev.pid]
                 st.update(ev)
-
-                is_suspicious, reason = await stage1.check(ev)
 
                 if is_suspicious:
                     feature_row = st.to_feature_row()
@@ -357,6 +365,8 @@ class Passthrough(pyfuse3.Operations):
         size: int = 0,
         off: int = -1,
         flags: int = 0,
+        new_path: Optional[str] = None,
+        applied: bool = False,
     ) -> None:
         self._emit(
             FsEvent(
@@ -367,6 +377,8 @@ class Passthrough(pyfuse3.Operations):
                 size=size,
                 off=off,
                 flags=flags,
+                new_path=new_path,
+                applied=applied,
             )
         )
 
@@ -772,7 +784,15 @@ class Passthrough(pyfuse3.Operations):
 
             raise pyfuse3.FUSEError(errno.EACCES)
 
-        ent = shannon_entropy(buf[:ENTROPY_HEADER_SIZE])
+        sample_data = None
+
+        if off >= 0 and buf:
+            sample_size = min(
+                len(buf),
+                ENTROPY_MAX_EVENT_SAMPLE_SIZE,
+            )
+
+            sample_data = bytes(buf[:sample_size])
 
         self._emit(
             FsEvent(
@@ -782,7 +802,8 @@ class Passthrough(pyfuse3.Operations):
                 path=path,
                 size=len(buf),
                 off=off,
-                entropy=ent,
+                entropy=None,
+                sample_data=sample_data,
             )
         )
 
@@ -955,6 +976,7 @@ class Passthrough(pyfuse3.Operations):
                     op="rename",
                     path=oldp,
                     new_path=newp,
+                    applied=False,
                 )
             )
 
@@ -979,6 +1001,7 @@ class Passthrough(pyfuse3.Operations):
         blocked, reason = self._stage1.precheck(ev)
 
         if blocked:
+            ev.applied = False
             self._emit(ev)
 
             print(
@@ -1040,10 +1063,13 @@ class Passthrough(pyfuse3.Operations):
         fd = self._fd_map.pop(fh, None)
 
         inode = None
+        file_size = 0
 
         if fd is not None:
             try:
-                inode = os.fstat(fd).st_ino
+                stat_result = os.fstat(fd)
+                inode = stat_result.st_ino
+                file_size = stat_result.st_size
             except OSError:
                 pass
 
@@ -1077,6 +1103,7 @@ class Passthrough(pyfuse3.Operations):
                 pid=pid,
                 op="release",
                 path=path,
+                size=file_size,
                 flags=flags,
             )
         )
@@ -1159,14 +1186,19 @@ class PidStats:
         if ev.op in ("unlink", "rmdir"):
             return "D"
 
-        if (
-            ev.op == "write"
-            and ev.entropy is not None
-            and ev.entropy >= ENTROPY_THRESHOLD
-        ):
-            return "E"
+        if ev.op == "write":
+            if ev.entropy is not None and ev.entropy >= ENTROPY_THRESHOLD:
+                return "E"
 
-        if ev.op in ("open", "read", "write", "lookup", "release", "rename"):
+            return "O"
+
+        if ev.op == "release":
+            if ev.entropy is not None and ev.entropy >= ENTROPY_SHORT_SAMPLE_THRESHOLD:
+                return "E"
+
+            return "O"
+
+        if ev.op in ("open", "read", "lookup", "rename"):
             return "O"
 
         return None

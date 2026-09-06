@@ -48,6 +48,29 @@ class Stage1Detector:
 
         return False, None
 
+    def update_lifecycle(self, ev) -> None:
+        """성공한 파일 연산에 따라 엔트로피 누적 상태를 정리"""
+
+        if not getattr(ev, "applied", True):
+            return
+
+        if ev.op in (
+            "unlink",
+            "truncate",
+            "ftruncate",
+        ):
+            self.entropy.discard(
+                pid=ev.pid,
+                path=ev.path,
+            )
+
+        elif ev.op == "rename" and ev.new_path:
+            self.entropy.move(
+                pid=ev.pid,
+                old_path=ev.path,
+                new_path=ev.new_path,
+            )
+
     async def check(self, ev):
         """
         이벤트를 각 Stage 1 탐지기에 순서대로 전달

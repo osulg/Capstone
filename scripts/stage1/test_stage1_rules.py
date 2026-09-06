@@ -34,8 +34,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from guardfs.common.config import (  # noqa: E402
+    ENTROPY_ACCUMULATION_SIZE,
     ENTROPY_ACCUMULATION_WINDOW_SEC,
     ENTROPY_HEADER_SIZE,
+    ENTROPY_MIN_SAMPLE_SIZE,
+    ENTROPY_SHORT_SAMPLE_THRESHOLD,
     ENTROPY_THRESHOLD,
     EXT_CHANGE_THRESHOLD,
     EXT_CHANGE_WINDOW_SEC,
@@ -65,6 +68,22 @@ class FakeEvent:
     flags: int = 0
     entropy: float | None = None
     new_path: str | None = None
+    sample_data: bytes | None = None
+    ts_ns: int = 0
+
+
+@dataclass
+class FakeEvent:
+    pid: int = 1000
+    op: str = "write"
+    path: str = "/underlay/document.txt"
+    size: int = 0
+    off: int = 0
+    flags: int = 0
+    entropy: float | None = None
+    new_path: str | None = None
+    sample_data: bytes | None = None
+    applied: bool = True
     ts_ns: int = 0
 
 
@@ -123,6 +142,14 @@ class EntropyDetectorTests(unittest.TestCase):
             self.detector.accumulation_window_sec,
             ENTROPY_ACCUMULATION_WINDOW_SEC,
         )
+        self.assertEqual(
+            self.detector.min_sample_size,
+            ENTROPY_MIN_SAMPLE_SIZE,
+        )
+        self.assertEqual(
+            self.detector.short_sample_threshold,
+            ENTROPY_SHORT_SAMPLE_THRESHOLD,
+        )
 
     def test_non_write_operation_is_ignored(self):
         for op in ("open", "read", "create", "rename", "unlink", "truncate"):
@@ -135,7 +162,12 @@ class EntropyDetectorTests(unittest.TestCase):
         self.assertFalse(self.detector.check(ev))
 
     def test_write_at_header_size_is_examined(self):
-        ev = event(size=ENTROPY_HEADER_SIZE, entropy=ENTROPY_THRESHOLD)
+        data = bytes(range(128)) * 2
+        ev = event(
+            size=ENTROPY_HEADER_SIZE,
+            entropy=ENTROPY_THRESHOLD,
+            sample_data=data,
+        )
         self.assertTrue(self.detector.check(ev))
 
     def test_missing_entropy_is_ignored(self):
@@ -143,20 +175,35 @@ class EntropyDetectorTests(unittest.TestCase):
         self.assertFalse(self.detector.check(ev))
 
     def test_value_just_below_threshold_is_not_detected(self):
-        ev = event(size=ENTROPY_HEADER_SIZE, entropy=ENTROPY_THRESHOLD - 1e-9)
-        self.assertFalse(self.detector.check(ev))
+        data = bytes(range(128)) * 2
+        detector = EntropyDetector(threshold=ENTROPY_THRESHOLD + 1e-9)
+        ev = event(size=len(data), entropy=7.0, sample_data=data)
+        self.assertFalse(detector.check(ev))
 
     def test_threshold_is_inclusive(self):
-        ev = event(size=ENTROPY_HEADER_SIZE, entropy=ENTROPY_THRESHOLD)
+        data = bytes(range(128)) * 2
+        ev = event(
+            size=ENTROPY_HEADER_SIZE,
+            entropy=ENTROPY_THRESHOLD,
+            sample_data=data,
+        )
         self.assertTrue(self.detector.check(ev))
 
     def test_value_above_threshold_is_detected(self):
-        ev = event(size=ENTROPY_HEADER_SIZE, entropy=8.0)
+        data = bytes(range(ENTROPY_HEADER_SIZE))
+        ev = event(size=len(data), entropy=8.0, sample_data=data)
         self.assertTrue(self.detector.check(ev))
 
     def test_custom_limits_are_honored(self):
-        detector = EntropyDetector(threshold=6.5, header_size=64)
-        self.assertTrue(detector.check(event(size=64, entropy=6.5)))
+        detector = EntropyDetector(
+            threshold=6.0,
+            header_size=64,
+            accumulation_size=64,
+            min_sample_size=32,
+        )
+        self.assertTrue(
+            detector.check(event(size=64, entropy=6.0, sample_data=bytes(range(64))))
+        )
         self.assertFalse(detector.check(event(size=63, entropy=8.0)))
 
     def test_repeated_small_high_entropy_writes_are_eventually_detected(self):
@@ -167,48 +214,115 @@ class EntropyDetectorTests(unittest.TestCase):
             accumulation_size=256,
         )
 
+        data = bytes(range(256))
         detected = False
+        last_event = None
 
         with patch(
             "guardfs.stage1.entropy.time.monotonic",
             side_effect=[0.0, 0.1, 0.2, 0.3],
         ):
             for offset in range(0, 256, 64):
-                detected = (
-                    detector.check(
-                        event(
-                            pid=1234,
-                            path="/underlay/file.bin",
-                            size=64,
-                            off=offset,
-                            entropy=8.0,
-                        )
-                    )
-                    or detected
+                chunk = data[offset : offset + 64]
+
+                last_event = event(
+                    pid=1234,
+                    path="/underlay/file.bin",
+                    size=len(chunk),
+                    off=offset,
+                    entropy=shannon_entropy(chunk),
+                    sample_data=chunk,
                 )
 
+                detected = detector.check(last_event)
+
         self.assertTrue(detected)
+        self.assertIsNotNone(last_event)
+
+        # 개별 64바이트 entropy가 아니라
+        # 재구성된 256바이트 entropy가 저장되어야 한다.
+        self.assertAlmostEqual(
+            last_event.entropy,
+            shannon_entropy(data),
+            places=12,
+        )
+
+        self.assertEqual(last_event.entropy, 8.0)
 
     def test_partial_writes_are_isolated_by_pid_and_path(self):
-        for _ in range(3):
+        for offset in range(0, 192, 64):
             self.assertFalse(
-                self.detector.check(event(pid=10, path="/a", size=64, entropy=8.0))
+                self.detector.check(
+                    event(
+                        pid=10,
+                        path="/a",
+                        size=64,
+                        off=offset,
+                        entropy=6.0,
+                        sample_data=bytes(range(offset, offset + 64)),
+                    )
+                )
             )
         self.assertFalse(
-            self.detector.check(event(pid=20, path="/a", size=64, entropy=8.0))
+            self.detector.check(
+                event(pid=20, path="/a", size=64, sample_data=bytes(range(64)))
+            )
         )
         self.assertFalse(
-            self.detector.check(event(pid=10, path="/b", size=64, entropy=8.0))
+            self.detector.check(
+                event(pid=10, path="/b", size=64, sample_data=bytes(range(64)))
+            )
         )
         self.assertTrue(
-            self.detector.check(event(pid=10, path="/a", size=64, entropy=8.0))
+            self.detector.check(
+                event(
+                    pid=10,
+                    path="/a",
+                    size=64,
+                    off=192,
+                    sample_data=bytes(range(192, 256)),
+                )
+            )
         )
+
+    def test_completed_low_entropy_is_written_to_event(self):
+        detector = EntropyDetector()
+        data = b"A" * 256
+
+        ev = event(
+            size=len(data),
+            off=0,
+            entropy=shannon_entropy(data),
+            sample_data=data,
+        )
+
+        detected = detector.check(ev)
+
+        self.assertFalse(detected)
+        self.assertEqual(ev.entropy, 0.0)
 
     def test_low_entropy_fragment_dilutes_partial_accumulation(self):
         path = "/underlay/reset.bin"
-        self.assertFalse(self.detector.check(event(path=path, size=128, entropy=8.0)))
-        self.assertFalse(self.detector.check(event(path=path, size=64, entropy=1.0)))
-        self.assertFalse(self.detector.check(event(path=path, size=128, entropy=8.0)))
+        self.assertFalse(
+            self.detector.check(
+                event(path=path, size=128, sample_data=bytes(range(128)))
+            )
+        )
+        self.assertFalse(
+            self.detector.check(
+                event(path=path, size=64, off=128, sample_data=b"A" * 64)
+            )
+        )
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    path=path,
+                    size=64,
+                    off=192,
+                    sample_data=bytes(range(64)),
+                )
+            )
+        )
 
     def test_expired_partial_accumulation_is_removed(self):
         path = "/underlay/expiry.bin"
@@ -219,17 +333,26 @@ class EntropyDetectorTests(unittest.TestCase):
             side_effect=[0.0, ENTROPY_ACCUMULATION_WINDOW_SEC + 0.1],
         ):
             self.assertFalse(
-                self.detector.check(event(path=path, size=128, entropy=8.0))
+                self.detector.check(
+                    event(path=path, size=128, sample_data=bytes(range(128)))
+                )
             )
             self.assertFalse(
-                self.detector.check(event(path=path, size=128, entropy=8.0))
+                self.detector.check(
+                    event(
+                        path=path,
+                        size=128,
+                        off=128,
+                        sample_data=bytes(range(128, 256)),
+                    )
+                )
             )
 
         # 첫 write가 만료되어 폐기되었으므로 두 번째 write만 남아야 한다.
-        key = (1000, os.path.realpath(path))
-        state = self.detector._accumulators.get(key)
+        key = (1000, os.path.realpath(path), 0)
+        state = self.detector._blocks.get(key)
         self.assertIsNotNone(state)
-        self.assertEqual(state.total_size, 128)
+        self.assertEqual(state.present_count, 128)
 
     def test_large_write_clears_previous_partial_state(self):
         """큰 write 뒤에 이전 작은 write가 다음 판정에 섞이지 않아야 한다.
@@ -244,13 +367,23 @@ class EntropyDetectorTests(unittest.TestCase):
             side_effect=[0.0, 0.1, 0.2],
         ):
             # 이전 작은 write를 누적한다.
-            self.assertFalse(detector.check(event(path=path, size=128, entropy=8.0)))
+            self.assertFalse(
+                detector.check(
+                    event(path=path, size=128, sample_data=bytes(range(128)))
+                )
+            )
 
             # 큰 write는 즉시 판정되고, 기존 누적 상태를 끊어야 한다.
-            self.assertFalse(detector.check(event(path=path, size=256, entropy=1.0)))
+            self.assertFalse(
+                detector.check(event(path=path, size=256, sample_data=b"A" * 256))
+            )
 
             # 이전 128B가 남아 있다면 이 write와 합쳐져 잘못 탐지된다.
-            self.assertFalse(detector.check(event(path=path, size=128, entropy=8.0)))
+            self.assertFalse(
+                detector.check(
+                    event(path=path, size=128, sample_data=bytes(range(128)))
+                )
+            )
 
     def test_accumulator_is_removed_after_non_detection_evaluation(self):
         """누적 크기에 도달해 판정한 뒤에는 상태가 다음 흐름으로 넘어가면 안 된다."""
@@ -261,11 +394,362 @@ class EntropyDetectorTests(unittest.TestCase):
             "guardfs.stage1.entropy.time.monotonic",
             side_effect=[0.0, 0.1, 0.2, 0.3],
         ):
-            for _ in range(4):
-                self.assertFalse(detector.check(event(path=path, size=64, entropy=2.0)))
+            for offset in range(0, 256, 64):
+                self.assertFalse(
+                    detector.check(
+                        event(
+                            path=path,
+                            size=64,
+                            off=offset,
+                            sample_data=b"A" * 64,
+                        )
+                    )
+                )
 
-        key = (1000, os.path.realpath(path))
-        self.assertNotIn(key, detector._accumulators)
+        key = (1000, os.path.realpath(path), 0)
+        self.assertNotIn(key, detector._blocks)
+
+    def test_repeated_same_offset_does_not_complete_header(self):
+        chunk = bytes(range(64))
+
+        for _ in range(4):
+            self.assertFalse(
+                self.detector.check(event(size=64, off=0, sample_data=chunk))
+            )
+
+        key = (1000, os.path.realpath("/underlay/document.txt"), 0)
+        self.assertEqual(self.detector._blocks[key].present_count, 64)
+
+    def test_out_of_order_writes_are_reassembled(self):
+        data = bytes(range(256))
+        detected = False
+
+        for offset in (192, 128, 64, 0):
+            detected = self.detector.check(
+                event(
+                    size=64,
+                    off=offset,
+                    sample_data=data[offset : offset + 64],
+                )
+            )
+
+        self.assertTrue(detected)
+
+    def test_write_outside_header_is_examined(self):
+        data = bytes(range(256))
+        ev = event(size=256, off=256, sample_data=data)
+
+        self.assertTrue(self.detector.check(ev))
+        self.assertEqual(ev.entropy, 8.0)
+
+    def test_invalid_configuration_is_rejected(self):
+        invalid_arguments = (
+            {"threshold": -0.1},
+            {"threshold": 8.1},
+            {"header_size": 0},
+            {"accumulation_window_sec": 0},
+            {"accumulation_size": 0},
+            {"header_size": 64, "accumulation_size": 65},
+            {"min_sample_size": 0},
+            {"min_sample_size": ENTROPY_ACCUMULATION_SIZE},
+            {"short_sample_threshold": -0.1},
+            {"short_sample_threshold": 8.1},
+        )
+
+        for arguments in invalid_arguments:
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(ValueError):
+                    EntropyDetector(**arguments)
+
+    def test_release_detects_short_high_entropy_file(self):
+        path = "/underlay/short.bin"
+        data = bytes(range(ENTROPY_MIN_SAMPLE_SIZE))
+
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    pid=1234,
+                    path=path,
+                    size=len(data),
+                    off=0,
+                    sample_data=data,
+                )
+            )
+        )
+
+        release_event = event(
+            pid=1234,
+            op="release",
+            path=path,
+            size=len(data),
+        )
+
+        self.assertTrue(self.detector.check(release_event))
+        self.assertEqual(release_event.entropy, 7.0)
+
+    def test_release_ignores_sample_below_minimum_size(self):
+        path = "/underlay/tiny.bin"
+        data = bytes(range(ENTROPY_MIN_SAMPLE_SIZE - 1))
+
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    pid=1234,
+                    path=path,
+                    size=len(data),
+                    off=0,
+                    sample_data=data,
+                )
+            )
+        )
+
+        release_event = event(
+            pid=1234,
+            op="release",
+            path=path,
+            size=len(data),
+        )
+
+        self.assertFalse(self.detector.check(release_event))
+        self.assertIsNone(release_event.entropy)
+
+    def test_release_ignores_short_low_entropy_file(self):
+        path = "/underlay/short.txt"
+        data = b"A" * ENTROPY_MIN_SAMPLE_SIZE
+
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    pid=1234,
+                    path=path,
+                    size=len(data),
+                    off=0,
+                    sample_data=data,
+                )
+            )
+        )
+
+        release_event = event(
+            pid=1234,
+            op="release",
+            path=path,
+            size=len(data),
+        )
+
+        self.assertFalse(self.detector.check(release_event))
+        self.assertEqual(release_event.entropy, 0.0)
+
+    def test_release_does_not_finalize_partial_sample_from_large_file(self):
+        path = "/underlay/large.bin"
+        data = bytes(range(ENTROPY_MIN_SAMPLE_SIZE))
+
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    pid=1234,
+                    path=path,
+                    size=len(data),
+                    off=0,
+                    sample_data=data,
+                )
+            )
+        )
+
+        release_event = event(
+            pid=1234,
+            op="release",
+            path=path,
+            size=4096,
+        )
+
+        self.assertFalse(self.detector.check(release_event))
+        self.assertIsNone(release_event.entropy)
+
+    def test_release_requires_a_contiguous_prefix(self):
+        path = "/underlay/gapped.bin"
+
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    pid=1234,
+                    path=path,
+                    size=64,
+                    off=0,
+                    sample_data=bytes(range(64)),
+                )
+            )
+        )
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    pid=1234,
+                    path=path,
+                    size=64,
+                    off=128,
+                    sample_data=bytes(range(128, 192)),
+                )
+            )
+        )
+
+        release_event = event(
+            pid=1234,
+            op="release",
+            path=path,
+            size=192,
+        )
+
+        self.assertFalse(self.detector.check(release_event))
+        self.assertIsNone(release_event.entropy)
+
+    def test_release_requires_the_complete_short_file(self):
+        path = "/underlay/partially-observed-short.bin"
+        observed_data = bytes(range(ENTROPY_MIN_SAMPLE_SIZE))
+        actual_file_size = ENTROPY_MIN_SAMPLE_SIZE + 64
+
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    pid=1234,
+                    path=path,
+                    size=len(observed_data),
+                    off=0,
+                    sample_data=observed_data,
+                )
+            )
+        )
+
+        release_event = event(
+            pid=1234,
+            op="release",
+            path=path,
+            size=actual_file_size,
+        )
+
+        self.assertFalse(self.detector.check(release_event))
+        self.assertIsNone(release_event.entropy)
+
+    def test_discard_removes_only_matching_accumulator(self):
+        target_path = "/underlay/target.bin"
+        other_path = "/underlay/other.bin"
+
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    pid=1234,
+                    path=target_path,
+                    size=128,
+                    off=0,
+                    sample_data=bytes(range(128)),
+                )
+            )
+        )
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    pid=1234,
+                    path=other_path,
+                    size=128,
+                    off=0,
+                    sample_data=bytes(range(128)),
+                )
+            )
+        )
+
+        self.detector.discard(pid=1234, path=target_path)
+
+        target_key = (1234, os.path.realpath(target_path), 0)
+        other_key = (1234, os.path.realpath(other_path), 0)
+        self.assertNotIn(target_key, self.detector._blocks)
+        self.assertIn(other_key, self.detector._blocks)
+
+    def test_discard_missing_accumulator_is_safe(self):
+        self.detector.discard(pid=1234, path="/underlay/missing.bin")
+        self.assertEqual(self.detector._blocks, {})
+
+    def test_move_transfers_accumulator_to_new_path(self):
+        old_path = "/underlay/old.bin"
+        new_path = "/underlay/new.bin"
+
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    pid=1234,
+                    path=old_path,
+                    size=128,
+                    off=0,
+                    sample_data=bytes(range(128)),
+                )
+            )
+        )
+
+        old_key = (1234, os.path.realpath(old_path), 0)
+        new_key = (1234, os.path.realpath(new_path), 0)
+        original_state = self.detector._blocks[old_key]
+
+        self.detector.move(
+            pid=1234,
+            old_path=old_path,
+            new_path=new_path,
+        )
+
+        self.assertNotIn(old_key, self.detector._blocks)
+        self.assertIs(self.detector._blocks[new_key], original_state)
+
+    def test_move_replaces_existing_destination_accumulator(self):
+        old_path = "/underlay/old.bin"
+        new_path = "/underlay/new.bin"
+
+        for path in (old_path, new_path):
+            self.assertFalse(
+                self.detector.check(
+                    event(
+                        pid=1234,
+                        path=path,
+                        size=64,
+                        off=0,
+                        sample_data=bytes(range(64)),
+                    )
+                )
+            )
+
+        old_key = (1234, os.path.realpath(old_path), 0)
+        new_key = (1234, os.path.realpath(new_path), 0)
+        source_state = self.detector._blocks[old_key]
+        destination_state = self.detector._blocks[new_key]
+
+        self.detector.move(1234, old_path, new_path)
+
+        self.assertIs(self.detector._blocks[new_key], source_state)
+        self.assertIsNot(self.detector._blocks[new_key], destination_state)
+
+    def test_partial_accumulation_continues_after_move(self):
+        old_path = "/underlay/old.bin"
+        new_path = "/underlay/new.bin"
+        data = bytes(range(256))
+
+        self.assertFalse(
+            self.detector.check(
+                event(
+                    pid=1234,
+                    path=old_path,
+                    size=128,
+                    off=0,
+                    sample_data=data[:128],
+                )
+            )
+        )
+
+        self.detector.move(1234, old_path, new_path)
+
+        final_event = event(
+            pid=1234,
+            path=new_path,
+            size=128,
+            off=128,
+            sample_data=data[128:],
+        )
+        self.assertTrue(self.detector.check(final_event))
+        self.assertEqual(final_event.entropy, 8.0)
 
 
 class ExtensionChangeDetectorTests(unittest.TestCase):
@@ -533,7 +1017,11 @@ class Stage1IntegrationTests(unittest.TestCase):
     def test_entropy_detection_reports_detector_name(self):
         result = run_check(
             self.detector,
-            event(size=ENTROPY_HEADER_SIZE, entropy=8.0),
+            event(
+                size=ENTROPY_HEADER_SIZE,
+                entropy=8.0,
+                sample_data=bytes(range(ENTROPY_HEADER_SIZE)),
+            ),
         )
         self.assertEqual(result, (True, "EntropyDetector"))
 
@@ -563,6 +1051,171 @@ class Stage1IntegrationTests(unittest.TestCase):
             ),
         )
         self.assertEqual(result, (True, "HoneypotDetector"))
+
+    def test_successful_terminal_operations_discard_entropy_state(self):
+        for op in ("unlink", "truncate", "ftruncate"):
+            with self.subTest(op=op):
+                detector = Stage1Detector(str(self.honeypot))
+                path = str(Path(self.tempdir.name) / f"{op}.bin")
+                key = (1234, os.path.realpath(path), 0)
+
+                self.assertEqual(
+                    run_check(
+                        detector,
+                        event(
+                            pid=1234,
+                            path=path,
+                            size=128,
+                            off=0,
+                            sample_data=bytes(range(128)),
+                        ),
+                    ),
+                    (False, None),
+                )
+                self.assertIn(key, detector.entropy._blocks)
+
+                detector.update_lifecycle(
+                    event(
+                        pid=1234,
+                        op=op,
+                        path=path,
+                        applied=True,
+                    )
+                )
+
+                self.assertNotIn(key, detector.entropy._blocks)
+
+    def test_release_is_finalized_instead_of_discarded_by_lifecycle(self):
+        path = str(Path(self.tempdir.name) / "short.bin")
+        data = bytes(range(ENTROPY_MIN_SAMPLE_SIZE))
+        key = (1234, os.path.realpath(path), 0)
+
+        self.assertEqual(
+            run_check(
+                self.detector,
+                event(
+                    pid=1234,
+                    path=path,
+                    size=len(data),
+                    off=0,
+                    sample_data=data,
+                ),
+            ),
+            (False, None),
+        )
+
+        release_event = event(
+            pid=1234,
+            op="release",
+            path=path,
+            size=len(data),
+            applied=True,
+        )
+
+        self.detector.update_lifecycle(release_event)
+        self.assertIn(key, self.detector.entropy._blocks)
+
+        self.assertEqual(
+            run_check(self.detector, release_event),
+            (True, "EntropyDetector"),
+        )
+        self.assertEqual(release_event.entropy, 7.0)
+        self.assertNotIn(key, self.detector.entropy._blocks)
+
+    def test_blocked_terminal_operation_preserves_entropy_state(self):
+        path = str(Path(self.tempdir.name) / "blocked.bin")
+        key = (1234, os.path.realpath(path), 0)
+
+        self.assertEqual(
+            run_check(
+                self.detector,
+                event(
+                    pid=1234,
+                    path=path,
+                    size=128,
+                    off=0,
+                    sample_data=bytes(range(128)),
+                ),
+            ),
+            (False, None),
+        )
+
+        self.detector.update_lifecycle(
+            event(
+                pid=1234,
+                op="unlink",
+                path=path,
+                applied=False,
+            )
+        )
+
+        self.assertIn(key, self.detector.entropy._blocks)
+
+    def test_successful_rename_moves_entropy_state(self):
+        old_path = str(Path(self.tempdir.name) / "old.bin")
+        new_path = str(Path(self.tempdir.name) / "new.bin")
+        old_key = (1234, os.path.realpath(old_path), 0)
+        new_key = (1234, os.path.realpath(new_path), 0)
+
+        self.assertEqual(
+            run_check(
+                self.detector,
+                event(
+                    pid=1234,
+                    path=old_path,
+                    size=128,
+                    off=0,
+                    sample_data=bytes(range(128)),
+                ),
+            ),
+            (False, None),
+        )
+
+        self.detector.update_lifecycle(
+            event(
+                pid=1234,
+                op="rename",
+                path=old_path,
+                new_path=new_path,
+                applied=True,
+            )
+        )
+
+        self.assertNotIn(old_key, self.detector.entropy._blocks)
+        self.assertIn(new_key, self.detector.entropy._blocks)
+
+    def test_blocked_rename_does_not_move_entropy_state(self):
+        old_path = str(Path(self.tempdir.name) / "old.bin")
+        new_path = str(Path(self.tempdir.name) / "old.enc")
+        old_key = (1234, os.path.realpath(old_path), 0)
+        new_key = (1234, os.path.realpath(new_path), 0)
+
+        self.assertEqual(
+            run_check(
+                self.detector,
+                event(
+                    pid=1234,
+                    path=old_path,
+                    size=128,
+                    off=0,
+                    sample_data=bytes(range(128)),
+                ),
+            ),
+            (False, None),
+        )
+
+        self.detector.update_lifecycle(
+            event(
+                pid=1234,
+                op="rename",
+                path=old_path,
+                new_path=new_path,
+                applied=False,
+            )
+        )
+
+        self.assertIn(old_key, self.detector.entropy._blocks)
+        self.assertNotIn(new_key, self.detector.entropy._blocks)
 
 
 def build_suite(names: list[str]) -> unittest.TestSuite:
