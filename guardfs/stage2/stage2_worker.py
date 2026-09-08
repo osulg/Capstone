@@ -48,7 +48,7 @@ def load_models():
         stat = joblib.load(STATIC_MODEL_PATH)
         global STATIC_FEATURES
         STATIC_FEATURES = list(stat.feature_names_in_)
-        print(f"[ML] 정적 모델 로드 완료 ({len(STATIC_FEATURES)} features)")
+        print(f"[ML] 정적 모델 로드 완료 ({len(STATIC_FEATURES)} features)\n")
     except Exception as e:
         print(f"[ML] 정적 모델 로드 실패: {e}")
         stat = None
