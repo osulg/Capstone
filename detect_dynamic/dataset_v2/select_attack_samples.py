@@ -8,7 +8,6 @@ from pathlib import Path
 SAMPLE_ROOT = Path.home() / "malware_samples"
 OUTPUT = Path(__file__).resolve().parent / "attack_manifest_1st.csv"
 
-MAX_PER_FAMILY = 2
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
@@ -51,7 +50,7 @@ def main():
 
             candidates.append((sha256, path))
 
-        for sha256, path in candidates[:MAX_PER_FAMILY]:
+        for sha256, path in candidates:
             sample_id = f"{family}_{sha256[:8]}_001"
 
             selected.append({
@@ -61,7 +60,7 @@ def main():
                 "Root_EXE": str(path.resolve()),
                 "Raw_JSONL": f"/mnt/guardfs_logs/raw/attack/{sample_id}.jsonl",
                 "Status": "PENDING",
-                "Notes": "1st collection; x86-64; family-balanced selection",
+                "Notes": "collection candidate; x86-64; all samples",
             })
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
