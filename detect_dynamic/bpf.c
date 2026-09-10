@@ -134,13 +134,16 @@ static inline void submit_manual(
 
 
 /*
- * EXEC 진입:
- * 실행하려는 파일명을 임시 캐시에 저장.
+ * EXEC 성공:
+ * sched_process_exec은 실제 exec가 성공한 뒤 발생한다.
+ * execve뿐 아니라 성공한 실행 자체를 기준으로 X 이벤트를 만든다.
  */
-TRACEPOINT_PROBE(syscalls, sys_enter_execve)
+TRACEPOINT_PROBE(sched, sched_process_exec)
 {
     u64 id = bpf_get_current_pid_tgid();
+
     u32 tgid = id >> 32;
+    u32 tid = (u32)id;
 
     if (!is_target_uid())
         return 0;
@@ -148,71 +151,17 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execve)
     if (ignore_pid.lookup(&tgid))
         return 0;
 
-    struct exec_info_t info = {};
-
-    bpf_probe_read_user_str(
-        &info.filename,
-        sizeof(info.filename),
-        args->filename
-    );
-
-    pending_exec.update(
-        &tgid,
-        &info
-    );
-
-    return 0;
-}
-
-
-/*
- * EXEC 종료:
- * 성공한 execve만 X 이벤트로 보낸다.
- *
- * Python 쪽에서:
- * TGID -> PPID -> executable
- * 캐시를 만들 때 사용한다.
- */
-TRACEPOINT_PROBE(syscalls, sys_exit_execve)
-{
-    u64 id = bpf_get_current_pid_tgid();
-
-    u32 tgid = id >> 32;
-    u32 tid = (u32)id;
-
-    struct exec_info_t *info;
-
-    info = pending_exec.lookup(&tgid);
-
-    if (!info)
-        return 0;
-
-    /*
-     * execve 실패
-     */
-    if (args->ret < 0) {
-        pending_exec.delete(&tgid);
-        return 0;
-    }
-
-    if (ignore_pid.lookup(&tgid)) {
-        pending_exec.delete(&tgid);
-        return 0;
-    }
-
     /*
      * data_t를 stack에 만들지 않고
-     * per-CPU scratch map에서 가져온다.
+     * 기존 per-CPU scratch map을 그대로 사용한다.
      */
     u32 zero = 0;
 
     struct data_t *data =
         exec_event_scratch.lookup(&zero);
 
-    if (!data) {
-        pending_exec.delete(&tgid);
+    if (!data)
         return 0;
-    }
 
     __builtin_memset(
         data,
@@ -237,10 +186,16 @@ TRACEPOINT_PROBE(syscalls, sys_exit_execve)
         2
     );
 
-    __builtin_memcpy(
-        data->filename,
-        info->filename,
-        sizeof(data->filename)
+    /*
+     * sched_process_exec의 filename은 __data_loc char[] 필드다.
+     */
+    u32 filename_off =
+        args->data_loc_filename & 0xFFFF;
+
+    bpf_probe_read_str(
+        &data->filename,
+        sizeof(data->filename),
+        (const char *)args + filename_off
     );
 
     events.perf_submit(
@@ -248,8 +203,6 @@ TRACEPOINT_PROBE(syscalls, sys_exit_execve)
         data,
         sizeof(*data)
     );
-
-    pending_exec.delete(&tgid);
 
     return 0;
 }
