@@ -15,6 +15,15 @@ DYNAMIC_MODEL_PATH = os.path.join(
     "best_model.pkl",
 )
 
+DYNAMIC_SCALER_PATH = os.path.join(
+    PROJECT_ROOT,
+    "models",
+    "dynamic",
+    "dataset",
+    "csv_files",
+    "scaler.pkl",
+)
+
 STATIC_MODEL_PATH = os.path.join(
     PROJECT_ROOT,
     "models",
