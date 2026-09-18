@@ -136,7 +136,7 @@ async def stats_collector(
                         feature_row = st.to_feature_row()
 
                         suspicious = (
-                            feature_row["E_sum"] >= 1
+                            feature_row["W_sum"] >= 5
                             or feature_row["D_sum"] >= D_TH
                             or feature_row["C_sum"] >= C_TH
                         )
@@ -147,7 +147,7 @@ async def stats_collector(
                                 f"O_sum={feature_row['O_sum']} "
                                 f"C_sum={feature_row['C_sum']} "
                                 f"D_sum={feature_row['D_sum']} "
-                                f"E_sum={feature_row['E_sum']}"
+                                f"W_sum={feature_row['W_sum']}"
                             )
 
                             await ops.mark_suspect(
@@ -593,8 +593,10 @@ async def stage2_worker(recv_chan, ops: "Passthrough"):
     # -----------------------
     # 모델 로드
     # -----------------------
-    dynamic_model = joblib.load("detect_dynamic/dataset/csv_files/best_model.pkl")
-    dynamic_scaler = joblib.load("detect_dynamic/dataset/csv_files/scaler.pkl")
+    import json
+    dynamic_model = joblib.load("detect_dynamic/dataset_v2/results_v2_2nd/rf_model_v2.pkl")
+    with open("detect_dynamic/dataset_v2/results_v2_2nd/feature_cols_v2.json") as _f:
+        dynamic_feature_cols = json.load(_f)
 
     static_model = joblib.load("final_rf_model.pkl")
 
@@ -629,11 +631,10 @@ async def stage2_worker(recv_chan, ops: "Passthrough"):
             # -----------------------
             # 1. Dynamic ML
             # -----------------------
-            X_dynamic = pd.DataFrame([features])
-            X_dynamic_scaled = dynamic_scaler.transform(X_dynamic.values)
+            X_dynamic = pd.DataFrame([features]).reindex(columns=dynamic_feature_cols, fill_value=0)
 
-            dynamic_pred = dynamic_model.predict(X_dynamic_scaled)[0]
-            dynamic_prob = dynamic_model.predict_proba(X_dynamic_scaled)[0][1]
+            dynamic_pred = dynamic_model.predict(X_dynamic)[0]
+            dynamic_prob = dynamic_model.predict_proba(X_dynamic)[0][1]
 
             # -----------------------
             # 2. Static ML
@@ -686,14 +687,19 @@ async def stage2_worker(recv_chan, ops: "Passthrough"):
 
 class PidStats:
     FEATURE_COLS = [
-        "O_sum", "C_sum", "D_sum", "E_sum",
-        "Is_System_Path", "Is_Test_Path", "is_dev",
+        "O_sum", "C_sum", "D_sum", "W_sum",
         "CCC", "CCD", "CCO", "CDC", "CDD", "CDO",
         "COC", "COD", "COO", "DCC", "DCD", "DCO",
         "DDC", "DDD", "DDO", "DOC", "DOD", "DOO",
-        "EEE", "EEO", "EOE", "EOO", "OCC", "OCD",
-        "OCO", "ODC", "ODD", "ODO", "OEE", "OOC",
-        "OOD", "OOO"
+        "OCC", "OCD", "OCO", "ODC", "ODD", "ODO",
+        "OOC", "OOD", "OOO",
+        "WCC", "WCD", "WCO", "WCW", "WDC", "WDD",
+        "WDO", "WDW", "WOC", "WOD", "WOO", "WOW",
+        "WWC", "WWD", "WWO", "WWW",
+        "CWC", "CWD", "CWO", "CWW", "DWC", "DWD",
+        "DWO", "DWW", "OWC", "OWD", "OWO", "OWW",
+        "CCW", "CDW", "COW", "DCW", "DDW", "DOW",
+        "OCW", "ODW", "OOW"
     ]
 
     def __init__(self):
@@ -706,7 +712,7 @@ class PidStats:
 
     def mean_entropy(self) -> float:
         # 기존 stat_anomaly 조건에서 쓰이므로 임시 유지
-        return float(self.counts["E_sum"])
+        return float(self.counts["W_sum"])
 
     def _map_event(self, ev):
         """
@@ -722,10 +728,10 @@ class PidStats:
         if ev.op in ("unlink", "rmdir"):
             return "D"
 
-        if ev.op == "write" and ev.entropy is not None and ev.entropy >= 7.0:
-            return "E"
+        if ev.op == "write":
+            return "W"
 
-        if ev.op in ("open", "read", "write", "lookup", "release", "rename"):
+        if ev.op in ("open", "read", "lookup", "release", "rename"):
             return "O"
 
         return None
