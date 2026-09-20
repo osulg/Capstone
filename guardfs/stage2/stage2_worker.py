@@ -113,16 +113,19 @@ def predict_dynamic(model, cols, features: dict) -> float:
         return 0.5
 
 
-def predict_static(analyzer, pid: int) -> float:
+def predict_static(analyzer, pid: int, exe_path: str = "") -> float:
     """
     byte 3-gram 정적 분석. 분석 불가(ELF 아님/접근 불가)면 0.5 반환
     (기존 worker의 sentinel 규약 유지: 0.5 = 판단 불가 → stat_cache 폴백).
+
+    exe_path는 프로세스가 이미 종료돼 /proc/<pid>/exe 를 읽지 못할 때의
+    폴백 경로다. Passthrough._pid_exe 가 이벤트 발생 시점에 캐싱해 둔다.
     exe 단위 캐시는 analyzer 내부에서 처리된다.
     """
     if analyzer is None:
         return 0.5
     try:
-        prob = analyzer.predict_pid(pid)
+        prob = analyzer.predict_pid(pid, exe_path or None)
         return 0.5 if prob is None else prob
     except Exception as e:
         print(f"[ML] 정적 예측 오류: {e}")
@@ -152,7 +155,9 @@ async def stage2_worker(recv_chan, ops) -> None:
                 features = item.get("features") or {}
 
                 dyn_score  = predict_dynamic(dyn_model, dyn_cols, features)
-                stat_score = predict_static(stat_model, pid)
+                stat_score = predict_static(
+                    stat_model, pid, ops._pid_exe.get(pid, "")
+                )
                 if stat_score != 0.5:          # 프로세스 살아있을 때만 캐싱
                     stat_cache[pid] = stat_score
                 else:
@@ -188,7 +193,9 @@ async def stage2_worker(recv_chan, ops) -> None:
                     # 최신 피처로 ML 재평가 (stat은 캐시 우선)
                     features = ops._pid_features.get(pid, {})
                     dyn_score  = predict_dynamic(dyn_model, dyn_cols, features)
-                    stat_score = predict_static(stat_model, pid)
+                    stat_score = predict_static(
+                        stat_model, pid, ops._pid_exe.get(pid, "")
+                    )
 
                     if stat_score != 0.5:
                         stat_cache[pid] = stat_score

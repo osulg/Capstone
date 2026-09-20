@@ -94,14 +94,14 @@ async def stats_collector(
                         mean_ent = st.mean_entropy()
                         suspicious = (
                             (
-                                st.counts["O_sum"] >= STATS_WRITE_THRESHOLD
-                                and mean_ent >= STATS_E_SUM_THRESHOLD
+                            st.counts["W_sum"] >= STATS_WRITE_THRESHOLD
+                             and mean_ent >= STATS_E_SUM_THRESHOLD
                             )
                             or (
-                                st.counts["D_sum"] >= STATS_RENAME_THRESHOLD
+                            st.counts["D_sum"] >= STATS_RENAME_THRESHOLD
                             )
                             or (
-                                st.counts["D_sum"] >= STATS_UNLINK_THRESHOLD
+                            st.counts["D_sum"] >= STATS_UNLINK_THRESHOLD
                             )
                         )
 
@@ -110,8 +110,8 @@ async def stats_collector(
 
                             print(
                                 f"[SUSPICIOUS] pid={pid} "
-                                f"O_sum={st.counts['O_sum']} "
-                                f"E_sum={mean_ent:.2f} "
+                                f"W_sum={st.counts['W_sum']} "
+                                f"E_sum={mean_ent:.0f} "
                                 f"D_sum={st.counts['D_sum']}"
                             )
 
@@ -197,6 +197,10 @@ class Passthrough(pyfuse3.Operations):
         
         # Stage1이 전달한 최신 feature
         self._pid_features: Dict[int, dict] = {}
+        
+        # PID → 실행파일 경로. 정적 모델이 /proc/<pid>/exe 를 못 읽는
+        # 단명 프로세스를 위한 폴백용이다. (PID당 1회만 조회)
+        self._pid_exe: Dict[int, str] = {}
 
     # ---------------------------------- helpers ---------------------------------- #
 
@@ -257,6 +261,14 @@ class Passthrough(pyfuse3.Operations):
         return attr
 
     def _emit(self, ev: FsEvent) -> None:
+        # 프로세스가 살아있는 동안(= 이벤트 발생 시점) 한 번만 조회해 캐싱한다.
+        # Stage2가 평가하는 시점에는 이미 종료돼 읽지 못하는 경우가 많다.
+        if ev.pid > 0 and ev.pid not in self._pid_exe:
+            try:
+                self._pid_exe[ev.pid] = os.readlink(f"/proc/{ev.pid}/exe")
+            except OSError:
+                self._pid_exe[ev.pid] = ""
+
         try:
             self._send_chan.send_nowait(ev)
         except trio.WouldBlock:
@@ -910,93 +922,84 @@ class Passthrough(pyfuse3.Operations):
                 pass
 
 class PidStats:
+    # 동적 모델 v2(rf_model_v2.pkl)의 입력 피처. 순서/내용이
+    # models/dynamic/feature_cols_v2.json 과 반드시 일치해야 한다.
     FEATURE_COLS = [
-        "O_sum", "C_sum", "D_sum", "E_sum",
-        "Is_System_Path", "Is_Test_Path", "is_dev",
+        "O_sum", "C_sum", "D_sum", "W_sum",
         "CCC", "CCD", "CCO", "CDC", "CDD", "CDO",
         "COC", "COD", "COO", "DCC", "DCD", "DCO",
         "DDC", "DDD", "DDO", "DOC", "DOD", "DOO",
-        "EEE", "EEO", "EOE", "EOO", "OCC", "OCD",
-        "OCO", "ODC", "ODD", "ODO", "OEE", "OOC",
-        "OOD", "OOO"
+        "OCC", "OCD", "OCO", "ODC", "ODD", "ODO",
+        "OOC", "OOD", "OOO",
+        "WCC", "WCD", "WCO", "WCW", "WDC", "WDD",
+        "WDO", "WDW", "WOC", "WOD", "WOO", "WOW",
+        "WWC", "WWD", "WWO", "WWW",
+        "CWC", "CWD", "CWO", "CWW", "DWC", "DWD",
+        "DWO", "DWW", "OWC", "OWD", "OWO", "OWW",
+        "CCW", "CDW", "COW", "DCW", "DDW", "DOW",
+        "OCW", "ODW", "OOW",
     ]
 
     def __init__(self):
-        self.counts = {
-            col: 0
-            for col in self.FEATURE_COLS
-        }
-        self.seq = []   # 최근 O/C/D/E 이벤트 흐름 저장
+        self.counts = {col: 0 for col in self.FEATURE_COLS}
+        self.seq = []       # 최근 O/C/D/W 이벤트 흐름
+        # 고엔트로피 write 누적. ML 피처가 아니라 Stage1 게이트 전용이다.
+        # (모델 v2는 엔트로피를 피처로 쓰지 않으므로 FEATURE_COLS 밖에 둔다)
+        self.e_sum = 0
 
     def reset(self) -> None:
         self.__init__()
 
     def mean_entropy(self) -> float:
-        # 기존 stat_anomaly 조건에서 쓰이므로 임시 유지
-        return float(self.counts["E_sum"])
+        # stats_collector의 stat_anomaly 게이트에서 사용.
+        # W_sum이 아니라 반드시 고엔트로피 write 카운트를 반환해야 한다.
+        return float(self.e_sum)
 
     def _map_event(self, ev):
         """
-        CSV feature 기준으로 이벤트를 O/C/D/E로 변환
-        O = open/read/write 계열 파일 접근
+        이벤트를 모델 v2의 O/C/D/W 코드로 변환한다.
+        O = open/read/lookup/release/rename 계열 접근
         C = create/mkdir 계열 생성
         D = unlink/rmdir 계열 삭제
-        E = entropy high write 또는 suspicious encryption-like event
+        W = write (엔트로피와 무관하게 전부 W)
         """
-        
         if ev.op in ("create", "mkdir"):
             return "C"
 
         if ev.op in ("unlink", "rmdir"):
             return "D"
 
-        if (
-            ev.op == "write"
-            and ev.entropy is not None
-            and ev.entropy >= ENTROPY_THRESHOLD
-        ):
-            return "E"
+        if ev.op == "write":
+            return "W"
 
-        if ev.op in ("open", "read", "write", "lookup", "release", "rename"):
+        if ev.op in ("open", "read", "lookup", "release", "rename"):
             return "O"
 
         return None
 
     def update(self, ev) -> None:
         code = self._map_event(ev)
-        
+
         if code is None:
             return
+
+        # 게이트 전용 엔트로피 카운터 (ML 피처와 무관)
+        if (
+            code == "W"
+            and ev.entropy is not None
+            and ev.entropy >= ENTROPY_THRESHOLD
+        ):
+            self.e_sum += 1
 
         # 단일 이벤트 합계
         self.counts[f"{code}_sum"] += 1
 
-        # 경로 기반 feature
-        path = ev.path or ""
-
-        if path.startswith(
-            ("/usr", "/bin", "/sbin", "/etc")
-        ):
-            self.counts["Is_System_Path"] = 1
-        
-        path_lower = path.lower()
-
-        if (
-            "test" in path_lower
-            or "underlay" in path_lower
-            or "mnt" in path_lower
-        ):
-            self.counts["Is_Test_Path"] = 1
-
-        if "/dev/" in path:
-            self.counts["is_dev"] = 1
-
         # 3-gram sequence feature
         self.seq.append(code)
-        
+
         if len(self.seq) >= 3:
             tri = "".join(self.seq[-3:])
-            
+
             if tri in self.counts:
                 self.counts[tri] += 1
 
