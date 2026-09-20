@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
 *.jsonl
+# 단, 데이터셋 raw 보존본은 추적한다.
+# (dataset_v2/README.md 보존 정책: CSV는 raw JSONL로부터 재생성 가능해야 함)
+!models/dynamic/dataset_v2/raw/**/*.jsonl
 mnt/
 underlay/
 honeypot/
