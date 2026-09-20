@@ -10,9 +10,7 @@ DYNAMIC_MODEL_PATH = os.path.join(
     PROJECT_ROOT,
     "models",
     "dynamic",
-    "dataset",
-    "csv_files",
-    "best_model.pkl",
+    "rf_model_v2.pkl",
 )
 
 STATIC_MODEL_PATH = os.path.join(
@@ -27,6 +25,15 @@ STATIC_VOCAB_PATH = os.path.join(
     "models",
     "static",
     "byte_ngram_vocab_n3_k1000.json",
+)
+
+# 동적 모델 v2의 입력 피처 순서(68개, W-event scheme).
+# 모델 pkl의 feature_names_in_ 과 반드시 일치해야 한다.
+DYNAMIC_FEATURE_COLS_PATH = os.path.join(
+    PROJECT_ROOT,
+    "models",
+    "dynamic",
+    "feature_cols_v2.json",
 )
 
 # ========== Runtime ========== #
