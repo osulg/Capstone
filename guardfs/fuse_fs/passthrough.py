@@ -941,14 +941,26 @@ class PidStats:
     ]
 
     def __init__(self):
+        # 1초 윈도우 카운터. stats_collector의 stat_anomaly 게이트 전용이며
+        # 매 윈도우마다 reset()으로 초기화된다.
         self.counts = {col: 0 for col in self.FEATURE_COLS}
-        self.seq = []       # 최근 O/C/D/W 이벤트 흐름
-        # 고엔트로피 write 누적. ML 피처가 아니라 Stage1 게이트 전용이다.
-        # (모델 v2는 엔트로피를 피처로 쓰지 않으므로 FEATURE_COLS 밖에 둔다)
+
+        # 프로세스 생애 누적 카운터. ML 입력 전용이며 reset()에서 유지된다.
+        # 학습 데이터(dataset_v2_4th_clean.csv)가 프로세스 단위 누적
+        # 집계이므로, 추론도 동일하게 누적값을 넣어야 분포가 맞는다.
+        self.total = {col: 0 for col in self.FEATURE_COLS}
+
+        # 이벤트 흐름. 3-gram이 윈도우 경계에서 끊기지 않도록 reset()에서 유지한다.
+        self.seq = []
+
+        # 고엔트로피 write 누적. ML 피처가 아니라 Stage1 게이트 전용이므로
+        # 윈도우 단위로 초기화된다. (모델 v2는 엔트로피를 피처로 쓰지 않음)
         self.e_sum = 0
 
     def reset(self) -> None:
-        self.__init__()
+        """1초 윈도우 종료 시 호출. 게이트용 카운터만 초기화한다."""
+        self.counts = {col: 0 for col in self.FEATURE_COLS}
+        self.e_sum = 0
 
     def mean_entropy(self) -> float:
         # stats_collector의 stat_anomaly 게이트에서 사용.
@@ -991,8 +1003,10 @@ class PidStats:
         ):
             self.e_sum += 1
 
-        # 단일 이벤트 합계
-        self.counts[f"{code}_sum"] += 1
+        # 단일 이벤트 합계 (윈도우 + 누적)
+        key = f"{code}_sum"
+        self.counts[key] += 1
+        self.total[key] += 1
 
         # 3-gram sequence feature
         self.seq.append(code)
@@ -1002,17 +1016,22 @@ class PidStats:
 
             if tri in self.counts:
                 self.counts[tri] += 1
+                self.total[tri] += 1
 
         # 최근 100개 이벤트만 유지
         if len(self.seq) > 100:
             self.seq = self.seq[-100:]
 
     def to_feature_row(self) -> dict:
+        """
+        ML 입력 행. 학습 데이터와 동일하게 생애 누적값을 반환한다.
+        (게이트가 참조하는 self.counts 와 혼동하지 말 것)
+        """
         return {
-            col: self.counts.get(col, 0)
+            col: self.total.get(col, 0)
             for col in self.FEATURE_COLS
         }
-
+        
 async def main(mountpoint: str, root: str):
     honeypot_dir = get_honeypot_dir(root)
     
