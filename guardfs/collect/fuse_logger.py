@@ -15,6 +15,7 @@ eBPF 수집기와 공유하는 스키마로 한 줄에 이벤트 하나를 JSONL
     size     : READ / WRITE / TRUNCATE 바이트 수
     offset   : READ / WRITE 오프셋
     entropy  : WRITE 버퍼 앞 ENTROPY_HEADER_SIZE 바이트의 Shannon 엔트로피
+    in_target: 수집 대상(마운트) 안의 경로인지. FUSE는 항상 true
 """
 
 import json
@@ -59,7 +60,7 @@ class FuseCollectLogger:
 
         self.run_id = run_id
         self.log_path = os.path.join(log_dir, f"{run_id}.fuse.jsonl")
-        self.meta_path = os.path.join(log_dir, f"{run_id}.meta.json")
+        self.meta_path = os.path.join(log_dir, f"{run_id}.fuse.meta.json")
 
         self._root = os.path.realpath(underlay)
         self._identity_cache = {}
@@ -125,6 +126,7 @@ class FuseCollectLogger:
             "size": ev.size if ev.op in _SIZED_OPS else None,
             "offset": ev.off if ev.off >= 0 else None,
             "entropy": round(ev.entropy, 4) if ev.entropy is not None else None,
+            "in_target": True,
         }
 
         self._f.write(json.dumps(record) + "\n")
