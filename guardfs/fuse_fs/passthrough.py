@@ -750,22 +750,82 @@ class Passthrough(pyfuse3.Operations):
         fh,
         ctx=None,
     ):
-        if not fields.update_size:
-            raise pyfuse3.FUSEError(errno.ENOSYS)
+        if fields.update_size:
+            if fh is None:
+                await self.truncate(
+                    inode,
+                    attr.st_size,
+                    ctx,
+                )
+            else:
+                await self.ftruncate(
+                    fh,
+                    attr.st_size,
+                )
 
-        if fh is None:
-            await self.truncate(
-                inode,
-                attr.st_size,
-                ctx,
-            )
-        else:
-            await self.ftruncate(
-                fh,
-                attr.st_size,
-            )
+        if (
+            fields.update_mode
+            or fields.update_uid
+            or fields.update_gid
+            or fields.update_atime
+            or fields.update_mtime
+        ):
+            await self._set_metadata(inode, attr, fields, ctx)
 
         return await self.getattr(inode, ctx)
+
+    async def _set_metadata(self, inode, attr, fields, ctx=None):
+        """chmod / chown / utimens. ctime은 커널이 갱신하므로 따로 설정하지 않는다."""
+        p = self._inode_path.get(inode)
+
+        if p is None:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        pid = ctx.pid if ctx is not None else -1
+
+        if await self.get_proc_state(pid) == ProcState.HIGH:
+            from guardfs.stage2.policy.high import handle_setattr_high
+
+            if fields.update_mode:
+                await handle_setattr_high(p, f"CHMOD(mode={stat_mod.S_IMODE(attr.st_mode):o})", pid, self)
+            if fields.update_uid or fields.update_gid:
+                await handle_setattr_high(p, "CHOWN", pid, self)
+            if fields.update_atime or fields.update_mtime:
+                await handle_setattr_high(p, "UTIME", pid, self)
+            return
+
+        try:
+            if fields.update_mode:
+                os.chmod(p, stat_mod.S_IMODE(attr.st_mode))
+
+            if fields.update_uid or fields.update_gid:
+                os.chown(
+                    p,
+                    attr.st_uid if fields.update_uid else -1,
+                    attr.st_gid if fields.update_gid else -1,
+                    follow_symlinks=False,
+                )
+
+            if fields.update_atime or fields.update_mtime:
+                st = os.lstat(p)
+                os.utime(
+                    p,
+                    ns=(
+                        attr.st_atime_ns if fields.update_atime else st.st_atime_ns,
+                        attr.st_mtime_ns if fields.update_mtime else st.st_mtime_ns,
+                    ),
+                    follow_symlinks=False,
+                )
+        except OSError as e:
+            raise pyfuse3.FUSEError(e.errno)
+
+        if fields.update_mode:
+            self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="chmod", path=p,
+                               flags=stat_mod.S_IMODE(attr.st_mode)))
+        if fields.update_uid or fields.update_gid:
+            self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="chown", path=p))
+        if fields.update_atime or fields.update_mtime:
+            self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="utime", path=p))
 
 
     async def truncate(self, inode, size, ctx=None):

@@ -150,6 +150,29 @@ async def handle_truncate_high(
     print(f"[HIGH] pid={pid} path={path} truncate 차단")
 
 
+async def handle_setattr_high(
+    path: str,
+    action: str,
+    pid: int,
+    ops,
+) -> None:
+    process = get_process_name(pid)
+    reason = ops._high_reason.get(pid, "High-risk process detected")
+
+    log_high_event(
+        pid=pid,
+        process=process,
+        path=path,
+        action=action,
+        result="BLOCKED",
+        reason=reason,
+    )
+
+    suspend_process_once(pid, ops)
+
+    print(f"[HIGH] pid={pid} path={path} {action} 차단")
+
+
 async def handle_high_enter(pid: int, ops, reason: str = "") -> None:
     """
     HIGH 진입 시 정리 작업.
