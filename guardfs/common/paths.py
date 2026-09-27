@@ -53,6 +53,13 @@ def get_event_log_path(root: str) -> str:
         "guardfs_log.jsonl",
     )
 
+# 수집 모드 로그. mount/underlay 바깥에 두어 수집 대상에 섞이지 않게 한다.
+def get_collect_log_dir(root: str) -> str:
+    return os.path.join(
+        os.path.dirname(os.path.realpath(root)),
+        "collect",
+    )
+
 # ========== Honeypot ========== #
 
 def get_honeypot_dir(root: str) -> str:

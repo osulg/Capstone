@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import argparse
 import errno
 import os
 import stat as stat_mod
@@ -29,9 +30,15 @@ from guardfs.common.config import (
 from guardfs.common.paths import (
     PID_OVERRIDE_FILE,
     STAGING_DIR,
+    get_collect_log_dir,
     get_event_log_path,
     get_forced_state_path,
     get_honeypot_dir,
+)
+from guardfs.collect.fuse_logger import (
+    RUN_ID_PATTERN,
+    FuseCollectLogger,
+    new_run_id,
 )
 from guardfs.stage1.detector import Stage1Detector
 from guardfs.stage1.entropy import shannon_entropy
@@ -151,9 +158,12 @@ async def stats_collector(
 class Passthrough(pyfuse3.Operations):
     """underlay에 파일 연산을 전달하고 탐지 상태에 따라 정책을 적용한다."""
     
-    def __init__(self, root: str):
+    def __init__(self, root: str, collect_logger: Optional[FuseCollectLogger] = None):
         super().__init__()
         self.root = os.path.realpath(root)
+
+        # 수집 모드: 탐지·차단 정책 없이 모든 이벤트를 collect_logger에 기록한다.
+        self._collect = collect_logger
 
         self._inode_path: Dict[int, str] = {
             pyfuse3.ROOT_INODE: self.root
@@ -206,7 +216,10 @@ class Passthrough(pyfuse3.Operations):
 
     def _get_forced_state(self, pid: int) -> Optional[ProcState]:
         """override 파일 있으면 해당 상태, 없으면 None (실제 ML 탐지 모드)"""
-        
+
+        if self._collect is not None:
+            return None
+
         try:
             with open(get_forced_state_path(pid), "r") as f:
                 s = f.read().strip().upper()
@@ -261,6 +274,12 @@ class Passthrough(pyfuse3.Operations):
         return attr
 
     def _emit(self, ev: FsEvent) -> None:
+        # 수집 모드는 채널을 거치지 않고 동기 기록한다. 채널이 가득 차면
+        # 이벤트가 버려지는데, 수집 데이터에서는 유실이 허용되지 않는다.
+        if self._collect is not None:
+            self._collect.write(ev)
+            return
+
         # 프로세스가 살아있는 동안(= 이벤트 발생 시점) 한 번만 조회해 캐싱한다.
         # Stage2가 평가하는 시점에는 이미 종료돼 읽지 못하는 경우가 많다.
         if ev.pid > 0 and ev.pid not in self._pid_exe:
@@ -1032,42 +1051,91 @@ class PidStats:
             for col in self.FEATURE_COLS
         }
         
-async def main(mountpoint: str, root: str):
+async def main(
+    mountpoint: str,
+    root: str,
+    collect_logger: Optional[FuseCollectLogger] = None,
+):
     honeypot_dir = get_honeypot_dir(root)
-    
-    ops = Passthrough(root)
-    
+
+    ops = Passthrough(root, collect_logger)
+
     pyfuse3.init(
         ops,
         mountpoint,
         set()
     )
-    
+
     try:
         async with trio.open_nursery() as nursery:
-            nursery.start_soon(
-                stats_collector,
-                ops._recv_chan,
-                ops._log_path,
-                honeypot_dir,
-                ops,
-            )
-            
-            nursery.start_soon(
-                stage2_worker,
-                ops._stage2_recv,
-                ops
-            )
-            
+            # 수집 모드에서는 Stage 1 판정과 Stage 2(ML·정책)를 띄우지 않는다.
+            # 차단이 걸리면 샘플이 끝까지 실행되지 않아 로그가 불완전해진다.
+            if collect_logger is None:
+                nursery.start_soon(
+                    stats_collector,
+                    ops._recv_chan,
+                    ops._log_path,
+                    honeypot_dir,
+                    ops,
+                )
+
+                nursery.start_soon(
+                    stage2_worker,
+                    ops._stage2_recv,
+                    ops
+                )
+
             await pyfuse3.main()
-            
+
     finally:
         pyfuse3.close(unmount=True)
 
 
+def _run_id_arg(value: str) -> str:
+    if not RUN_ID_PATTERN.match(value):
+        raise argparse.ArgumentTypeError("영문, 숫자, '.', '_', '-'만 사용할 수 있습니다")
+    return value
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="GuardFS FUSE passthrough")
+    parser.add_argument("mountpoint")
+    parser.add_argument("underlay")
+    parser.add_argument(
+        "--collect-only",
+        action="store_true",
+        help="탐지·차단 정책 없이 파일 이벤트만 기록하는 데이터 수집 모드",
+    )
+    parser.add_argument(
+        "--run-id",
+        type=_run_id_arg,
+        help="수집 세션 ID (--collect-only 전용, 생략 시 자동 생성)",
+    )
+
+    args = parser.parse_args()
+
+    if args.run_id and not args.collect_only:
+        parser.error("--run-id는 --collect-only와 함께 사용해야 합니다")
+
+    return args
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python passthrough.py <MOUNTPOINT> <UNDERLAY>")
-        sys.exit(2)
-        
-    trio.run(main, sys.argv[1], sys.argv[2])
+    args = parse_args()
+
+    collect_logger = None
+
+    if args.collect_only:
+        collect_logger = FuseCollectLogger(
+            get_collect_log_dir(args.underlay),
+            args.run_id or new_run_id(),
+            args.mountpoint,
+            args.underlay,
+        )
+        print(f"[COLLECT] run_id={collect_logger.run_id} log={collect_logger.log_path}")
+
+    try:
+        trio.run(main, args.mountpoint, args.underlay, collect_logger)
+    finally:
+        if collect_logger is not None:
+            collect_logger.close()
