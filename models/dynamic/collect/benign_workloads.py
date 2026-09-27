@@ -113,7 +113,7 @@ def _tar_extract(workdir, files, size_kb):
 
 def _gzip_each(workdir, files, size_kb):
     src = _seed_files(workdir, files, size_kb)
-    return ["sh", "-c", f'gzip "{src}"/*.dat']
+    return ["sh", "-c", f'gzip -f "{src}"/*.dat']
 
 
 def _zip_archive(workdir, files, size_kb):

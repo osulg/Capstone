@@ -20,6 +20,7 @@ root로 실행하고, 워크로드는 --as-user 사용자 권한으로 돌리는
 import argparse
 import csv
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -46,6 +47,8 @@ def parse_args():
     p.add_argument("--sizes", default="4,256", help="파일 크기(KB) 목록")
     p.add_argument("--workloads", help="쉼표로 구분한 워크로드 이름(기본: 사용 가능한 전부)")
     p.add_argument("--timeout", type=float, default=300.0, help="워크로드 1회 최대 시간(초)")
+    p.add_argument("--cleanup", action="store_true",
+                   help="각 run 종료 후 워크로드 데이터 삭제 (로그는 유지, 디스크 절약)")
     p.add_argument("--dry-run", action="store_true", help="실행 계획만 출력")
     return p.parse_args()
 
@@ -105,6 +108,9 @@ def main():
         start_wall = time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
         try:
+            # 이전 실행(같은 run_id)이 남긴 파일을 먼저 제거한다. 안 그러면
+            # gzip/sqlite 등이 기존 파일과 충돌해 프롬프트에서 멈추거나 실패한다.
+            shutil.rmtree(workdir, ignore_errors=True)
             os.makedirs(workdir, exist_ok=True)
             command = builder(workdir, n, kb)  # 씨앗 준비 + 실행 argv
             if args.as_user:
@@ -127,6 +133,11 @@ def main():
             status = "timeout"
         except Exception as e:  # noqa: BLE001 - run 하나 실패가 전체를 멈추지 않게
             status = f"error:{type(e).__name__}:{e}"
+        finally:
+            # 로그는 이미 collect/ 에 저장됐으므로 워크로드가 만든 데이터는 지워도 된다.
+            # 수백 run에서 디스크가 계속 차오르는 것을 막는다.
+            if args.cleanup:
+                shutil.rmtree(workdir, ignore_errors=True)
 
         writer.writerow({
             "run_id": run_id, "label": "benign", "workload": name,
