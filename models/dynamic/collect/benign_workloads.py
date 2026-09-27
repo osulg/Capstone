@@ -161,8 +161,149 @@ def _sqlite_bulk(workdir, files, size_kb):
     return ["python3", "-c", inner, workdir, str(n)]
 
 
+# ---- 추가 워크로드 (실제 리눅스 프로그램, 정상 다양성 확대) ------------------ #
+
+def _bzip2_each(workdir, files, size_kb):
+    src = _seed_files(workdir, files, size_kb)
+    return ["sh", "-c", f'bzip2 -f "{src}"/*.dat']
+
+
+def _xz_each(workdir, files, size_kb):
+    src = _seed_files(workdir, files, size_kb)
+    return ["sh", "-c", f'xz -f "{src}"/*.dat']
+
+
+def _zstd_each(workdir, files, size_kb):
+    src = _seed_files(workdir, files, size_kb)
+    return ["sh", "-c", f'zstd -f -q --rm "{src}"/*.dat']
+
+
+def _gpg_symmetric(workdir, files, size_kb):
+    """정상 대칭 암호화 — 고엔트로피 출력이 정상 작업에서도 나옴을 학습(핵심 대조군)."""
+    src = _seed_files(workdir, files, size_kb)
+    return ["sh", "-c",
+            f'for f in "{src}"/*.dat; do gpg --batch --yes --passphrase x -c "$f"; done']
+
+
+def _openssl_enc(workdir, files, size_kb):
+    """정상 파일 암호화 (openssl). 랜섬웨어와 표면적으로 가장 닮은 정상 작업."""
+    src = _seed_files(workdir, files, size_kb)
+    return ["sh", "-c",
+            f'for f in "{src}"/*.dat; do openssl enc -aes-256-cbc -pbkdf2 '
+            f'-pass pass:x -in "$f" -out "$f.enc"; done']
+
+
+def _shred_delete(workdir, files, size_kb):
+    """보안 삭제 — 덮어쓰기 후 삭제. 랜섬웨어의 원본 파괴와 표면적으로 유사한 정상 작업."""
+    src = _seed_files(workdir, files, size_kb)
+    return ["sh", "-c", f'shred -u -n 1 "{src}"/*.dat']
+
+
+def _cp_archive(workdir, files, size_kb):
+    src = _seed_files(workdir, files, size_kb)
+    return ["cp", "-a", src, os.path.join(workdir, "archive")]
+
+
+def _rsync_mirror(workdir, files, size_kb):
+    src = _seed_files(workdir, files, size_kb) + "/"
+    return ["rsync", "-a", src, os.path.join(workdir, "mirror") + "/"]
+
+
+def _sha256_all(workdir, files, size_kb):
+    src = _seed_files(workdir, files, size_kb)
+    return ["sh", "-c", f'find "{src}" -type f -exec sha256sum {{}} + > "{workdir}/hashes.txt"']
+
+
+def _grep_recursive(workdir, files, size_kb):
+    src = _seed_tree(workdir, files, size_kb)
+    return ["sh", "-c", f'grep -r "fox" "{src}" > "{workdir}/matches.txt" || true']
+
+
+def _find_chmod(workdir, files, size_kb):
+    """대량 권한 변경 — 랜섬웨어가 종종 하는 chmod를 정상 맥락(배포 준비 등)으로."""
+    src = _seed_files(workdir, files, size_kb)
+    return ["sh", "-c", f'find "{src}" -type f -exec chmod 600 {{}} +']
+
+
+def _sort_large(workdir, files, size_kb):
+    src = _seed_files(workdir, files, size_kb)
+    return ["sh", "-c",
+            f'cat "{src}"/*.dat | sort > "{workdir}/sorted.txt"']
+
+
+def _split_join(workdir, files, size_kb):
+    """큰 파일을 조각내고 다시 합치기 — 다운로드/전송 도구의 전형적 I/O."""
+    big = os.path.join(workdir, "big.bin")
+    _write_random(big, max(files * size_kb, 1024))
+    out = os.path.join(workdir, "parts")
+    os.makedirs(out, exist_ok=True)
+    return ["sh", "-c",
+            f'split -b 64k "{big}" "{out}/part_" && cat "{out}"/part_* > "{workdir}/joined.bin"']
+
+
+def _base64_roundtrip(workdir, files, size_kb):
+    src = _seed_files(workdir, files, size_kb)
+    return ["sh", "-c",
+            f'for f in "{src}"/*.dat; do base64 "$f" > "$f.b64"; base64 -d "$f.b64" > "$f.dec"; done']
+
+
+def _dd_copy(workdir, files, size_kb):
+    big = os.path.join(workdir, "src.bin")
+    _write_random(big, max(files * size_kb, 512))
+    return ["dd", f"if={big}", f"of={os.path.join(workdir, 'copy.bin')}", "bs=64k"]
+
+
+def _gcc_compile(workdir, files, size_kb):
+    """여러 소스 컴파일 — 개발 워크플로의 대량 파일 생성/링크."""
+    src = os.path.join(workdir, "src")
+    os.makedirs(src, exist_ok=True)
+    n = max(min(files, 50), 3)
+    for i in range(n):
+        with open(os.path.join(src, f"mod{i}.c"), "w") as f:
+            f.write(f"int f{i}(int x){{return x*{i}+{i};}}\n")
+    with open(os.path.join(src, "main.c"), "w") as f:
+        f.write("int main(void){return 0;}\n")
+    return ["sh", "-c",
+            f'cd "{src}" && for c in mod*.c; do gcc -c "$c" -o "${{c%.c}}.o"; done && '
+            f'gcc main.c mod*.o -o "{workdir}/app"']
+
+
+def _pandoc_convert(workdir, files, size_kb):
+    src = os.path.join(workdir, "docs")
+    os.makedirs(src, exist_ok=True)
+    n = max(min(files, 50), 3)
+    for i in range(n):
+        with open(os.path.join(src, f"doc{i}.md"), "w") as f:
+            f.write(f"# Title {i}\n\n" + ("Some **markdown** text. " * 50) + "\n")
+    return ["sh", "-c",
+            f'for m in "{src}"/*.md; do pandoc "$m" -o "${{m%.md}}.html"; done']
+
+
+def _imagemagick_convert(workdir, files, size_kb):
+    src = os.path.join(workdir, "img")
+    os.makedirs(src, exist_ok=True)
+    n = max(min(files, 50), 3)
+    gen = " ".join(
+        f'convert -size 128x128 xc:gray "{src}/i{i}.png";' for i in range(n))
+    return ["sh", "-c",
+            f'{gen} for p in "{src}"/*.png; do convert "$p" "${{p%.png}}.jpg"; done']
+
+
+def _ffmpeg_transcode(workdir, files, size_kb):
+    src = os.path.join(workdir, "audio")
+    os.makedirs(src, exist_ok=True)
+    n = max(min(files, 20), 2)
+    gen = " ".join(
+        f'ffmpeg -y -f lavfi -i "sine=frequency={220 + i * 20}:duration=1" '
+        f'"{src}/a{i}.wav" 2>/dev/null;' for i in range(n))
+    return ["sh", "-c",
+            f'{gen} for w in "{src}"/*.wav; do ffmpeg -y -i "$w" '
+            f'"${{w%.wav}}.flac" 2>/dev/null; done']
+
+
 # name -> (needs, command_builder)
 WORKLOADS = {
+    # 기존 15종
     "bulk_copy":        (["cp"], _bulk_copy),
     "bulk_copy_p":      (["cp"], _bulk_copy_preserve),
     "bulk_move":        (["mv"], _bulk_move),
@@ -178,6 +319,31 @@ WORKLOADS = {
     "random_write":     (["python3"], _random_bulk_write),
     "git_checkout":     (["git"], _git_checkout),
     "sqlite_bulk":      (["python3"], _sqlite_bulk),
+    # 추가: 압축
+    "bzip2_each":       (["bzip2"], _bzip2_each),
+    "xz_each":          (["xz"], _xz_each),
+    "zstd_each":        (["zstd"], _zstd_each),
+    # 추가: 정상 암호화 (고엔트로피 대조군 — 매우 중요)
+    "gpg_symmetric":    (["gpg"], _gpg_symmetric),
+    "openssl_enc":      (["openssl"], _openssl_enc),
+    # 추가: 파일 파괴/변경 (랜섬웨어와 표면적으로 유사한 정상)
+    "shred_delete":     (["shred"], _shred_delete),
+    "find_chmod":       (["find", "chmod"], _find_chmod),
+    # 추가: 복사/동기화
+    "cp_archive":       (["cp"], _cp_archive),
+    "rsync_mirror":     (["rsync"], _rsync_mirror),
+    "dd_copy":          (["dd"], _dd_copy),
+    "split_join":       (["split", "cat"], _split_join),
+    # 추가: 대량 텍스트/해시 처리
+    "sha256_all":       (["find", "sha256sum"], _sha256_all),
+    "grep_recursive":   (["grep"], _grep_recursive),
+    "sort_large":       (["sort"], _sort_large),
+    "base64_roundtrip": (["base64"], _base64_roundtrip),
+    # 추가: 개발/문서/미디어 변환
+    "gcc_compile":      (["gcc"], _gcc_compile),
+    "pandoc_convert":   (["pandoc"], _pandoc_convert),
+    "imagemagick":      (["convert"], _imagemagick_convert),
+    "ffmpeg_transcode": (["ffmpeg"], _ffmpeg_transcode),
 }
 
 
