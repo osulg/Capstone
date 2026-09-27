@@ -147,6 +147,17 @@ def main() -> int:
         print("[collector] root 권한이 필요합니다 (sudo)", file=sys.stderr)
         return 2
 
+    fmt = "/sys/kernel/tracing/events/raw_syscalls/sys_enter/format"
+    if not os.path.exists(fmt):
+        alt = "/sys/kernel/debug/tracing/events/raw_syscalls/sys_enter/format"
+        if not os.path.exists(alt):
+            print(
+                "[collector] tracefs가 없어 tracepoint를 컴파일할 수 없습니다.\n"
+                "  먼저 마운트하세요: sudo mount -t tracefs nodev /sys/kernel/tracing",
+                file=sys.stderr,
+            )
+            return 3
+
     from bcc import BPF
 
     log_dir = args.log_dir or get_collect_log_dir(args.target_dir)
