@@ -371,7 +371,8 @@ class Passthrough(pyfuse3.Operations):
     # ---------------------------------- FUSE ops ---------------------------------- #
 
     async def access(self, inode, mode, ctx=None):
-        return
+        # pyfuse3는 반환값이 참일 때만 허용한다. None이면 chdir/access(2)가 EACCES로 실패한다.
+        return True
 
 
     async def getattr(self, inode, ctx=None):
