@@ -138,9 +138,9 @@ case "$FAMILY" in
     # --- Interlock: --directory <경로> ---
     Interlock)
         ARGS=( --directory "$TARGET" ) ;;
-    # --- Akira(akira_v2): --path <경로> [--ep <percent>] (--help로 확인) ---
+    # --- Akira(akira_v2): --path <경로> --id <Build ID 필수> --ep <percent> ---
     Akira)
-        ARGS=( --path "$TARGET" --ep 50 ) ;;
+        ARGS=( --path "$TARGET" --id "guardfs" --ep 50 ) ;;
     # --- BlackCat 계열: access-token 필요 ---
     BlackCat|blackcat)
         ARGS=( --access-token "ANY_TOKEN" -p "$TARGET" --verbose ) ;;
