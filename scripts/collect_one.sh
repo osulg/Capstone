@@ -185,9 +185,11 @@ if [ "$DO_PREP" -eq 1 ]; then
     mkdir -p "$TARGET_DIR"
     i=1
     for ext in txt doc docx pdf xls xlsx ppt pptx html ps jpg png csv json xml log bak db sql unk; do
+        f="$TARGET_DIR/file_$(printf '%02d' "$i").$ext"
         printf 'GuardFS test file\nindex=%02d\nextension=%s\nrun=%s\n' \
-            "$i" "$ext" "$RUN_ID" \
-            > "$TARGET_DIR/file_$(printf '%02d' "$i").$ext"
+            "$i" "$ext" "$RUN_ID" > "$f"
+        # 최소 크기 필터가 있는 샘플도 암호화하도록 ~64KB 랜덤 데이터로 채운다.
+        head -c 65536 /dev/urandom >> "$f" 2>/dev/null || true
         i=$((i + 1))
     done
 else
