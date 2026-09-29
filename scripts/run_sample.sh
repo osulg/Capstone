@@ -100,19 +100,55 @@ RID="${FAM_LC}_${SHA8}_$(printf '%03d' "$RUN")"
 # ---------- 실행권한 ----------
 chmod +x "$ELF" 2>/dev/null || sudo chmod +x "$ELF" || die "chmod +x 실패: $ELF"
 
-# ---------- 패밀리별 인자 (검증된 것만; 나머지는 경로 위치인자 + 경고) ----------
+# ---------- 패밀리별 인자 ----------
+# VERIFIED=1: usage 문자열 또는 팀 문서로 형식 확인됨
+# VERIFIED=0: 추정값(경고 출력) — 결과에서 "No Files Found"/이벤트 적으면 --help로 재확인
 VERIFIED=1
 case "$FAMILY" in
-    Babuk|IceFire|lockbit)  ARGS=( "$TARGET" ) ;;
-    AvosLocker)             ARGS=( 50 "$TARGET" ) ;;
-    MONTI|REvil)            ARGS=( --path "$TARGET" ) ;;
-    BlackCat|blackcat)      ARGS=( --access-token "ANY_TOKEN" -p "$TARGET" --verbose ) ;;
+    # --- 경로를 위치 인자로 받음 (usage 확인) ---
+    Babuk|IceFire|lockbit|Conti|BrainCipher)
+        ARGS=( "$TARGET" ) ;;
+    # --- AvosLocker: <스레드수> <경로> ---
+    AvosLocker)
+        ARGS=( 50 "$TARGET" ) ;;
+    # --- HelloKitty: libcrypto 심링크 + -m <n> <경로> ---
     HelloKitty)
         sudo ln -sf /lib/x86_64-linux-gnu/libcrypto.so.3 \
                     /lib/x86_64-linux-gnu/libcrypto.so 2>/dev/null || true
         ARGS=( -m 50 "$TARGET" ) ;;
-    wiper|wiper_misc)       ARGS=( ) ;;
-    *)                      ARGS=( "$TARGET" ); VERIFIED=0 ;;
+    # --- --path <경로> ---
+    MONTI|REvil)
+        ARGS=( --path "$TARGET" ) ;;
+    # --- INCRansom: --dir <경로> ---
+    INCRansom)
+        ARGS=( --dir "$TARGET" ) ;;
+    # --- Interlock: --directory <경로> ---
+    Interlock)
+        ARGS=( --directory "$TARGET" ) ;;
+    # --- BlackCat 계열: access-token 필요 ---
+    BlackCat|blackcat)
+        ARGS=( --access-token "ANY_TOKEN" -p "$TARGET" --verbose ) ;;
+    # --- wiper: 인자 없음 ---
+    wiper|wiper_misc)
+        ARGS=( ) ;;
+
+    # ===== 아래부터는 추정(미검증) — 결과 확인 필수 =====
+    # DragonForce: -paths <경로>
+    DragonForce)
+        ARGS=( -paths "$TARGET" ); VERIFIED=0 ;;
+    # Royal/BlackSuit: -path <경로> -id <32자> -ep <percent> (id 값이 필요할 수 있음)
+    Royal|BlackSuit)
+        ARGS=( -path "$TARGET" -id "00000000000000000000000000000000" -ep 50 )
+        VERIFIED=0 ;;
+    # Akira/Hive: Rust/clap — -p 추정. 정확한 형식은 '<elf> --help'로 확인 권장
+    Akira|Hive)
+        ARGS=( -p "$TARGET" ); VERIFIED=0 ;;
+    # Qilin(Agenda): --password 필수(정확한 값 필요할 수 있음) + 경로 위치인자
+    Qilin)
+        ARGS=( --password "password" "$TARGET" ); VERIFIED=0 ;;
+    # 그 외 전부: 경로 위치인자 기본값
+    *)
+        ARGS=( "$TARGET" ); VERIFIED=0 ;;
 esac
 
 echo "========================================================"
