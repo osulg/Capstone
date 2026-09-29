@@ -177,6 +177,11 @@ echo "[collect_one] 마운트 완료"
 # ----------------------------------------
 if [ "$DO_PREP" -eq 1 ]; then
     echo "[collect_one] 테스트 파일 20종 생성: $TARGET_DIR"
+    # 이전 run의 암호화 잔재/랜섬노트를 제거해 매번 깨끗한 20개로 시작한다.
+    # (잔재가 남으면 샘플이 '이미 암호화됨'으로 보고 일부만 건드린다)
+    if [ -n "$TARGET_SUBDIR" ] && [ "$TARGET_DIR" != "$MOUNT_DIR" ]; then
+        rm -rf "$TARGET_DIR"
+    fi
     mkdir -p "$TARGET_DIR"
     i=1
     for ext in txt doc docx pdf xls xlsx ppt pptx html ps jpg png csv json xml log bak db sql unk; do
