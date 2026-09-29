@@ -63,7 +63,10 @@ mapfile -t ELVES < <(ls "$FAM_DIR"/*.elf 2>/dev/null | sort)
 [ "${#ELVES[@]}" -gt 0 ] || die "$FAM_DIR 에 .elf 파일이 없음"
 
 if [ "$LIST_ONLY" -eq 1 ]; then
-    printf '%s\n' "${ELVES[@]##*/}"
+    # 각 샘플의 아키텍처를 함께 표시 (x86-64/i386만 이 VM에서 실행 가능)
+    for e in "${ELVES[@]}"; do
+        printf '%s  [%s]\n' "${e##*/}" "$(file -b "$e" 2>/dev/null | cut -d, -f1-2)"
+    done
     exit 0
 fi
 
@@ -84,6 +87,16 @@ fi
 BASENAME="$(basename "$ELF" .elf)"
 SHA8="${BASENAME:0:8}"
 FAM_LC="$(echo "$FAMILY" | tr '[:upper:]' '[:lower:]')"
+
+# 아키텍처 확인 — 이 x86-64 VM에서는 x86-64/i386만 실행 가능
+ARCH_INFO="$(file -b "$ELF" 2>/dev/null)"
+case "$ARCH_INFO" in
+    *x86-64*|*80386*) : ;;
+    *) die "이 샘플은 이 VM(x86-64)에서 실행 불가:
+       $ARCH_INFO
+       → ARM/PowerPC/MIPS/SPARC/S390 등은 qemu 에뮬레이션이나 해당 아키텍처 VM 필요.
+       같은 패밀리의 x86-64 샘플을 SHA8로 지정하세요:  run_sample.sh $FAMILY --list" ;;
+esac
 
 # ---------- run 번호 결정 (기존 로그와 충돌 회피) ----------
 if [ -n "$RUN_FORCE" ]; then
