@@ -107,10 +107,13 @@ if [ -e "$FUSE_LOG" ] || sudo test -e "$EBPF_LOG"; then
 fi
 
 # tracefs (eBPF tracepoint 컴파일에 필요)
-if [ ! -e /sys/kernel/tracing/events/raw_syscalls/sys_enter/format ] \
-   && [ ! -e /sys/kernel/debug/tracing/events/raw_syscalls/sys_enter/format ]; then
+# 경로가 root 전용이라 반드시 sudo로 확인한다. 이미 마운트돼 있으면 그대로 둔다.
+if ! sudo test -e /sys/kernel/tracing/events/raw_syscalls/sys_enter/format \
+   && ! sudo test -e /sys/kernel/debug/tracing/events/raw_syscalls/sys_enter/format; then
     echo "[collect_one] tracefs 마운트 중..."
-    sudo mount -t tracefs nodev /sys/kernel/tracing || die "tracefs 마운트 실패"
+    sudo mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null || true
+    sudo test -e /sys/kernel/tracing/events/raw_syscalls/sys_enter/format \
+        || die "tracefs를 준비할 수 없습니다"
 fi
 
 mkdir -p "$RUNTIME_DIR" "$MOUNT_DIR" "$UNDERLAY_DIR" "$HASH_DIR"
@@ -152,9 +155,12 @@ echo "  command    : ${COMMAND[*]}"
 echo "========================================================"
 
 echo "[collect_one] GuardFS 마운트(collect-only) 중..."
+# GuardFS 자체 출력([WRITE]/종료 트레이스백 등)은 터미널 대신 로그 파일로 보낸다.
+mkdir -p "$COLLECT_DIR"
+GUARDFS_LOG="$COLLECT_DIR/${RUN_ID}.guardfs.log"
 # shellcheck disable=SC1090
 ( source "$VENV_ACTIVATE"; exec python3 "$PASSTHROUGH" "$MOUNT_DIR" "$UNDERLAY_DIR" \
-      --collect-only --run-id "$RUN_ID" ) &
+      --collect-only --run-id "$RUN_ID" ) >"$GUARDFS_LOG" 2>&1 &
 GUARDFS_PID=$!
 
 # 마운트 완료 대기 (최대 15초)
@@ -211,7 +217,9 @@ echo "[collect_one] 수집기 종료 (rc=$COLLECTOR_RC)"
 # 4) 실행 후 해시 + 변경 요약
 # ----------------------------------------
 AFTER_HASH="$HASH_DIR/${RUN_ID}_after.sha256"
-( cd "$TARGET_DIR" && sudo find . -type f -exec sha256sum {} + 2>/dev/null | sort ) > "$AFTER_HASH"
+# FUSE 마운트는 소유 사용자만 접근 가능하므로 before와 동일하게 일반 권한으로 읽는다.
+# (sudo로 읽으면 root가 마운트에 접근 못 해 0개로 나오는 오탐이 생긴다.)
+( cd "$TARGET_DIR" && find . -type f -exec sha256sum {} + 2>/dev/null | sort ) > "$AFTER_HASH"
 
 echo ""
 echo "=== 파일 변경 요약 ==="
