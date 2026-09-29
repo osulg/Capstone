@@ -125,6 +125,9 @@ case "$FAMILY" in
     # --- Interlock: --directory <경로> ---
     Interlock)
         ARGS=( --directory "$TARGET" ) ;;
+    # --- Akira(akira_v2): --path <경로> [--ep <percent>] (--help로 확인) ---
+    Akira)
+        ARGS=( --path "$TARGET" --ep 50 ) ;;
     # --- BlackCat 계열: access-token 필요 ---
     BlackCat|blackcat)
         ARGS=( --access-token "ANY_TOKEN" -p "$TARGET" --verbose ) ;;
@@ -140,10 +143,10 @@ case "$FAMILY" in
     Royal|BlackSuit)
         ARGS=( -path "$TARGET" -id "00000000000000000000000000000000" -ep 50 )
         VERIFIED=0 ;;
-    # Akira/Hive: Rust/clap — -p 추정. 정확한 형식은 '<elf> --help'로 확인 권장
-    Akira|Hive)
-        ARGS=( -p "$TARGET" ); VERIFIED=0 ;;
-    # Qilin(Agenda): --password 필수(정확한 값 필요할 수 있음) + 경로 위치인자
+    # Hive: -u <login>:<password> 필수. 피해자별 생성 값이라 더미는 실패할 수 있음
+    Hive)
+        ARGS=( -u guest:guest "$TARGET" ); VERIFIED=0 ;;
+    # Qilin(Agenda): --password 필수. 일부 샘플은 non-x86-64라 실행 불가(file로 확인)
     Qilin)
         ARGS=( --password "password" "$TARGET" ); VERIFIED=0 ;;
     # 그 외 전부: 경로 위치인자 기본값
