@@ -55,6 +55,14 @@ UNDERLAY_DIR="$RUNTIME_DIR/underlay"
 COLLECT_DIR="$RUNTIME_DIR/collect"
 HASH_DIR="$RUNTIME_DIR/hashes"
 
+# eBPF 로그 격리 폴더.
+# Gunra 같은 광범위 스캔형 랜섬웨어는 홈 디렉터리를 통째로 암호화하므로
+# ~/guardfs_runtime/collect 에 둔 로그가 실행 중 파괴될 수 있다.
+# eBPF 수집기는 root(sudo)로 돌기 때문에, root 전용(700) 폴더에 로그를 쓰면
+# --as-user 로 도는(=infected 권한) 악성코드가 .ENCRT 생성/원본 삭제를 못 한다.
+# 워크로드 종료 후 일반 폴더로 회수한다(아래 3.5 단계).
+PROTECTED_LOG_DIR="/var/log/guardfs"
+
 usage() {
     sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
@@ -101,8 +109,8 @@ TARGET_DIR="$MOUNT_DIR/$TARGET_SUBDIR"
 
 # 이미 존재하는 run_id 로그는 수집기가 거부하므로 미리 확인
 FUSE_LOG="$COLLECT_DIR/${RUN_ID}.fuse.jsonl"
-EBPF_LOG="$COLLECT_DIR/${RUN_ID}.ebpf.jsonl"
-if [ -e "$FUSE_LOG" ] || sudo test -e "$EBPF_LOG"; then
+EBPF_LOG="$PROTECTED_LOG_DIR/${RUN_ID}.ebpf.jsonl"
+if [ -e "$FUSE_LOG" ] || [ -e "$COLLECT_DIR/${RUN_ID}.ebpf.jsonl" ] || sudo test -e "$EBPF_LOG"; then
     die "이미 같은 run_id의 로그가 존재합니다. run 번호를 올리세요. ($RUN_ID)"
 fi
 
@@ -117,6 +125,12 @@ if ! sudo test -e /sys/kernel/tracing/events/raw_syscalls/sys_enter/format \
 fi
 
 mkdir -p "$RUNTIME_DIR" "$MOUNT_DIR" "$UNDERLAY_DIR" "$HASH_DIR"
+
+# eBPF 로그 격리 폴더를 root 전용(700)으로 준비한다.
+# (infected 권한 악성코드가 이 폴더 안 파일을 못 만들고/못 지운다)
+sudo mkdir -p "$PROTECTED_LOG_DIR"
+sudo chown root:root "$PROTECTED_LOG_DIR"
+sudo chmod 700 "$PROTECTED_LOG_DIR"
 
 # ----------------------------------------
 # 정리 트랩: 종료 시 GuardFS 마운트 해제
@@ -209,6 +223,7 @@ COLLECTOR_ARGS=(
     "$COLLECTOR"
     --run-id "$RUN_ID"
     --target-dir "$MOUNT_DIR"
+    --log-dir "$PROTECTED_LOG_DIR"
     --timeout "$TIMEOUT"
 )
 [ -n "$AS_USER" ] && COLLECTOR_ARGS+=(--as-user "$AS_USER")
@@ -219,6 +234,22 @@ sudo python3 "${COLLECTOR_ARGS[@]}" -- "${COMMAND[@]}"
 COLLECTOR_RC=$?
 echo "--------------------------------------------------------"
 echo "[collect_one] 수집기 종료 (rc=$COLLECTOR_RC)"
+
+# ----------------------------------------
+# 3.5) eBPF 로그 회수 (격리 폴더 → 일반 수집 폴더)
+#   워크로드(악성코드)가 끝난 지금은 안전하므로, root 전용 격리 폴더에 있던
+#   eBPF 로그/메타를 일반 폴더(사용자 소유)로 복사해 백업(scp)·요약에서 쓴다.
+#   FUSE 로그는 GuardFS가 사용자 권한으로 쓰기 때문에 격리 대상이 아니며,
+#   광범위 스캔형 랜섬웨어에서는 유실될 수 있다(eBPF 로그가 주력 데이터).
+# ----------------------------------------
+mkdir -p "$COLLECT_DIR"
+for suf in ebpf.jsonl ebpf.meta.json; do
+    src="$PROTECTED_LOG_DIR/${RUN_ID}.${suf}"
+    if sudo test -e "$src"; then
+        sudo cp -f "$src" "$COLLECT_DIR/${RUN_ID}.${suf}"
+        sudo chown "$(id -un):$(id -gn)" "$COLLECT_DIR/${RUN_ID}.${suf}"
+    fi
+done
 
 # ----------------------------------------
 # 4) 실행 후 해시 + 변경 요약
