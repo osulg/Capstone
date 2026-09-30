@@ -375,6 +375,28 @@ class Passthrough(pyfuse3.Operations):
         return True
 
 
+    async def statfs(self, ctx=None):
+        # 파일시스템 통계(블록 크기 등)를 underlay에서 그대로 전달한다.
+        # 미구현 시 pyfuse3가 ENOSYS를 던져 df나 statfs(2)/statvfs(3)를 쓰는
+        # 프로그램(일부 랜섬웨어의 블록 크기 조회 포함)이 실패한다.
+        try:
+            s = os.statvfs(self.root)
+        except OSError as e:
+            raise pyfuse3.FUSEError(e.errno)
+
+        out = pyfuse3.StatvfsData()
+        out.f_bsize   = s.f_bsize
+        out.f_frsize  = s.f_frsize
+        out.f_blocks  = s.f_blocks
+        out.f_bfree   = s.f_bfree
+        out.f_bavail  = s.f_bavail
+        out.f_files   = s.f_files
+        out.f_ffree   = s.f_ffree
+        out.f_favail  = s.f_favail
+        out.f_namemax = s.f_namemax
+        return out
+
+
     async def getattr(self, inode, ctx=None):
         p = self._inode_path.get(inode)
         
