@@ -134,7 +134,9 @@ case "$FAMILY" in
         ARGS=( --path "$TARGET" ) ;;
     # --- INCRansom: --dir <경로> ---
     INCRansom)
-        ARGS=( --dir "$TARGET" ) ;;
+        # INC Ransom은 디렉터리 경로 끝에 '/'가 있어야 스캔한다
+        # ([-] Please, add "/" to the end of directory! 에러 방지)
+        ARGS=( --dir "$TARGET/" ) ;;
     # --- Interlock: --directory <경로> ---
     Interlock)
         ARGS=( --directory "$TARGET" ) ;;
