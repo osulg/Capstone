@@ -90,6 +90,13 @@ FAM_LC="$(echo "$FAMILY" | tr '[:upper:]' '[:lower:]')"
 
 # 아키텍처 확인 — 이 x86-64 VM에서는 x86-64/i386만 실행 가능
 ARCH_INFO="$(file -b "$ELF" 2>/dev/null)"
+# OS ABI 확인 — 이 VM은 Linux라 FreeBSD 바이너리는 CPU가 x86-64여도 못 돈다
+# (exec는 되지만 FreeBSD 시스템콜/ABI가 달라 초반에 바로 종료됨)
+case "$ARCH_INFO" in
+    *FreeBSD*|*freebsd*) die "이 샘플은 FreeBSD 바이너리 — 이 Linux VM에서 실행 불가:
+       $ARCH_INFO
+       → FreeBSD 환경이나 호환 레이어 필요. 이 패밀리는 스킵하세요." ;;
+esac
 case "$ARCH_INFO" in
     *x86-64*|*80386*) : ;;
     *) die "이 샘플은 이 VM(x86-64)에서 실행 불가:
