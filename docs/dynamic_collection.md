@@ -32,7 +32,7 @@
   - `scripts/collect_one.sh` — 마운트+파일준비+eBPF수집+요약을 한 번에
   - `scripts/run_sample.sh` — 패밀리별 인자 자동화 배치 도우미
 - [x] 백업 경로: Infected → `scp` → Sandbox `~/collected/`
-- [x] 실제 수집: 악성 샘플 약 **14개** 확보
+- [x] 실제 수집: **11개 패밀리 · 약 38 run** 확보 (상세는 아래 "패밀리별 수집 결과")
 
 ### 산출물 (수집 데이터 형식)
 `~/guardfs_runtime/collect/<run_id>.*`
@@ -41,6 +41,47 @@
 - `.ebpf.meta.json` / `.fuse.meta.json` — run 메타데이터
 
 `run_id` 규칙: `<family>_<sha256앞8자리>_<run번호>` (예: `avoslocker_0cd7b6ea_001`)
+
+### 패밀리별 수집 결과 (실측)
+
+샘플을 격리 VM에서 직접 실행해 FUSE 마운트 안(`attack_target/`)의 행위를
+수집했다. 판정 기준: **암호화 행위(WRITE 폭증 + RENAME + UNLINK)가 있고,
+마운트 안에만 갇혔으며(FUSE 로그 정상), 환경이 살아남은** run만 유효 데이터로 본다.
+
+#### ✅ 수집 성공 — 모델용 데이터 (11개 패밀리, 약 38 run)
+
+| 패밀리 | 성공/전체 | 품질 메모 |
+|--------|:---:|------|
+| HelloKitty | 6/6 | 전부 감염 (최상) |
+| INCRansom | 4/4 | 전부 감염 (최상, `--dir <경로>/` 필요) |
+| REvil | 5/6 | 전부 감염 |
+| Babuk | 7/8 | 감염 정도 다양 (일부 약함) |
+| AvosLocker | 5/6 | 성공 (cdca6936은 private.pem 필요로 실패) |
+| Conti | 4/10 | 2개 전부 감염·1개 file_16만 |
+| RansomEXX | 2/3 | 전부 감염 |
+| BrainCipher | 2/2 | file_16만 감염 (약함) |
+| Buhti | 1/1 | 전부 감염 |
+| MONTI | 1/1 | 전부 감염 |
+| MoneyMessage | 1/1 | 부분 감염 (이벤트는 확보) |
+
+#### ⛔ 스킵 — 이유별
+
+| 카테고리 | 패밀리 | 원인 |
+|----------|--------|------|
+| 비밀값 필요 | Akira, Cactus, Hive, Qilin, blackcat, lockbit, Royal, BlackSuit, BlackBasta, BlackMatter | 키/토큰/ID로 내장 config를 복호화 → 피해자별 값이라 더미로 불가 |
+| ESXi 전용 | DarkSide, DragonForce, ESXi_misc, Trigona, Play | `/vmfs/volumes`·`vim-cmd`·`vsish` 의존. 개인 PC 파일 무시 |
+| broad-scan 위험 | Gunra, IceFire | 마운트 밖(홈 전체)까지 암호화 → 안전환경 재구축 후 재수집 필요 (보류) |
+| 기타 조건/환경 | Chaos(cron 지속성), Erebus, Interlock(FreeBSD 바이너리), DarkRadiation, ransomware_misc | 환경·조건 불일치, C2 통신 시도 등 |
+
+#### 🔍 관찰 (분석 포인트)
+
+- **"file_16.log만 감염" 패턴**: Babuk·BrainCipher·Conti 일부에서 반복. 세 패밀리
+  모두 **Babuk 빌더 계열**이라 동일한 확장자/크기 필터를 공유하는 것으로 추정.
+  → 약한 신호이므로 모델 학습 시 포함 여부/가중치 검토 필요.
+- **REvil·Conti 공통 `iji` 로그**: 두 패밀리에서 동일 출력 관측 (공유 코드 조각 가능성).
+- **ESXi fallback 차이**: MoneyMessage는 `vsish` 실패해도 파일 암호화를 계속(graceful),
+  Trigona는 `vim-cmd` 없으면 종료(hard-depend). 같은 ESXi 겸용이라도 갈림.
+- **행위-로그 불일치**: AvosLocker d7112a1e는 `[+] Encrypting` 로그 없이 실제 감염 발생.
 
 ### 겪은 이슈 & 해결 (중요 교훈)
 | 이슈 | 원인 | 해결 |
@@ -52,11 +93,19 @@
 | 파일 1개만 암호화(file_16) | 테스트 파일이 52바이트로 너무 작아 크기 필터에 걸림 | 테스트 파일을 **64KB 랜덤 데이터**로 확대 |
 | 매 run 대상 오염 | prep이 기존 파일 안 지움 | prep이 매번 대상 폴더 **비우고** 재생성 |
 | 데이터 유실 | 스냅샷 복원 전 백업 안 함 / Sandbox 실수 복원 | **백업 먼저, 복원 나중** 철칙 |
+| `Failed to get block size`로 암호화 실패 (INC Ransom) | passthrough.py에 `statfs` 미구현 → pyfuse3가 ENOSYS 반환 | **passthrough.py에 `statfs` 핸들러 추가** (underlay statvfs 전달) |
+| FreeBSD 바이너리가 아무 행위 안 함 (Interlock 일부) | arch 가드가 CPU만 보고 OS ABI 무시 → FreeBSD용 x86-64 통과 | run_sample.sh에 **FreeBSD 감지 추가**(file 출력에 FreeBSD면 스킵) |
+| 광범위 스캔형이 수집 로그까지 암호화 (Gunra 등) | 로그가 홈 아래(collect/)에 있어 함께 암호화됨 | eBPF 로그를 **root 전용 폴더(`/var/log/guardfs`)에 격리** 후 종료 시 회수 |
+| 랜섬노트만 생기고 암호화는 안 됨 | "노트 생성 ≠ 암호화". ESXi 조건/인자 미충족 | **op 분포로 판정**: WRITE/RENAME/UNLINK 없으면 실패로 간주·폐기 |
 
 ### 알려진 한계
-- 비밀값 필요 패밀리는 실행 어려움: **Hive**(`-u login:pass`), **Qilin**(`--password`+ARM), **Akira**(`--id` 검증)
-- ESXi/설정 의존 패밀리는 이 VM에서 안 돎: **BlackBasta / BlackMatter / DarkSide / ESXi_misc / DarkRadiation** → 스킵
-- 멀티아키 샘플 중 non-x86-64는 실행 불가(에뮬레이션 필요)
+- **비밀값 필요 패밀리**는 실행 불가(피해자별 키/토큰/ID로 config 복호화):
+  Akira / Cactus / Hive / Qilin / blackcat / lockbit / Royal / BlackSuit / BlackBasta / BlackMatter
+- **ESXi 전용 패밀리**는 이 Ubuntu VM에서 안 돎(`/vmfs`·`vim-cmd` 의존):
+  DarkSide / DragonForce / ESXi_misc / Trigona / Play / DarkRadiation → 스킵
+- **광범위 스캔형**(Gunra / IceFire)은 마운트 밖까지 암호화 → 안전환경 재구축 후 재수집 대상(현재 보류)
+- **아키텍처/OS 불일치**: non-x86-64(ARM/PPC/MIPS 등) 및 FreeBSD 바이너리는 실행 불가(에뮬레이션/해당 OS 필요)
+- **약한 신호 데이터**: Babuk 빌더 계열 일부는 file_16(.log)만 감염 → 모델 학습 시 취급 주의
 
 ---
 
