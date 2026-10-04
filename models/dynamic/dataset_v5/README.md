@@ -72,3 +72,6 @@ python3 experiments/simulators/sim_entropy.py ~/guardfs_runtime/mount/victim.txt
 
 문제가 있으면 `paths.py` 의 `DYNAMIC_MODEL_PATH`/`DYNAMIC_FEATURE_COLS_PATH`
 를 v2로 되돌리면 된다(v2 모델 파일은 그대로 보존).
+## 모델 파일 환경
+
+`rf_model_v5.pkl` 은 scikit-learn 1.3.2, Python 3.12.3 (GuardFS venv)에서 학습했다. 다른 버전에서는 predict_proba 가 깨질 수 있다.

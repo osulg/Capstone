@@ -10,3 +10,6 @@ honeypot/
 .venv/
 venv/
 .vscode/
+
+venv_static/
+*.bundle
