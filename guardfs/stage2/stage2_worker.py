@@ -10,6 +10,7 @@ from guardfs.stage2.states import ProcState
 from guardfs.common.config import (
     STAGE2_MEDIUM_THRESHOLD,
     STAGE2_HIGH_THRESHOLD,
+    STAGE2_DYN_ONLY_HIGH_THRESHOLD,
     DYNAMIC_MODEL_WEIGHT,
     STATIC_MODEL_WEIGHT,
     STAGE2_REEVAL_INTERVAL_SEC,
@@ -171,8 +172,17 @@ async def stage2_worker(recv_chan, ops) -> None:
 
                 print(f"[STAGE2] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} final={score:.3f}")
 
-                if score >= STAGE2_HIGH_THRESHOLD:
-                    await ops.trigger_high(pid, reason=f"ml_score={score:.3f}")
+                # 가중합이 HIGH에 도달하거나, 동적(행동)만으로도 충분히 확신하면 격상.
+                # 후자는 실행 파일이 양성 인터프리터라 stat 점수가 낮아
+                # 가중합이 눌리는 스크립트형 랜섬웨어를 잡기 위함.
+                if (score >= STAGE2_HIGH_THRESHOLD
+                        or dyn_score >= STAGE2_DYN_ONLY_HIGH_THRESHOLD):
+                    reason = (
+                        f"ml_score={score:.3f}"
+                        if score >= STAGE2_HIGH_THRESHOLD
+                        else f"dyn_only={dyn_score:.3f}"
+                    )
+                    await ops.trigger_high(pid, reason=reason)
                 elif score >= STAGE2_MEDIUM_THRESHOLD:
                     await ops.set_proc_state(pid, ProcState.MEDIUM)
                     medium_pids[pid] = trio.current_time()
@@ -222,15 +232,22 @@ async def stage2_worker(recv_chan, ops) -> None:
                         medium_pids.pop(pid, None)
                         continue
 
-                    # HIGH 임계치 초과 시 즉시 격상
-                    if score >= STAGE2_HIGH_THRESHOLD:
+                    # HIGH 임계치 초과(가중합) 또는 동적 단독 확신 시 즉시 격상.
+                    # 초기 판정과 동일한 OR 규칙을 재평가에도 적용한다.
+                    if (score >= STAGE2_HIGH_THRESHOLD
+                            or dyn_score >= STAGE2_DYN_ONLY_HIGH_THRESHOLD):
+                        reason = (
+                            f"reeval_score={score:.3f}"
+                            if score >= STAGE2_HIGH_THRESHOLD
+                            else f"reeval_dyn_only={dyn_score:.3f}"
+                        )
                         print(
                             f"[REEVAL] pid={pid} "
-                            f"score={score:.3f} → HIGH 격상"
+                            f"score={score:.3f} dyn={dyn_score:.3f} → HIGH 격상 ({reason})"
                         )
 
                         from guardfs.stage2.policy.medium import drop_buffers
-                        await ops.trigger_high(pid, reason=f"reeval_score={score:.3f}")
+                        await ops.trigger_high(pid, reason=reason)
                         await drop_buffers(pid, ops)
                         medium_pids.pop(pid, None)
 
