@@ -15,6 +15,7 @@ from guardfs.common.config import (
     STATIC_MODEL_WEIGHT,
     STAGE2_REEVAL_INTERVAL_SEC,
     STAGE2_MEDIUM_TIMEOUT_SEC,
+    STAGE2_WATCH_TIMEOUT_SEC,
 )
 
 from guardfs.common.paths import (
@@ -134,10 +135,26 @@ def predict_static(analyzer, pid: int, exe_path: str = "") -> float:
         return 0.5
 
 
+def fuse_score(dyn_model, dyn_cols, stat_model, stat_cache, ops, pid, features):
+    """
+    (dyn, stat, 가중합 score)를 계산한다. 정적 점수는 프로세스가 살아 있을 때만
+    캐싱하고, 죽었으면 캐시를 쓴다(초기 판정/재평가와 동일한 규약).
+    """
+    dyn_score = predict_dynamic(dyn_model, dyn_cols, features)
+    stat_score = predict_static(stat_model, pid, ops._pid_exe.get(pid, ""))
+    if stat_score != 0.5:
+        stat_cache[pid] = stat_score
+    else:
+        stat_score = stat_cache.get(pid, 0.5)
+    score = DYNAMIC_MODEL_WEIGHT * dyn_score + STATIC_MODEL_WEIGHT * stat_score
+    return dyn_score, stat_score, score
+
+
 async def stage2_worker(recv_chan, ops) -> None:
     dyn_model, dyn_cols, stat_model = load_models()
 
     medium_pids = {}
+    watch_pids  = {}   # 첫 점수가 낮아도 SUSPICIOUS 관찰 창을 여는 PID -> 시작 시각
     risk_scores = {}
     stat_cache  = {}   # 프로세스 종료 후에도 static 점수 유지
     next_reeval = trio.current_time() + STAGE2_REEVAL_INTERVAL_SEC
@@ -189,8 +206,50 @@ async def stage2_worker(recv_chan, ops) -> None:
                     medium_pids[pid] = trio.current_time()
                     print(f"[STAGE2] pid={pid} → MEDIUM (score={score:.3f})")
                 else:
+                    # 바로 LOW로 내리지 않는다. Stage1 첫 트리거 시점에는 이벤트가
+                    # 적어 점수가 낮기 쉽고, LOW로 내리면 재평가 창이 열리지 않아
+                    # 이후 쌓이는 행동을 영영 못 본다. SUSPICIOUS를 유지한 채
+                    # STAGE2_WATCH_TIMEOUT_SEC 동안 1초마다 재채점한다.
+                    watch_pids[pid] = trio.current_time()
+                    print(
+                        f"[STAGE2] pid={pid} → 관찰 시작 "
+                        f"(score={score:.3f}, {STAGE2_WATCH_TIMEOUT_SEC:.0f}초간 재평가)"
+                    )
+
+            # SUSPICIOUS 관찰 창: 최신 피처로 재채점해 올라가면 승격, 끝까지 낮으면 LOW 복귀
+            for pid in list(watch_pids):
+                features = ops._pid_features.get(pid, {})
+                dyn_score, stat_score, score = fuse_score(
+                    dyn_model, dyn_cols, stat_model, stat_cache, ops, pid, features
+                )
+                risk_scores[pid] = score
+                elapsed = trio.current_time() - watch_pids[pid]
+
+                print(
+                    f"[WATCH] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} "
+                    f"score={score:.3f} elapsed={elapsed:.1f}s"
+                )
+
+                if (score >= STAGE2_HIGH_THRESHOLD
+                        or dyn_score >= STAGE2_DYN_ONLY_HIGH_THRESHOLD):
+                    reason = (
+                        f"watch_score={score:.3f}"
+                        if score >= STAGE2_HIGH_THRESHOLD
+                        else f"watch_dyn_only={dyn_score:.3f}"
+                    )
+                    watch_pids.pop(pid, None)
+                    await ops.trigger_high(pid, reason=reason)
+                elif score >= STAGE2_MEDIUM_THRESHOLD:
+                    watch_pids.pop(pid, None)
+                    await ops.set_proc_state(pid, ProcState.MEDIUM)
+                    medium_pids[pid] = trio.current_time()
+                    print(f"[WATCH] pid={pid} → MEDIUM (score={score:.3f})")
+                elif elapsed > STAGE2_WATCH_TIMEOUT_SEC:
+                    watch_pids.pop(pid, None)
                     await ops.set_proc_state(pid, ProcState.LOW)
-                    print(f"[STAGE2] pid={pid} → LOW (score={score:.3f})")
+                    from guardfs.stage2.policy.low import handle_low_return
+                    await handle_low_return(pid, ops)
+                    print(f"[WATCH] pid={pid} 끝까지 낮음 → LOW 복귀 (score={score:.3f})")
 
             # 1초마다 Medium PID 재평가
             if medium_pids:

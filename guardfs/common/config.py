@@ -38,6 +38,12 @@ STAGE2_DYN_ONLY_HIGH_THRESHOLD = 0.5
 STAGE2_REEVAL_INTERVAL_SEC = 1.0
 STAGE2_MEDIUM_TIMEOUT_SEC = 10.0
 
+# ========== Stage 2 - SUSPICIOUS 관찰 창 ========== #
+# 첫 점수가 MEDIUM 미만이어도 Stage1이 의심한 PID는 이 시간 동안 1초마다
+# 재채점한다. Stage1 첫 트리거 시점에는 이벤트가 적어 동적 점수가 낮게
+# 나오기 쉬우므로(이벤트가 쌓일수록 상승), 곧바로 LOW로 내리면 놓친다.
+STAGE2_WATCH_TIMEOUT_SEC = 10.0
+
 # ========== MEDIUM Policy ========== #
 MEDIUM_WRITE_DELAY_MID = 0.1
 MEDIUM_WRITE_DELAY_HIGH = 0.5

@@ -12,12 +12,16 @@
   2) 공격 역할 프로세스(이 프로세스)가 파일을 읽고(read), 같은 파일을
      os.urandom 난수로 덮어쓴다(read-then-overwrite, 고엔트로피 write).
   3) --rename-ext 를 주면 덮어쓴 파일의 확장자를 바꾼다(확장자 변경 rename).
-  4) --duration 초 동안 반복한다. 차단(오류)되면 즉시 종료한다.
+  4) --passes 번(기본 1) 반복하되 --duration 초를 넘기지 않는다. 차단되면 즉시 종료한다.
+
+기본값(파일 20개 x 64KB, 1 pass, rename 포함)은 동적 모델 v5의 학습 분포와
+비슷한 규모다. 같은 파일을 수십 pass 반복하거나 파일을 수백 개로 늘리면
+총 쓰기량이 학습 분포를 크게 벗어나 점수가 오히려 낮아질 수 있다.
 
 사용 (GuardFS를 detection 모드로 띄운 뒤, 마운트 안의 경로로):
   python3 experiments/simulators/sim_highentropy.py ~/guardfs_runtime/mount/sim_target
   python3 experiments/simulators/sim_highentropy.py ~/guardfs_runtime/mount/sim_target \
-      --duration 20 --files 100 --rename-ext .locked
+      --files 50 --passes 2 --rename-ext ""
 
 참고: GuardFS가 HIGH로 판정하면 이 프로세스는 SIGSTOP 으로 멈출 수 있다
       (오류 없이 출력이 멈춘다). 다른 터미널에서 [STATE]/[TRIGGER HIGH] 로그로 확인할 것.
@@ -34,13 +38,16 @@ PLAINTEXT_LINE = b"This is a plain text test document for GuardFS simulation.\n"
 def parse_args():
     p = argparse.ArgumentParser(description="고엔트로피 쓰기 부하 시뮬레이터")
     p.add_argument("target", help="GuardFS 마운트 안의 대상 폴더 (없으면 생성)")
-    p.add_argument("--files", type=int, default=50, help="테스트 파일 개수")
+    p.add_argument("--files", type=int, default=20, help="테스트 파일 개수")
     p.add_argument("--size-kb", type=int, default=64, help="파일당 크기(KB)")
     p.add_argument("--chunk-kb", type=int, default=16, help="한 번에 쓰는 난수 크기(KB)")
     p.add_argument("--duration", type=float, default=30.0, help="반복 시간(초)")
-    p.add_argument("--rename-ext", default="",
-                   help="덮어쓴 뒤 붙일 확장자 (예: .locked). 비우면 rename 안 함")
-    p.add_argument("--delay", type=float, default=0.0, help="파일 간 대기(초)")
+    p.add_argument("--passes", type=int, default=1,
+                   help="전체 파일을 덮어쓰는 반복 횟수 (0이면 --duration 동안 계속)")
+    p.add_argument("--rename-ext", default=".locked",
+                   help="덮어쓴 뒤 붙일 확장자. 빈 문자열이면 rename 안 함")
+    p.add_argument("--delay", type=float, default=0.15,
+                   help="파일 간 대기(초). Stage2 재평가(1초 주기)가 중간에 개입할 시간을 준다")
     p.add_argument("--keep", action="store_true", help="종료 후 테스트 파일을 지우지 않음")
     return p.parse_args()
 
@@ -108,7 +115,8 @@ def main():
     passes = 0
     rc = 0
     try:
-        while time.time() - start < args.duration:
+        while time.time() - start < args.duration and (
+                args.passes == 0 or passes < args.passes):
             for i, path in enumerate(paths):
                 total_bytes += overwrite_with_random(path, size, chunk)
                 if args.rename_ext and not path.endswith(args.rename_ext):
