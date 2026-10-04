@@ -26,10 +26,13 @@ STATIC_MODEL_WEIGHT = 0.5
 #   스크립트형 랜섬웨어는 stat 점수가 낮아 HIGH(0.82)에 영원히 도달 못 한다.
 #   (예: dyn=0.65, stat=0.30 -> score=0.47 로 MEDIUM 후 LOW 복귀)
 #   행동만으로도 충분히 확신하면 정적 점수와 무관하게 격상하도록 OR 규칙을 둔다.
-#   값 근거: 동적 모델은 정상 248개에서 임계값 0.5 기준 FPR 0% 이므로
-#   0.5 위 여유(margin)를 둔 0.6 을 기본값으로 한다. 정상 동적 점수 분포를
-#   재확인하면 조정 가능.
-STAGE2_DYN_ONLY_HIGH_THRESHOLD = 0.6
+#
+#   값은 추정이 아니라 데이터로 정한다: train_v5.py 가 동적 모델 v5의
+#   교차검증 OOF 점수에서 "정상 오탐률(FPR) 0%가 되는 최저 임계값"을 구해
+#   dataset_v5/train_v5_report.json 의 recommended_threshold 로 출력한다.
+#   아래 값은 그 리포트 값으로 확정할 것(잠정 0.5). v5가 정상/악성을 깨끗이
+#   가르므로 보통 0.4~0.6 구간에서 FPR 0% 가 나온다.
+STAGE2_DYN_ONLY_HIGH_THRESHOLD = 0.5
 
 # ========== Stage 2 - MEDIUM Re-evaluation ========== #
 STAGE2_REEVAL_INTERVAL_SEC = 1.0

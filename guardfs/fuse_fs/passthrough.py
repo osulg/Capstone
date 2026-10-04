@@ -101,14 +101,14 @@ async def stats_collector(
                         mean_ent = st.mean_entropy()
                         suspicious = (
                             (
-                            st.counts["W_sum"] >= STATS_WRITE_THRESHOLD
+                            st.w_win >= STATS_WRITE_THRESHOLD
                              and mean_ent >= STATS_E_SUM_THRESHOLD
                             )
                             or (
-                            st.counts["D_sum"] >= STATS_RENAME_THRESHOLD
+                            st.d_win >= STATS_RENAME_THRESHOLD
                             )
                             or (
-                            st.counts["D_sum"] >= STATS_UNLINK_THRESHOLD
+                            st.d_win >= STATS_UNLINK_THRESHOLD
                             )
                         )
 
@@ -117,9 +117,9 @@ async def stats_collector(
 
                             print(
                                 f"[SUSPICIOUS] pid={pid} "
-                                f"W_sum={st.counts['W_sum']} "
+                                f"W_win={st.w_win} "
                                 f"E_sum={mean_ent:.0f} "
-                                f"D_sum={st.counts['D_sum']}"
+                                f"D_win={st.d_win}"
                             )
 
                             await ops.mark_suspect(
@@ -1024,116 +1024,161 @@ class Passthrough(pyfuse3.Operations):
                 pass
 
 class PidStats:
-    # 동적 모델 v2(rf_model_v2.pkl)의 입력 피처. 순서/내용이
-    # models/dynamic/feature_cols_v2.json 과 반드시 일치해야 한다.
-    FEATURE_COLS = [
-        "O_sum", "C_sum", "D_sum", "W_sum",
-        "CCC", "CCD", "CCO", "CDC", "CDD", "CDO",
-        "COC", "COD", "COO", "DCC", "DCD", "DCO",
-        "DDC", "DDD", "DDO", "DOC", "DOD", "DOO",
-        "OCC", "OCD", "OCO", "ODC", "ODD", "ODO",
-        "OOC", "OOD", "OOO",
-        "WCC", "WCD", "WCO", "WCW", "WDC", "WDD",
-        "WDO", "WDW", "WOC", "WOD", "WOO", "WOW",
-        "WWC", "WWD", "WWO", "WWW",
-        "CWC", "CWD", "CWO", "CWW", "DWC", "DWD",
-        "DWO", "DWW", "OWC", "OWD", "OWO", "OWW",
-        "CCW", "CDW", "COW", "DCW", "DDW", "DOW",
-        "OCW", "ODW", "OOW",
-    ]
+    """
+    동적 모델 v5(rf_model_v5.pkl)의 입력 피처를 PID 단위로 온라인 집계한다.
+
+    v5는 런타임이 실제로 보는 신호(FUSE 이벤트, PID 단위)에 맞춘 모델이다.
+    여기서 만드는 피처는 수집 로그에서 오프라인으로 뽑는
+    models/dynamic/collect/features.py:compute_features 와 "정확히 동일한"
+    값이어야 한다(그래야 학습 분포와 추론 분포가 일치). 아래 로직은
+    compute_features 를 증분(incremental) 방식으로 그대로 옮긴 것이다.
+
+    다른 점(의도적 제외):
+      - proc_count : PID 단위라 항상 1 → 피처에서 제외
+      - crypto_calls: FUSE엔 CRYPTO op이 없음 → 피처에서 제외
+    이 둘을 뺀 22개가 v5 스키마(models/dynamic/feature_cols_v5.json)이다.
+    """
+
+    HIGH_ENTROPY = ENTROPY_THRESHOLD          # 7.0, features.py HIGH_ENTROPY와 동일
+    MUTATING_OPS = {"WRITE", "CREATE", "RENAME", "UNLINK", "TRUNCATE", "CHMOD"}
+    _OP_NAMES = {"ftruncate": "TRUNCATE"}      # fuse_logger와 동일한 op 정규화
+
+    @staticmethod
+    def _ext(path) -> str:
+        return os.path.splitext(path)[1].lower() if path else ""
 
     def __init__(self):
-        # 1초 윈도우 카운터. stats_collector의 stat_anomaly 게이트 전용이며
-        # 매 윈도우마다 reset()으로 초기화된다.
-        self.counts = {col: 0 for col in self.FEATURE_COLS}
+        # --- Stage1 1초 윈도우 게이트 전용 (reset마다 초기화) ---
+        self.w_win = 0     # 윈도우 내 WRITE 수
+        self.d_win = 0     # 윈도우 내 삭제(UNLINK+RMDIR) 수
+        self.e_sum = 0     # 윈도우 내 고엔트로피 write 수
 
-        # 프로세스 생애 누적 카운터. ML 입력 전용이며 reset()에서 유지된다.
-        # 학습 데이터(dataset_v2_4th_clean.csv)가 프로세스 단위 누적
-        # 집계이므로, 추론도 동일하게 누적값을 넣어야 분포가 맞는다.
-        self.total = {col: 0 for col in self.FEATURE_COLS}
-
-        # 이벤트 흐름. 3-gram이 윈도우 경계에서 끊기지 않도록 reset()에서 유지한다.
-        self.seq = []
-
-        # 고엔트로피 write 누적. ML 피처가 아니라 Stage1 게이트 전용이므로
-        # 윈도우 단위로 초기화된다. (모델 v2는 엔트로피를 피처로 쓰지 않음)
-        self.e_sum = 0
+        # --- 프로세스 생애 누적 (v5 피처용; reset에서 유지) ---
+        self._op_counts = {}
+        self._total = 0
+        self._first_ts = None
+        self._last_ts = None
+        self._read_paths = set()
+        self._read_then_overwrite = 0
+        self._write_events = 0
+        self._total_renames = 0
+        self._ext_change_renames = 0
+        self._new_exts = set()
+        self._touched_files = set()
+        self._touched_dirs = set()
+        self._write_bytes = 0
+        self._write_size_samples = 0
+        self._he_write = 0
+        self._entropy_writes = 0
+        self._entropy_sum = 0.0
+        self._entropy_available = False
 
     def reset(self) -> None:
-        """1초 윈도우 종료 시 호출. 게이트용 카운터만 초기화한다."""
-        self.counts = {col: 0 for col in self.FEATURE_COLS}
+        """1초 윈도우 종료 시 호출. 게이트용 윈도우 카운터만 초기화한다."""
+        self.w_win = 0
+        self.d_win = 0
         self.e_sum = 0
 
     def mean_entropy(self) -> float:
         # stats_collector의 stat_anomaly 게이트에서 사용.
-        # W_sum이 아니라 반드시 고엔트로피 write 카운트를 반환해야 한다.
+        # 윈도우 내 고엔트로피 write 카운트를 반환한다.
         return float(self.e_sum)
 
-    def _map_event(self, ev):
-        """
-        이벤트를 모델 v2의 O/C/D/W 코드로 변환한다.
-        O = open/read/lookup/release/rename 계열 접근
-        C = create/mkdir 계열 생성
-        D = unlink/rmdir 계열 삭제
-        W = write (엔트로피와 무관하게 전부 W)
-        """
-        if ev.op in ("create", "mkdir"):
-            return "C"
-
-        if ev.op in ("unlink", "rmdir"):
-            return "D"
-
-        if ev.op == "write":
-            return "W"
-
-        if ev.op in ("open", "read", "lookup", "release", "rename"):
-            return "O"
-
-        return None
+    def _norm_op(self, op: str) -> str:
+        return self._OP_NAMES.get(op, op.upper())
 
     def update(self, ev) -> None:
-        code = self._map_event(ev)
+        op = self._norm_op(ev.op)
 
-        if code is None:
-            return
+        self._total += 1
+        self._op_counts[op] = self._op_counts.get(op, 0) + 1
+        if self._first_ts is None:
+            self._first_ts = ev.ts_ns
+        self._last_ts = ev.ts_ns
 
-        # 게이트 전용 엔트로피 카운터 (ML 피처와 무관)
-        if (
-            code == "W"
-            and ev.entropy is not None
-            and ev.entropy >= ENTROPY_THRESHOLD
-        ):
-            self.e_sum += 1
+        path = ev.path
+        if op in self.MUTATING_OPS and path:
+            self._touched_files.add(path)
+            self._touched_dirs.add(os.path.dirname(path))
 
-        # 단일 이벤트 합계 (윈도우 + 누적)
-        key = f"{code}_sum"
-        self.counts[key] += 1
-        self.total[key] += 1
+        if op == "READ" and path:
+            self._read_paths.add(path)
 
-        # 3-gram sequence feature
-        self.seq.append(code)
+        elif op == "WRITE":
+            self._write_events += 1
+            self.w_win += 1
+            if path and path in self._read_paths:
+                self._read_then_overwrite += 1
 
-        if len(self.seq) >= 3:
-            tri = "".join(self.seq[-3:])
+            size = ev.size
+            if isinstance(size, (int, float)) and size >= 0:
+                self._write_bytes += size
+                self._write_size_samples += 1
 
-            if tri in self.counts:
-                self.counts[tri] += 1
-                self.total[tri] += 1
+            ent = ev.entropy
+            if ent is not None:
+                self._entropy_available = True
+                self._entropy_writes += 1
+                self._entropy_sum += ent
+                if ent >= self.HIGH_ENTROPY:
+                    self._he_write += 1
+                    self.e_sum += 1
 
-        # 최근 100개 이벤트만 유지
-        if len(self.seq) > 100:
-            self.seq = self.seq[-100:]
+        elif op == "RENAME":
+            self._total_renames += 1
+            if ev.new_path and self._ext(path) != self._ext(ev.new_path):
+                self._ext_change_renames += 1
+                self._new_exts.add(self._ext(ev.new_path))
+
+        elif op in ("UNLINK", "RMDIR"):
+            self.d_win += 1
 
     def to_feature_row(self) -> dict:
         """
-        ML 입력 행. 학습 데이터와 동일하게 생애 누적값을 반환한다.
-        (게이트가 참조하는 self.counts 와 혼동하지 말 것)
+        ML 입력 행(22피처). features.py:compute_features 와 동일한 산식·반올림.
+        (게이트가 참조하는 w_win/d_win/e_sum 과 혼동하지 말 것)
         """
+        if self._first_ts is not None:
+            duration = max((self._last_ts - self._first_ts) / 1e9, 0.0)
+        else:
+            duration = 0.0
+        total = self._total
+        denom = max(duration, 1.0)   # 매우 짧은 실행에서 속도가 튀지 않게
+
+        n_write = self._op_counts.get("WRITE", 0)
+        n_unlink = self._op_counts.get("UNLINK", 0)
+        n_rename = self._op_counts.get("RENAME", 0)
+        n_create = self._op_counts.get("CREATE", 0)
+        n_read = self._op_counts.get("READ", 0)
+
+        def d(a, b):
+            return a / b if b else 0.0
+
         return {
-            col: self.total.get(col, 0)
-            for col in self.FEATURE_COLS
+            "duration_sec": round(duration, 4),
+            "total_events": total,
+            "write_per_sec": round(d(n_write, denom), 4),
+            "unlink_per_sec": round(d(n_unlink, denom), 4),
+            "rename_per_sec": round(d(n_rename, denom), 4),
+            "create_per_sec": round(d(n_create, denom), 4),
+            "write_ratio": round(d(n_write, total), 4),
+            "unlink_ratio": round(d(n_unlink, total), 4),
+            "rename_ratio": round(d(n_rename, total), 4),
+            "read_ratio": round(d(n_read, total), 4),
+            "high_entropy_write_count": self._he_write,
+            "high_entropy_write_ratio": round(d(self._he_write, self._entropy_writes), 4),
+            "mean_write_entropy": round(d(self._entropy_sum, self._entropy_writes), 4),
+            "entropy_available": int(self._entropy_available),
+            "read_then_overwrite_ratio": round(d(self._read_then_overwrite, self._write_events), 4),
+            "ext_change_rename_ratio": round(d(self._ext_change_renames, self._total_renames), 4),
+            "distinct_ext_after_rename": len(self._new_exts),
+            "unique_files_touched": len(self._touched_files),
+            "unique_dirs_touched": len(self._touched_dirs),
+            "files_per_dir": round(d(len(self._touched_files), len(self._touched_dirs)), 4),
+            "total_write_bytes": self._write_bytes,
+            "mean_write_bytes": round(d(self._write_bytes, self._write_size_samples), 2),
         }
-        
+
 async def main(
     mountpoint: str,
     root: str,

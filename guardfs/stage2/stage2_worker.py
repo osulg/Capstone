@@ -28,8 +28,9 @@ from guardfs.stage2.static_analyzer import StaticAnalyzer
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
-# NOTE: 구 DYNAMIC_FEATURES(39개, E-event scheme) 하드코딩 목록은 제거되었다.
-#       v2 모델의 피처 순서는 models/dynamic/feature_cols_v2.json 이 단일 출처다.
+# NOTE: 동적 피처 순서의 단일 출처는 models/dynamic/feature_cols_v5.json 이다
+#       (FUSE-only · PID 단위, 22개). 런타임 PidStats.to_feature_row() 와
+#       학습 추출기(extract_perpid_fuse.py)가 같은 스키마를 공유한다.
 
 
 def load_models():
@@ -53,7 +54,7 @@ def load_models():
                 f"model={len(expected)}개 / json={len(dyn_cols)}개"
             )
 
-        print(f"[ML] 동적 모델 로드 완료 (v2, {len(dyn_cols)} features)")
+        print(f"[ML] 동적 모델 로드 완료 (v5, FUSE·PID, {len(dyn_cols)} features)")
     except Exception as e:
         print(f"[ML] 동적 모델 로드 실패: {e}")
         dyn, dyn_cols = None, []
