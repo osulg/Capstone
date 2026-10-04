@@ -1,37 +1,68 @@
 # stage2_worker.py
 import os
 import warnings
-import trio
+
 import joblib
 import pandas as pd
-from guardfs.stage2.states import ProcState
+import trio
 
 from guardfs.common.config import (
-    STAGE2_MEDIUM_THRESHOLD,
-    STAGE2_HIGH_THRESHOLD,
     DYNAMIC_MODEL_WEIGHT,
-    STATIC_MODEL_WEIGHT,
-    STAGE2_REEVAL_INTERVAL_SEC,
+    STAGE2_HIGH_THRESHOLD,
+    STAGE2_MEDIUM_THRESHOLD,
     STAGE2_MEDIUM_TIMEOUT_SEC,
+    STAGE2_REEVAL_INTERVAL_SEC,
+    STATIC_MODEL_WEIGHT,
 )
-
 from guardfs.common.paths import (
     DYNAMIC_MODEL_PATH,
     DYNAMIC_SCALER_PATH,
     STATIC_MODEL_PATH,
 )
+from guardfs.stage2.states import ProcState
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
 DYNAMIC_FEATURES = [
-    "O_sum", "C_sum", "D_sum", "E_sum",
-    "Is_System_Path", "Is_Test_Path", "is_dev",
-    "CCC", "CCD", "CCO", "CDC", "CDD", "CDO",
-    "COC", "COD", "COO", "DCC", "DCD", "DCO",
-    "DDC", "DDD", "DDO", "DOC", "DOD", "DOO",
-    "EEE", "EEO", "EOE", "EOO", "OCC", "OCD",
-    "OCO", "ODC", "ODD", "ODO", "OEE", "OOC",
-    "OOD", "OOO"
+    "O_sum",
+    "C_sum",
+    "D_sum",
+    "E_sum",
+    "Is_System_Path",
+    "Is_Test_Path",
+    "is_dev",
+    "CCC",
+    "CCD",
+    "CCO",
+    "CDC",
+    "CDD",
+    "CDO",
+    "COC",
+    "COD",
+    "COO",
+    "DCC",
+    "DCD",
+    "DCO",
+    "DDC",
+    "DDD",
+    "DDO",
+    "DOC",
+    "DOD",
+    "DOO",
+    "EEE",
+    "EEO",
+    "EOE",
+    "EOO",
+    "OCC",
+    "OCD",
+    "OCO",
+    "ODC",
+    "ODD",
+    "ODO",
+    "OEE",
+    "OOC",
+    "OOD",
+    "OOO",
 ]
 
 STATIC_FEATURES = None  # 모델 로딩 후 채움
@@ -56,7 +87,7 @@ def load_models():
         stat = joblib.load(STATIC_MODEL_PATH)
         global STATIC_FEATURES
         STATIC_FEATURES = list(stat.feature_names_in_)
-        print(f"[ML] 정적 모델 로드 완료 ({len(STATIC_FEATURES)} features)")
+        print(f"[ML] 정적 모델 로드 완료 ({len(STATIC_FEATURES)} features)\n")
     except Exception as e:
         print(f"[ML] 정적 모델 로드 실패: {e}")
         stat = None
@@ -116,11 +147,11 @@ def predict_static(model, pid: int) -> float:
         with open(exe_path, "rb") as f:
             header = f.read(16)
 
-            if header[:4] == b'\x7fELF':
+            if header[:4] == b"\x7fELF":
                 row["is_64bit"] = 1 if header[4] == 2 else 0
                 # ELF type (ET_EXEC=2, ET_DYN=3)
                 f.seek(16)
-                e_type = int.from_bytes(f.read(2), 'little')
+                e_type = int.from_bytes(f.read(2), "little")
                 if "elf_type_ET_EXEC" in row:
                     row["elf_type_ET_EXEC"] = 1 if e_type == 2 else 0
                 if "elf_type_ET_DYN" in row:
@@ -166,16 +197,16 @@ async def stage2_worker(recv_chan, ops) -> None:
 
     # 두 태스크가 공유하는 상태 (동일 프로세스 내 단일 trio 스레드에서만 값이 바뀜,
     # to_thread.run_sync로 오프로드된 부분은 순수 함수라 상태를 직접 건드리지 않음)
-    medium_pids: dict = {}
+    medium_pids: dict = ops._medium_pids
     risk_scores: dict = {}
-    stat_cache:  dict = {}   # 프로세스 종료 후에도 static 점수 유지
+    stat_cache: dict = {}  # 프로세스 종료 후에도 static 점수 유지
     medium_lock = trio.Lock()
 
     async def score_pid(pid: int, features: dict) -> float:
         dyn_score = predict_dynamic(dyn_model, dyn_scaler, features)
         stat_score = await trio.to_thread.run_sync(predict_static, stat_model, pid)
 
-        if stat_score != 0.5:          # 프로세스 살아있을 때만 캐싱
+        if stat_score != 0.5:  # 프로세스 살아있을 때만 캐싱
             stat_cache[pid] = stat_score
         else:
             stat_score = stat_cache.get(pid, 0.5)  # 죽었으면 캐시 사용
@@ -186,8 +217,8 @@ async def stage2_worker(recv_chan, ops) -> None:
         return dyn_score, stat_score, score
 
     async def intake_loop(nursery: trio.Nursery) -> None:
-        from guardfs.stage2.policy.medium import commit_buffers
         from guardfs.stage2.policy.low import handle_low_return
+        from guardfs.stage2.policy.medium import commit_buffers
 
         async with recv_chan:
             while True:
@@ -202,7 +233,9 @@ async def stage2_worker(recv_chan, ops) -> None:
 
                 dyn_score, stat_score, score = await score_pid(pid, features)
 
-                print(f"[STAGE2] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} final={score:.3f}")
+                print(
+                    f"[STAGE2] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} final={score:.3f}"
+                )
 
                 if score >= STAGE2_HIGH_THRESHOLD:
                     await ops.trigger_high(pid, reason=f"ml_score={score:.3f}")
@@ -221,11 +254,11 @@ async def stage2_worker(recv_chan, ops) -> None:
                     print(f"[STAGE2] pid={pid} → LOW (score={score:.3f})")
 
     async def reeval_loop() -> None:
+        from guardfs.stage2.policy.low import handle_low_return
         from guardfs.stage2.policy.medium import (
             commit_buffers,
             validate_medium_buffers,
         )
-        from guardfs.stage2.policy.low import handle_low_return
 
         next_reeval = trio.current_time() + STAGE2_REEVAL_INTERVAL_SEC
 
@@ -251,7 +284,9 @@ async def stage2_worker(recv_chan, ops) -> None:
 
                 elapsed = trio.current_time() - started_at
 
-                print(f"[REEVAL] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} score={score:.3f} elapsed={elapsed:.1f}s")
+                print(
+                    f"[REEVAL] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} score={score:.3f} elapsed={elapsed:.1f}s"
+                )
 
                 if elapsed > STAGE2_MEDIUM_TIMEOUT_SEC:
                     print(f"[REEVAL] pid={pid} 10초 경과 → Low 복귀")

@@ -2,6 +2,63 @@
 ENTROPY_THRESHOLD = 7.0
 ENTROPY_HEADER_SIZE = 256
 
+# 256바이트 미만 파일을 release 시 평가하기 위한 별도 정책
+ENTROPY_MIN_SAMPLE_SIZE = 128
+ENTROPY_SHORT_SAMPLE_THRESHOLD = 6.5
+
+# ========== Stage 1 - Entropy Accumulation ========== #
+
+# 마지막 write 이후 불완전한 블록을 유지하는 최대 비활성 시간
+ENTROPY_ACCUMULATION_WINDOW_SEC = 5.0
+
+# 첫 write 이후 불완전한 블록을 유지하는 최대 전체 수명
+ENTROPY_ACCUMULATION_MAX_LIFETIME_SEC = 30.0
+
+# 블록 완성 및 엔트로피 평가에 필요한 누적 크기
+ENTROPY_ACCUMULATION_SIZE = ENTROPY_HEADER_SIZE
+
+# ========== Stage 1 - Entropy Block Sampling ========== #
+
+# 파일 하나에서 동시에 추적할 최대 256B block 수
+ENTROPY_MAX_BLOCKS_PER_FILE = 4
+
+# PID 하나에서 동시에 추적할 최대 파일 수
+ENTROPY_MAX_FILES_PER_PID = 100
+
+# 하나의 write 이벤트에서 Stage 1으로 전달할 최대 표본 크기
+ENTROPY_MAX_EVENT_SAMPLE_SIZE = ENTROPY_HEADER_SIZE * ENTROPY_MAX_BLOCKS_PER_FILE
+
+# ========== Stage 1 - High-Entropy Burst ========== #
+
+# PID별 고엔트로피 이벤트를 묶는 시간 창
+ENTROPY_BURST_WINDOW_SEC = 5.0
+
+# 시간 창 안에서 필요한 고엔트로피 write 횟수
+ENTROPY_BURST_MIN_WRITES = 5
+
+# 시간 창 안에서 필요한 서로 다른 파일 수
+ENTROPY_BURST_MIN_FILES = 3
+
+# 시간 창 안에서 필요한 고엔트로피 write byte 수
+ENTROPY_BURST_MIN_BYTES = 1280
+
+# PID 하나에서 유지할 최대 Burst 상태 수
+ENTROPY_BURST_MAX_PIDS = 10000
+
+# ========== Stage 1 - Entropy Delta ========== #
+
+# 원본과 write 데이터를 비교할 최대 샘플 크기
+ENTROPY_DELTA_SAMPLE_SIZE = 256
+
+# 최소 비교 가능한 데이터 크기
+ENTROPY_DELTA_MIN_SAMPLE_SIZE = 128
+
+# 초기에는 관측만 수행
+ENTROPY_DELTA_OBSERVE_ONLY = True
+
+# 실험 데이터 수집 후 결정할 값
+ENTROPY_DELTA_THRESHOLD = 1.5
+
 # ========== Stage 1 - Extension Change Detection ========== #
 EXT_CHANGE_WINDOW_SEC = 10
 EXT_CHANGE_THRESHOLD = 5
@@ -44,29 +101,62 @@ MEDIUM_SIZE_LIMIT = 1_000_000
 EXTENSION_GROUPS = {
     "HIGH_VALUE": {
         # 랜섬웨어 1순위 타깃 — 원본 손실 시 피해가 큰 문서/DB/키 파일
-        "exts": {".docx", ".xlsx", ".pptx", ".pdf", ".db", ".sqlite",
-                 ".sql", ".mdb", ".kdbx", ".key", ".pem", ".wallet"},
+        "exts": {
+            ".docx",
+            ".xlsx",
+            ".pptx",
+            ".pdf",
+            ".db",
+            ".sqlite",
+            ".sql",
+            ".mdb",
+            ".kdbx",
+            ".key",
+            ".pem",
+            ".wallet",
+        },
         "buffer_limit_bytes": 5_000_000,
-        "structural_check": True,     # magic byte를 넘어 내부 구조까지 검증
+        "structural_check": True,  # magic byte를 넘어 내부 구조까지 검증
         "delay_multiplier": 1.0,
         "entropy_threshold": 7.2,
     },
     "COMPRESSED": {
         # 이미 고엔트로피인 포맷 — 엔트로피 증가폭으로 암호화를 구분하기 어려움
-        "exts": {".jpg", ".jpeg", ".png", ".gif", ".mp4", ".zip",
-                 ".gz", ".7z", ".rar", ".mp3", ".mov"},
+        "exts": {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".mp4",
+            ".zip",
+            ".gz",
+            ".7z",
+            ".rar",
+            ".mp3",
+            ".mov",
+        },
         "buffer_limit_bytes": 10_000_000,
         "structural_check": False,
-        "delay_multiplier": 0.5,      # 정상 write가 빈번한 미디어 파일 → 지연 완화
-        "entropy_threshold": None,    # 엔트로피 기준 비적용
+        "delay_multiplier": 0.5,  # 정상 write가 빈번한 미디어 파일 → 지연 완화
+        "entropy_threshold": None,  # 엔트로피 기준 비적용
     },
     "PLAIN_TEXT": {
-        "exts": {".txt", ".log", ".csv", ".json", ".xml", ".py",
-                 ".js", ".c", ".h", ".md"},
+        "exts": {
+            ".txt",
+            ".log",
+            ".csv",
+            ".json",
+            ".xml",
+            ".py",
+            ".js",
+            ".c",
+            ".h",
+            ".md",
+        },
         "buffer_limit_bytes": 3_000_000,
         "structural_check": False,
         "delay_multiplier": 1.0,
-        "entropy_threshold": 6.5,     # 평문은 원래 엔트로피가 낮음 → 기준도 낮게
+        "entropy_threshold": 6.5,  # 평문은 원래 엔트로피가 낮음 → 기준도 낮게
     },
     "UNKNOWN": {
         # 세 그룹 어디에도 없는 확장자의 fallback (가장 보수적으로 취급)
@@ -100,13 +190,26 @@ MEDIUM_GLOBAL_BUFFER_LIMIT_BYTES = 200_000_000
 
 # ========== MEDIUM Policy - Process Trust ========== #
 TRUSTED_EXE_PREFIXES = (
-    "/bin", "/usr/bin", "/sbin", "/usr/sbin",
-    "/usr/local/bin", "/usr/local/sbin",
+    "/bin",
+    "/usr/bin",
+    "/sbin",
+    "/usr/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
 )
 
 # exe가 이 인터프리터들이면 exe 경로 대신 cmdline의 스크립트 인자를 신뢰 판단 대상으로 삼는다
 INTERPRETER_BASENAMES = {
-    "python", "python2", "python3",
-    "perl", "ruby", "node", "nodejs",
-    "bash", "sh", "dash", "zsh", "php",
+    "python",
+    "python2",
+    "python3",
+    "perl",
+    "ruby",
+    "node",
+    "nodejs",
+    "bash",
+    "sh",
+    "dash",
+    "zsh",
+    "php",
 }
