@@ -1,11 +1,19 @@
 import os
+import sys
 
-# 1. 테스트용 대상 원본 파일 경로 지정
-# 경로 설정 후 실행
-path = os.path.expanduser("")
+# 1. 테스트용 대상 원본 파일 경로 지정 (마운트 안 파일)
+#    명령행 인자로 받는다. 예:
+#      python sim_entropy.py ~/guardfs_runtime/mount/victim.txt
+if len(sys.argv) < 2:
+    print("사용법: python sim_entropy.py <GuardFS 마운트 안 대상파일 경로>")
+    print("예:    python sim_entropy.py ~/guardfs_runtime/mount/victim.txt")
+    sys.exit(1)
+path = os.path.expanduser(sys.argv[1])
 
 # 2. 만약 부모 디렉토리가 없다면 안전하게 생성
-os.makedirs(os.path.dirname(path), exist_ok=True)
+parent = os.path.dirname(path)
+if parent:
+    os.makedirs(parent, exist_ok=True)
 
 # 3. 테스트를 위한 일반 텍스트 데이터 먼저 기록
 with open(path, "w", encoding="utf-8") as f:
