@@ -216,6 +216,12 @@ async def stage2_worker(recv_chan, ops) -> None:
                         f"(score={score:.3f}, {STAGE2_WATCH_TIMEOUT_SEC:.0f}초간 재평가)"
                     )
 
+                # 재평가는 타이머가 울렸을 때만 한다. 이벤트를 처리한 반복에서
+                # 아래 재평가와 next_reeval 갱신까지 타면, 이벤트가 들어올 때마다
+                # 다음 재평가 시각이 1초씩 밀려 의심 PID가 많을수록 재평가·LOW 복귀가
+                # 크게 늦어진다.
+                continue
+
             # SUSPICIOUS 관찰 창: 최신 피처로 재채점해 올라가면 승격, 끝까지 낮으면 LOW 복귀
             for pid in list(watch_pids):
                 features = ops._pid_features.get(pid, {})
@@ -328,4 +334,7 @@ async def stage2_worker(recv_chan, ops) -> None:
                             f"{STAGE2_MEDIUM_TIMEOUT_SEC:.0f}초 후 커밋 예정"
                         )
 
-            next_reeval += STAGE2_REEVAL_INTERVAL_SEC
+            # 처리가 길어져 시각이 뒤처졌을 때 재평가가 몰려서 도는 것을 막는다.
+            next_reeval = max(
+                next_reeval + STAGE2_REEVAL_INTERVAL_SEC, trio.current_time()
+            )
