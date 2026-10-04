@@ -2,6 +2,8 @@
 
 import errno
 import os
+import random
+import re
 import stat as stat_mod
 import sys
 import time
@@ -21,11 +23,14 @@ from guardfs.common.config import (
     ENTROPY_MAX_EVENT_SAMPLE_SIZE,
     ENTROPY_SHORT_SAMPLE_THRESHOLD,
     ENTROPY_THRESHOLD,
+    INTERPRETER_BASENAMES,
+    STAGE1_SAMPLING_RATE,
     STATS_E_SUM_THRESHOLD,
     STATS_RENAME_THRESHOLD,
     STATS_UNLINK_THRESHOLD,
     STATS_WINDOW_SEC,
     STATS_WRITE_THRESHOLD,
+    TRUSTED_EXE_PREFIXES,
 )
 from guardfs.common.paths import (
     PID_OVERRIDE_FILE,
@@ -45,6 +50,40 @@ def _full_path(root: str, path: str) -> str:
     if path.startswith("/"):
         path = path[1:]
     return os.path.join(root, path)
+
+
+def _resolve_trust_target(pid: int) -> str:
+    """
+    신뢰 판단 대상 경로를 계산한다.
+    exe가 python/bash 등 인터프리터면 exe 자신이 아니라
+    cmdline에서 실제로 실행 중인 스크립트 경로를 반환한다.
+    (그렇지 않으면 /usr/bin/python3로 실행되는 임의의 스크립트가
+    전부 "신뢰 경로"로 오분류된다.)
+    """
+    try:
+        exe = os.readlink(f"/proc/{pid}/exe")
+    except OSError:
+        return ""
+
+    basename = re.sub(r"[\d.]+$", "", os.path.basename(exe))
+
+    if basename not in INTERPRETER_BASENAMES:
+        return exe
+
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            raw = f.read()
+    except OSError:
+        return ""
+
+    args = [a.decode("utf-8", "surrogateescape") for a in raw.split(b"\x00") if a]
+
+    for arg in args[1:]:
+        if arg.startswith("-"):
+            continue
+        return os.path.abspath(arg)
+
+    return ""
 
 
 @dataclass
@@ -144,6 +183,28 @@ async def stats_collector(
                 st = stats[ev.pid]
                 st.update(ev)
 
+                # 보조 샘플링 게이트: 신규 PID + 비신뢰 실행 경로면
+                # Stage1 탐지기 결과와 무관하게 일정 확률로 강제 Stage2 등록.
+                # PID당 최초 이벤트에서 단 한 번만 굴린다.
+                if ev.pid > 0 and ev.pid not in ops._pid_sampled:
+                    ops._pid_sampled.add(ev.pid)
+
+                    if (
+                        not ops.is_trusted_process(ev.pid)
+                        and random.random() < STAGE1_SAMPLING_RATE
+                    ):
+                        print(
+                            f"[STAGE1-SAMPLING] pid={ev.pid} path={ev.path} "
+                            f"비신뢰 경로 신규 프로세스 → 강제 Stage2 등록"
+                        )
+
+                        await ops.mark_suspect(
+                            ev.pid,
+                            reason="stage1_sampling",
+                            path=ev.path,
+                            features=st.to_feature_row(),
+                        )
+
                 if is_suspicious:
                     feature_row = st.to_feature_row()
 
@@ -192,12 +253,15 @@ class Passthrough(pyfuse3.Operations):
         self._queued_stage2: set[int] = set()
 
         self._write_buffer: Dict[int, list] = defaultdict(list)
-        self._write_count: Dict[int, int] = defaultdict(int)
+        self._write_buffer_bytes: Dict[int, int] = defaultdict(int)
+
+        # MEDIUM 진입 시각 (경과시간 기반 지연 계산용, PID당 1회만 기록)
+        self._medium_entered_at: Dict[int, float] = {}
+
+        # 전체 PID를 통틀어 현재 버퍼링 중인 총 바이트 수 (규칙5: 전역 상한)
+        self._global_buffer_bytes: int = 0
         self._risk_score: Dict[int, float] = {}
 
-        # [원본 보호] 신뢰도 낮은 PID를 강제로 MEDIUM 편입시킨 시각 기록
-        # stage2_worker.py의 REEVAL 루프와 동일한 딕셔너리를 공유해서
-        # 10초 타임아웃 정책이 그대로 적용되도록 함
         self._medium_pids: Dict[int, float] = {}
 
         # MEDIUM/HIGH create 시 사용할 staging 영역
@@ -214,7 +278,44 @@ class Passthrough(pyfuse3.Operations):
         # Stage1이 전달한 최신 feature
         self._pid_features: Dict[int, dict] = {}
 
+        # MEDIUM 진입 시 계산 후 캐싱하는 프로세스 신뢰도
+        self._pid_trusted: Dict[int, bool] = {}
+
+        # Stage1 보조 샘플링을 이미 굴린 PID (PID당 1회만 시도)
+        self._pid_sampled: set = set()
+
+        # O_TRUNC로 열렸으나 실제로는 스테이징으로 유도된 (pid, path) 집합.
+        # 커밋 시 이 경로는 기존 내용을 먼저 비우고 버퍼를 적용해야 한다.
+        self._trunc_paths: Dict[int, set] = defaultdict(set)
+
+        # MEDIUM 중 unlink를 실제로 지우지 않고 스테이징으로 옮겨둔 목록.
+        # (원래_경로, 스테이징_경로) 튜플의 리스트 — 규칙4: 단계적 삭제 차단.
+        self._unlink_staged: Dict[int, list] = defaultdict(list)
+
     # ---------------------------------- helpers ---------------------------------- #
+
+    def is_trusted_process(self, pid: int) -> bool:
+        """
+        프로세스가 신뢰 경로(/bin, /usr/bin 등)에서 실행 중인지 반환한다.
+        PID당 한 번만 계산하고 캐싱한다 (매 write마다 /proc 재조회 방지).
+        """
+        if pid in self._pid_trusted:
+            return self._pid_trusted[pid]
+
+        target = _resolve_trust_target(pid)
+        trusted = bool(target) and target.startswith(TRUSTED_EXE_PREFIXES)
+        self._pid_trusted[pid] = trusted
+
+        return trusted
+
+    def _resolve_suspicious_state(self, pid: int) -> ProcState:
+        """
+        SUSPICIOUS(ML 판정 대기 중)일 때 write/create/open을 어떻게 취급할지 결정한다.
+        - 신뢰 경로: 기존과 동일하게 LOW로 취급하고 즉시 통과시킨다.
+        - 비신뢰 경로: MEDIUM으로 취급해서 판정이 나올 때까지 선제적으로
+          버퍼링/지연을 적용한다 (판정 전 첫 write가 무방비로 반영되는 것을 방지).
+        """
+        return ProcState.LOW if self.is_trusted_process(pid) else ProcState.MEDIUM
 
     def _get_forced_state(self, pid: int) -> Optional[ProcState]:
         """override 파일 있으면 해당 상태, 없으면 None (실제 ML 탐지 모드)"""
@@ -359,6 +460,7 @@ class Passthrough(pyfuse3.Operations):
         stage2_worker.py의 REEVAL 루프(10초 타임아웃, HIGH 격상 등)가
         동일하게 적용되도록 한다.
         """
+
         override = self._get_forced_state(pid)
         if override is not None:
             await self.set_proc_state(pid, override)
@@ -366,7 +468,7 @@ class Passthrough(pyfuse3.Operations):
 
         state = await self.get_proc_state(pid)
         if state == ProcState.SUSPICIOUS:
-            state = ProcState.LOW
+            state = self._resolve_suspicious_state(pid)
 
         if state == ProcState.HIGH:
             return state
@@ -557,7 +659,7 @@ class Passthrough(pyfuse3.Operations):
             state = await self.get_proc_state(pid)
 
             if state == ProcState.SUSPICIOUS:
-                state = ProcState.LOW
+                state = self._resolve_suspicious_state(pid)
 
         if state == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_mkdir_high
@@ -611,7 +713,7 @@ class Passthrough(pyfuse3.Operations):
             state = await self.get_proc_state(pid)
 
             if state == ProcState.SUSPICIOUS:
-                state = ProcState.LOW
+                state = self._resolve_suspicious_state(pid)
 
         if state == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_rmdir_high
@@ -701,16 +803,7 @@ class Passthrough(pyfuse3.Operations):
             )
             raise pyfuse3.FUSEError(errno.EACCES)
 
-        override = self._get_forced_state(pid)
-
-        if override is not None:
-            await self.set_proc_state(pid, override)
-            state = override
-        else:
-            state = await self.get_proc_state(pid)
-
-            if state == ProcState.SUSPICIOUS:
-                state = ProcState.LOW
+        state = await self._resolve_effective_state(pid)
 
         # O_TRUNC는 os.open() 순간 원본 파일을 비우므로 사전 차단
         if state == ProcState.HIGH and flags & os.O_TRUNC:
@@ -726,6 +819,42 @@ class Passthrough(pyfuse3.Operations):
             )
 
             raise pyfuse3.FUSEError(errno.EACCES)
+
+        # MEDIUM(SUSPICIOUS 매핑 포함)에서도 O_TRUNC는 os.open() 순간
+        # 원본을 비워버리므로, write 버퍼링과 동일하게 스테이징으로 유도한다.
+        # (기존에는 여기서 바로 os.open(p, flags)가 실행되어 write()의
+        # 버퍼링 로직이 개입하기도 전에 원본이 이미 잘려나갔다.)
+        if state == ProcState.MEDIUM and flags & os.O_TRUNC:
+            staging_path = os.path.join(self._staging_dir, f"fh_{self._next_fh}")
+
+            try:
+                fd = os.open(staging_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
+            except OSError as e:
+                raise pyfuse3.FUSEError(e.errno)
+
+            fh = self._next_fh
+            self._next_fh += 1
+            self._fd_map[fh] = fd
+            self._fh_info[fh] = (pid, path, flags)
+            self._staging_fh[fh] = staging_path
+            self._staging_pid[pid].append(staging_path)
+            self._trunc_paths[pid].add(path)
+
+            self._emit(
+                FsEvent(
+                    ts_ns=time.time_ns(), pid=pid, op="open", path=path, flags=flags
+                )
+            )
+
+            print(
+                f"[OPEN] pid={pid} path={path} O_TRUNC 요청 → 스테이징 유도 (원본 보존)"
+            )
+
+            fi = pyfuse3.FileInfo()
+            fi.fh = fh
+            fi.direct_io = False
+
+            return fi
 
         try:
             fd = os.open(path, flags)
@@ -976,20 +1105,35 @@ class Passthrough(pyfuse3.Operations):
         path = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
 
-        # 실제 파일을 삭제하기 전에 허니팟 경로를 차단
+        # 허니팟은 실제 삭제나 staging 처리 전에 차단
         if self._is_honeypot_path(path):
             self._emit_honeypot_event(
                 pid=pid,
                 op="unlink",
                 path=path,
             )
-
             raise pyfuse3.FUSEError(errno.EACCES)
 
-        if await self.get_proc_state(pid) == ProcState.HIGH:
+        state = await self._resolve_effective_state(pid)
+
+        if state == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_unlink_high
 
             await handle_unlink_high(path, pid, self)
+            return
+
+        if state == ProcState.MEDIUM:
+            from guardfs.stage2.policy.medium import handle_unlink_medium
+
+            await handle_unlink_medium(path, pid, self)
+            self._emit(
+                FsEvent(
+                    ts_ns=time.time_ns(),
+                    pid=pid,
+                    op="unlink",
+                    path=path,
+                )
+            )
             return
 
         try:
