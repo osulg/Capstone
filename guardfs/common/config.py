@@ -27,11 +27,11 @@ STATIC_MODEL_WEIGHT = 0.5
 #   (예: dyn=0.65, stat=0.30 -> score=0.47 로 MEDIUM 후 LOW 복귀)
 #   행동만으로도 충분히 확신하면 정적 점수와 무관하게 격상하도록 OR 규칙을 둔다.
 #
-#   값은 추정이 아니라 데이터로 정한다: train_v5.py 가 동적 모델 v5의
-#   교차검증 OOF 점수에서 "정상 오탐률(FPR) 0%가 되는 최저 임계값"을 구해
-#   dataset_v5/train_v5_report.json 의 recommended_threshold 로 출력한다.
-#   아래 값은 그 리포트 값으로 확정할 것(잠정 0.5). v5가 정상/악성을 깨끗이
-#   가르므로 보통 0.4~0.6 구간에서 FPR 0% 가 나온다.
+#   값은 추정이 아니라 데이터로 정한다(dataset_v5, train_v5.py 교차검증 OOF):
+#   정상 PID 3382개의 OOF 점수 최대가 0.145, 악성은 대부분 0.9+ 로 깨끗이
+#   갈린다. 임계값 0.3~0.80 어디서든 정상 오탐률(FPR) 0% / 악성 탐지율 97.4%.
+#   아래 0.5 는 정상 최대(0.145) 대비 큰 여유를 두면서 탐지율 손실이 없는 값.
+#   (FPR 0% 되는 최저값은 0.3; 재측정은 dataset_v5/train_v5_report.json)
 STAGE2_DYN_ONLY_HIGH_THRESHOLD = 0.5
 
 # ========== Stage 2 - MEDIUM Re-evaluation ========== #

@@ -32,34 +32,30 @@ v5는 런타임이 실제로 보는 신호에 맞춘다. **재수집은 하지 �
 
 ## VM에서 실행 (GuardFS venv — 배포 때와 같은 sklearn)
 
+피처 추출은 이미 끝나 `dataset_v5/features_perpid.csv` 로 커밋돼 있다
+(클라우드에서 전체 286 run의 원시 로그로 추출·검증 완료). 성능 수치는
+`RESULTS.md` 참고. **VM에서는 모델 pkl만 그 CSV로 학습**하면 된다 — 원시 로그
+불필요. pkl은 반드시 GuardFS venv(배포 sklearn)에서 만들어야 런타임 로드시
+깨지지 않는다.
+
 ```bash
 cd ~/Capstone
 source venv/bin/activate          # pyfuse3/trio/sklearn 있는 그 venv
 
-# 0) 모든 *.fuse.jsonl 을 한 폴더에 모은다 (정상+악성).
-#    악성 run은 라벨링을 위해 <run_id>.ebpf.meta.json / .ebpf.jsonl 도 필요
-#    (보통 /var/log/guardfs 또는 수집 폴더). --ebpf-dir 로 지정.
-
-# 1) FUSE-only · PID 단위 피처 추출 (재수집 아님, 몇 초)
-python3 models/dynamic/collect/extract_perpid_fuse.py \
-    --collect-dir ~/guardfs_runtime/collect \
-    --labels models/dynamic/dataset_v4/labels.csv \
-    --ebpf-dir /var/log/guardfs \
-    --out models/dynamic/dataset_v5/features_perpid.csv
-
-# 2) 학습 + 성능 측정 + 모델/피처/리포트 저장 (몇 초)
+# 커밋된 features_perpid.csv 로 모델 학습·저장 (몇 초)
 python3 models/dynamic/collect/train_v5.py \
     --features models/dynamic/dataset_v5/features_perpid.csv \
     --out-model models/dynamic/rf_model_v5.pkl \
     --out-cols  models/dynamic/feature_cols_v5.json
 ```
 
-`train_v5.py` 출력에서 확인할 것:
-- **FPR 0% 되는 최저 임계값** → `guardfs/common/config.py` 의
-  `STAGE2_DYN_ONLY_HIGH_THRESHOLD` 를 그 리포트의 `recommended_threshold` 로 확정.
-- **워크로드 그룹 CV 탐지율/오탐률**, **LOFO**(처음 보는 패밀리 일반화).
-- 마지막 줄 `로드 자가진단 predict_proba 범위 정상` 이어야 함(아니면 sklearn
-  버전 불일치 — 반드시 GuardFS venv에서 재실행).
+`train_v5.py` 출력 마지막 줄 **`로드 자가진단 predict_proba 범위 정상`** 이어야
+한다(아니면 sklearn 버전 문제 — venv 확인). 임계값은 이미 데이터로 확정됨
+(`STAGE2_DYN_ONLY_HIGH_THRESHOLD = 0.5`, 근거는 RESULTS.md).
+
+> 원시 로그로 처음부터 재현하려면 `extract_perpid_fuse.py` 부터 돌리면 된다
+> (아래 "재현" 참고). VM엔 정상 로그만 있고 악성 원시 로그는 dataset_v4.zip 에
+> 있으므로, 정상+악성 로그를 한 폴더에 모아 `--collect-dir` 로 지정할 것.
 
 ## 테스트
 
