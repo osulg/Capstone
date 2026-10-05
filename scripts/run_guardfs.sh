@@ -93,6 +93,8 @@ echo " Starting GuardFS"
 echo "========================================"
 echo ""
 
+# 추가 인자는 그대로 전달 (예: --collect-only --run-id <ID>)
 python3 guardfs/fuse_fs/passthrough.py \
     "$MOUNT_DIR" \
-    "$UNDERLAY_DIR"
+    "$UNDERLAY_DIR" \
+    "$@"

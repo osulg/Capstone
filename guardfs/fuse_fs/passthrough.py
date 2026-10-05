@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import argparse
 import errno
 import os
 import random
@@ -19,6 +20,11 @@ sys.path.insert(
 import pyfuse3
 import trio
 
+from guardfs.collect.fuse_logger import (
+    RUN_ID_PATTERN,
+    FuseCollectLogger,
+    new_run_id,
+)
 from guardfs.common.config import (
     ENTROPY_MAX_EVENT_SAMPLE_SIZE,
     ENTROPY_SHORT_SAMPLE_THRESHOLD,
@@ -35,6 +41,7 @@ from guardfs.common.config import (
 from guardfs.common.paths import (
     PID_OVERRIDE_FILE,
     STAGING_DIR,
+    get_collect_log_dir,
     get_event_log_path,
     get_forced_state_path,
     get_honeypot_dir,
@@ -141,11 +148,11 @@ async def stats_collector(
                         mean_ent = st.mean_entropy()
                         suspicious = (
                             (
-                                st.counts["O_sum"] >= STATS_WRITE_THRESHOLD
+                                st.w_win >= STATS_WRITE_THRESHOLD
                                 and mean_ent >= STATS_E_SUM_THRESHOLD
                             )
-                            or (st.counts["D_sum"] >= STATS_RENAME_THRESHOLD)
-                            or (st.counts["D_sum"] >= STATS_UNLINK_THRESHOLD)
+                            or (st.d_win >= STATS_RENAME_THRESHOLD)
+                            or (st.d_win >= STATS_UNLINK_THRESHOLD)
                         )
 
                         if suspicious and pid > 0:
@@ -153,9 +160,9 @@ async def stats_collector(
 
                             print(
                                 f"[SUSPICIOUS] pid={pid} "
-                                f"O_sum={st.counts['O_sum']} "
-                                f"E_sum={mean_ent:.2f} "
-                                f"D_sum={st.counts['D_sum']}"
+                                f"W_win={st.w_win} "
+                                f"E_sum={mean_ent:.0f} "
+                                f"D_win={st.d_win}"
                             )
 
                             await ops.mark_suspect(
@@ -223,11 +230,13 @@ class Passthrough(pyfuse3.Operations):
         self,
         root: str,
         stage1: Stage1Detector,
+        collect_logger: Optional[FuseCollectLogger] = None,
     ):
         super().__init__()
 
         self.root = os.path.realpath(root)
         self._stage1 = stage1
+        self._collect = collect_logger
 
         self._inode_path: Dict[int, str] = {pyfuse3.ROOT_INODE: self.root}
         self._fd_map: Dict[int, int] = {}
@@ -278,6 +287,10 @@ class Passthrough(pyfuse3.Operations):
         # Stage1이 전달한 최신 feature
         self._pid_features: Dict[int, dict] = {}
 
+        # PID → 실행파일 경로. 정적 모델이 /proc/<pid>/exe 를 못 읽는
+        # 단명 프로세스를 위한 폴백용이다. (PID당 1회만 조회)
+        self._pid_exe: Dict[int, str] = {}
+
         # MEDIUM 진입 시 계산 후 캐싱하는 프로세스 신뢰도
         self._pid_trusted: Dict[int, bool] = {}
 
@@ -319,6 +332,9 @@ class Passthrough(pyfuse3.Operations):
 
     def _get_forced_state(self, pid: int) -> Optional[ProcState]:
         """override 파일 있으면 해당 상태, 없으면 None (실제 ML 탐지 모드)"""
+
+        if self._collect is not None:
+            return None
 
         try:
             with open(get_forced_state_path(pid), "r") as f:
@@ -374,6 +390,20 @@ class Passthrough(pyfuse3.Operations):
         return attr
 
     def _emit(self, ev: FsEvent) -> None:
+        # 수집 모드는 채널을 거치지 않고 동기 기록한다. 채널이 가득 차면
+        # 이벤트가 버려지는데, 수집 데이터에서는 유실이 허용되지 않는다.
+        if self._collect is not None:
+            self._collect.write(ev)
+            return
+
+        # 프로세스가 살아있는 동안(= 이벤트 발생 시점) 한 번만 조회해 캐싱한다.
+        # Stage2가 평가하는 시점에는 이미 종료돼 읽지 못하는 경우가 많다.
+        if ev.pid > 0 and ev.pid not in self._pid_exe:
+            try:
+                self._pid_exe[ev.pid] = os.readlink(f"/proc/{ev.pid}/exe")
+            except OSError:
+                self._pid_exe[ev.pid] = ""
+
         try:
             self._send_chan.send_nowait(ev)
         except trio.WouldBlock:
@@ -538,7 +568,29 @@ class Passthrough(pyfuse3.Operations):
 
     # ---------------------------------- FUSE ops ---------------------------------- #
     async def access(self, inode, mode, ctx=None):
-        return
+        # pyfuse3는 반환값이 참일 때만 허용한다. None이면 chdir/access(2)가 EACCES로 실패한다.
+        return True
+
+    async def statfs(self, ctx=None):
+        # 파일시스템 통계(블록 크기 등)를 underlay에서 그대로 전달한다.
+        # 미구현 시 pyfuse3가 ENOSYS를 던져 df나 statfs(2)/statvfs(3)를 쓰는
+        # 프로그램(일부 랜섬웨어의 블록 크기 조회 포함)이 실패한다.
+        try:
+            s = os.statvfs(self.root)
+        except OSError as e:
+            raise pyfuse3.FUSEError(e.errno)
+
+        out = pyfuse3.StatvfsData()
+        out.f_bsize = s.f_bsize
+        out.f_frsize = s.f_frsize
+        out.f_blocks = s.f_blocks
+        out.f_bfree = s.f_bfree
+        out.f_bavail = s.f_bavail
+        out.f_files = s.f_files
+        out.f_ffree = s.f_ffree
+        out.f_favail = s.f_favail
+        out.f_namemax = s.f_namemax
+        return out
 
     async def getattr(self, inode, ctx=None):
         p = self._inode_path.get(inode)
@@ -1013,22 +1065,91 @@ class Passthrough(pyfuse3.Operations):
         fh,
         ctx=None,
     ):
-        if not fields.update_size:
-            raise pyfuse3.FUSEError(errno.ENOSYS)
+        if fields.update_size:
+            if fh is None:
+                await self.truncate(
+                    inode,
+                    attr.st_size,
+                    ctx,
+                )
+            else:
+                await self.ftruncate(
+                    fh,
+                    attr.st_size,
+                )
 
-        if fh is None:
-            await self.truncate(
-                inode,
-                attr.st_size,
-                ctx,
-            )
-        else:
-            await self.ftruncate(
-                fh,
-                attr.st_size,
-            )
+        if (
+            fields.update_mode
+            or fields.update_uid
+            or fields.update_gid
+            or fields.update_atime
+            or fields.update_mtime
+        ):
+            await self._set_metadata(inode, attr, fields, ctx)
 
         return await self.getattr(inode, ctx)
+
+    async def _set_metadata(self, inode, attr, fields, ctx=None):
+        """chmod / chown / utimens. ctime은 커널이 갱신하므로 따로 설정하지 않는다."""
+        p = self._inode_path.get(inode)
+
+        if p is None:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        pid = ctx.pid if ctx is not None else -1
+
+        if await self.get_proc_state(pid) == ProcState.HIGH:
+            from guardfs.stage2.policy.high import handle_setattr_high
+
+            if fields.update_mode:
+                await handle_setattr_high(
+                    p, f"CHMOD(mode={stat_mod.S_IMODE(attr.st_mode):o})", pid, self
+                )
+            if fields.update_uid or fields.update_gid:
+                await handle_setattr_high(p, "CHOWN", pid, self)
+            if fields.update_atime or fields.update_mtime:
+                await handle_setattr_high(p, "UTIME", pid, self)
+            return
+
+        try:
+            if fields.update_mode:
+                os.chmod(p, stat_mod.S_IMODE(attr.st_mode))
+
+            if fields.update_uid or fields.update_gid:
+                os.chown(
+                    p,
+                    attr.st_uid if fields.update_uid else -1,
+                    attr.st_gid if fields.update_gid else -1,
+                    follow_symlinks=False,
+                )
+
+            if fields.update_atime or fields.update_mtime:
+                st = os.lstat(p)
+                os.utime(
+                    p,
+                    ns=(
+                        attr.st_atime_ns if fields.update_atime else st.st_atime_ns,
+                        attr.st_mtime_ns if fields.update_mtime else st.st_mtime_ns,
+                    ),
+                    follow_symlinks=False,
+                )
+        except OSError as e:
+            raise pyfuse3.FUSEError(e.errno)
+
+        if fields.update_mode:
+            self._emit(
+                FsEvent(
+                    ts_ns=time.time_ns(),
+                    pid=pid,
+                    op="chmod",
+                    path=p,
+                    flags=stat_mod.S_IMODE(attr.st_mode),
+                )
+            )
+        if fields.update_uid or fields.update_gid:
+            self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="chown", path=p))
+        if fields.update_atime or fields.update_mtime:
+            self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="utime", path=p))
 
     async def truncate(self, inode, size, ctx=None):
         p = self._inode_path.get(inode)
@@ -1302,154 +1423,200 @@ class Passthrough(pyfuse3.Operations):
 
 
 class PidStats:
-    FEATURE_COLS = [
-        "O_sum",
-        "C_sum",
-        "D_sum",
-        "E_sum",
-        "Is_System_Path",
-        "Is_Test_Path",
-        "is_dev",
-        "CCC",
-        "CCD",
-        "CCO",
-        "CDC",
-        "CDD",
-        "CDO",
-        "COC",
-        "COD",
-        "COO",
-        "DCC",
-        "DCD",
-        "DCO",
-        "DDC",
-        "DDD",
-        "DDO",
-        "DOC",
-        "DOD",
-        "DOO",
-        "EEE",
-        "EEO",
-        "EOE",
-        "EOO",
-        "OCC",
-        "OCD",
-        "OCO",
-        "ODC",
-        "ODD",
-        "ODO",
-        "OEE",
-        "OOC",
-        "OOD",
-        "OOO",
-    ]
+    """
+    동적 모델 v5(rf_model_v5.pkl)의 입력 피처를 PID 단위로 온라인 집계한다.
+
+    v5는 런타임이 실제로 보는 신호(FUSE 이벤트, PID 단위)에 맞춘 모델이다.
+    여기서 만드는 피처는 수집 로그에서 오프라인으로 뽑는
+    models/dynamic/collect/features.py:compute_features 와 "정확히 동일한"
+    값이어야 한다(그래야 학습 분포와 추론 분포가 일치). 아래 로직은
+    compute_features 를 증분(incremental) 방식으로 그대로 옮긴 것이다.
+
+    다른 점(의도적 제외):
+      - proc_count : PID 단위라 항상 1 → 피처에서 제외
+      - crypto_calls: FUSE엔 CRYPTO op이 없음 → 피처에서 제외
+    이 둘을 뺀 22개가 v5 스키마(models/dynamic/feature_cols_v5.json)이다.
+    """
+
+    HIGH_ENTROPY = ENTROPY_THRESHOLD  # 7.0, features.py HIGH_ENTROPY와 동일
+    MUTATING_OPS = {"WRITE", "CREATE", "RENAME", "UNLINK", "TRUNCATE", "CHMOD"}
+    _OP_NAMES = {"ftruncate": "TRUNCATE"}  # fuse_logger와 동일한 op 정규화
+
+    @staticmethod
+    def _ext(path) -> str:
+        return os.path.splitext(path)[1].lower() if path else ""
 
     def __init__(self):
-        self.counts = {col: 0 for col in self.FEATURE_COLS}
-        self.seq = []  # 최근 O/C/D/E 이벤트 흐름 저장
+        # --- Stage1 1초 윈도우 게이트 전용 (reset마다 초기화) ---
+        self.w_win = 0  # 윈도우 내 WRITE 수
+        self.d_win = 0  # 윈도우 내 삭제(UNLINK+RMDIR) 수
+        self.e_sum = 0  # 윈도우 내 고엔트로피 write 수
+
+        # --- 프로세스 생애 누적 (v5 피처용; reset에서 유지) ---
+        self._op_counts = {}
+        self._total = 0
+        self._first_ts = None
+        self._last_ts = None
+        self._read_paths = set()
+        self._read_then_overwrite = 0
+        self._write_events = 0
+        self._total_renames = 0
+        self._ext_change_renames = 0
+        self._new_exts = set()
+        self._touched_files = set()
+        self._touched_dirs = set()
+        self._write_bytes = 0
+        self._write_size_samples = 0
+        self._he_write = 0
+        self._entropy_writes = 0
+        self._entropy_sum = 0.0
+        self._entropy_available = False
 
     def reset(self) -> None:
-        self.__init__()
+        """1초 윈도우 종료 시 호출. 게이트용 윈도우 카운터만 초기화한다."""
+        self.w_win = 0
+        self.d_win = 0
+        self.e_sum = 0
 
     def mean_entropy(self) -> float:
-        # 기존 stat_anomaly 조건에서 쓰이므로 임시 유지
-        return float(self.counts["E_sum"])
+        # stats_collector의 stat_anomaly 게이트에서 사용.
+        # 윈도우 내 고엔트로피 write 카운트를 반환한다.
+        return float(self.e_sum)
 
-    def _map_event(self, ev):
-        """
-        CSV feature 기준으로 이벤트를 O/C/D/E로 변환
-        O = open/read/write 계열 파일 접근
-        C = create/mkdir 계열 생성
-        D = unlink/rmdir 계열 삭제
-        E = entropy high write 또는 suspicious encryption-like event
-        """
-
-        if ev.op in ("create", "mkdir"):
-            return "C"
-
-        if ev.op in ("unlink", "rmdir"):
-            return "D"
-
-        if ev.op == "write":
-            if ev.entropy is not None and ev.entropy >= ENTROPY_THRESHOLD:
-                return "E"
-
-            return "O"
-
-        if ev.op == "release":
-            if ev.entropy is not None and ev.entropy >= ENTROPY_SHORT_SAMPLE_THRESHOLD:
-                return "E"
-
-            return "O"
-
-        if ev.op in ("open", "read", "lookup", "rename"):
-            return "O"
-
-        return None
+    def _norm_op(self, op: str) -> str:
+        return self._OP_NAMES.get(op, op.upper())
 
     def update(self, ev) -> None:
-        code = self._map_event(ev)
+        op = self._norm_op(ev.op)
 
-        if code is None:
-            return
+        self._total += 1
+        self._op_counts[op] = self._op_counts.get(op, 0) + 1
+        if self._first_ts is None:
+            self._first_ts = ev.ts_ns
+        self._last_ts = ev.ts_ns
 
-        # 단일 이벤트 합계
-        self.counts[f"{code}_sum"] += 1
+        path = ev.path
+        if op in self.MUTATING_OPS and path:
+            self._touched_files.add(path)
+            self._touched_dirs.add(os.path.dirname(path))
 
-        # 경로 기반 feature
-        path = ev.path or ""
+        if op == "READ" and path:
+            self._read_paths.add(path)
 
-        if path.startswith(("/usr", "/bin", "/sbin", "/etc")):
-            self.counts["Is_System_Path"] = 1
+        elif op == "WRITE":
+            self._write_events += 1
+            self.w_win += 1
+            if path and path in self._read_paths:
+                self._read_then_overwrite += 1
 
-        path_lower = path.lower()
+            size = ev.size
+            if isinstance(size, (int, float)) and size >= 0:
+                self._write_bytes += size
+                self._write_size_samples += 1
 
-        if "test" in path_lower or "underlay" in path_lower or "mnt" in path_lower:
-            self.counts["Is_Test_Path"] = 1
+            ent = ev.entropy
+            if ent is not None:
+                self._entropy_available = True
+                self._entropy_writes += 1
+                self._entropy_sum += ent
+                if ent >= self.HIGH_ENTROPY:
+                    self._he_write += 1
+                    self.e_sum += 1
 
-        if "/dev/" in path:
-            self.counts["is_dev"] = 1
+        elif op == "RENAME":
+            self._total_renames += 1
+            if ev.new_path and self._ext(path) != self._ext(ev.new_path):
+                self._ext_change_renames += 1
+                self._new_exts.add(self._ext(ev.new_path))
 
-        # 3-gram sequence feature
-        self.seq.append(code)
-
-        if len(self.seq) >= 3:
-            tri = "".join(self.seq[-3:])
-
-            if tri in self.counts:
-                self.counts[tri] += 1
-
-        # 최근 100개 이벤트만 유지
-        if len(self.seq) > 100:
-            self.seq = self.seq[-100:]
+        elif op in ("UNLINK", "RMDIR"):
+            self.d_win += 1
 
     def to_feature_row(self) -> dict:
-        return {col: self.counts.get(col, 0) for col in self.FEATURE_COLS}
+        """
+        ML 입력 행(22피처). features.py:compute_features 와 동일한 산식·반올림.
+        (게이트가 참조하는 w_win/d_win/e_sum 과 혼동하지 말 것)
+        """
+        if self._first_ts is not None:
+            duration = max((self._last_ts - self._first_ts) / 1e9, 0.0)
+        else:
+            duration = 0.0
+        total = self._total
+        denom = max(duration, 1.0)  # 매우 짧은 실행에서 속도가 튀지 않게
+
+        n_write = self._op_counts.get("WRITE", 0)
+        n_unlink = self._op_counts.get("UNLINK", 0)
+        n_rename = self._op_counts.get("RENAME", 0)
+        n_create = self._op_counts.get("CREATE", 0)
+        n_read = self._op_counts.get("READ", 0)
+
+        def d(a, b):
+            return a / b if b else 0.0
+
+        return {
+            "duration_sec": round(duration, 4),
+            "total_events": total,
+            "write_per_sec": round(d(n_write, denom), 4),
+            "unlink_per_sec": round(d(n_unlink, denom), 4),
+            "rename_per_sec": round(d(n_rename, denom), 4),
+            "create_per_sec": round(d(n_create, denom), 4),
+            "write_ratio": round(d(n_write, total), 4),
+            "unlink_ratio": round(d(n_unlink, total), 4),
+            "rename_ratio": round(d(n_rename, total), 4),
+            "read_ratio": round(d(n_read, total), 4),
+            "high_entropy_write_count": self._he_write,
+            "high_entropy_write_ratio": round(
+                d(self._he_write, self._entropy_writes), 4
+            ),
+            "mean_write_entropy": round(d(self._entropy_sum, self._entropy_writes), 4),
+            "entropy_available": int(self._entropy_available),
+            "read_then_overwrite_ratio": round(
+                d(self._read_then_overwrite, self._write_events), 4
+            ),
+            "ext_change_rename_ratio": round(
+                d(self._ext_change_renames, self._total_renames), 4
+            ),
+            "distinct_ext_after_rename": len(self._new_exts),
+            "unique_files_touched": len(self._touched_files),
+            "unique_dirs_touched": len(self._touched_dirs),
+            "files_per_dir": round(
+                d(len(self._touched_files), len(self._touched_dirs)), 4
+            ),
+            "total_write_bytes": self._write_bytes,
+            "mean_write_bytes": round(
+                d(self._write_bytes, self._write_size_samples), 2
+            ),
+        }
 
 
-async def main(mountpoint: str, root: str):
+async def main(
+    mountpoint: str,
+    root: str,
+    collect_logger: Optional[FuseCollectLogger] = None,
+):
     honeypot_dir = get_honeypot_dir(root)
 
-    # 하나의 Stage1Detector를 생성해서 공유
     stage1 = Stage1Detector(honeypot_dir)
-
-    # 동일한 탐지기를 Passthrough에 전달
-    ops = Passthrough(root, stage1)
+    ops = Passthrough(root, stage1, collect_logger)
 
     pyfuse3.init(ops, mountpoint, set())
 
     try:
         async with trio.open_nursery() as nursery:
-            # stats_collector에도 동일한 탐지기 전달
-            nursery.start_soon(
-                stats_collector,
-                ops._recv_chan,
-                ops._log_path,
-                stage1,
-                ops,
-            )
+            if collect_logger is None:
+                nursery.start_soon(
+                    stats_collector,
+                    ops._recv_chan,
+                    ops._log_path,
+                    stage1,
+                    ops,
+                )
 
-            nursery.start_soon(stage2_worker, ops._stage2_recv, ops)
+                nursery.start_soon(
+                    stage2_worker,
+                    ops._stage2_recv,
+                    ops,
+                )
 
             await pyfuse3.main()
 
@@ -1457,8 +1624,53 @@ async def main(mountpoint: str, root: str):
         pyfuse3.close(unmount=True)
 
 
+def _run_id_arg(value: str) -> str:
+    if not RUN_ID_PATTERN.match(value):
+        raise argparse.ArgumentTypeError(
+            "영문, 숫자, '.', '_', '-'만 사용할 수 있습니다"
+        )
+    return value
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="GuardFS FUSE passthrough")
+    parser.add_argument("mountpoint")
+    parser.add_argument("underlay")
+    parser.add_argument(
+        "--collect-only",
+        action="store_true",
+        help="탐지·차단 정책 없이 파일 이벤트만 기록하는 데이터 수집 모드",
+    )
+    parser.add_argument(
+        "--run-id",
+        type=_run_id_arg,
+        help="수집 세션 ID (--collect-only 전용, 생략 시 자동 생성)",
+    )
+
+    args = parser.parse_args()
+
+    if args.run_id and not args.collect_only:
+        parser.error("--run-id는 --collect-only와 함께 사용해야 합니다")
+
+    return args
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python passthrough.py <MOUNTPOINT> <UNDERLAY>")
-        sys.exit(2)
-    trio.run(main, sys.argv[1], sys.argv[2])
+    args = parse_args()
+
+    collect_logger = None
+
+    if args.collect_only:
+        collect_logger = FuseCollectLogger(
+            get_collect_log_dir(args.underlay),
+            args.run_id or new_run_id(),
+            args.mountpoint,
+            args.underlay,
+        )
+        print(f"[COLLECT] run_id={collect_logger.run_id} log={collect_logger.log_path}")
+
+    try:
+        trio.run(main, args.mountpoint, args.underlay, collect_logger)
+    finally:
+        if collect_logger is not None:
+            collect_logger.close()

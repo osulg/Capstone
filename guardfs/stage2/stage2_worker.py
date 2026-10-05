@@ -1,4 +1,5 @@
 # stage2_worker.py
+import json
 import os
 import warnings
 
@@ -8,91 +9,78 @@ import trio
 
 from guardfs.common.config import (
     DYNAMIC_MODEL_WEIGHT,
+    STAGE2_DYN_ONLY_HIGH_THRESHOLD,
     STAGE2_HIGH_THRESHOLD,
     STAGE2_MEDIUM_THRESHOLD,
     STAGE2_MEDIUM_TIMEOUT_SEC,
     STAGE2_REEVAL_INTERVAL_SEC,
+    STAGE2_WATCH_TIMEOUT_SEC,
     STATIC_MODEL_WEIGHT,
 )
 from guardfs.common.paths import (
+    DYNAMIC_FEATURE_COLS_PATH,
     DYNAMIC_MODEL_PATH,
-    DYNAMIC_SCALER_PATH,
     STATIC_MODEL_PATH,
+    STATIC_VOCAB_PATH,
 )
 from guardfs.stage2.states import ProcState
+from guardfs.stage2.static_analyzer import StaticAnalyzer
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
-DYNAMIC_FEATURES = [
-    "O_sum",
-    "C_sum",
-    "D_sum",
-    "E_sum",
-    "Is_System_Path",
-    "Is_Test_Path",
-    "is_dev",
-    "CCC",
-    "CCD",
-    "CCO",
-    "CDC",
-    "CDD",
-    "CDO",
-    "COC",
-    "COD",
-    "COO",
-    "DCC",
-    "DCD",
-    "DCO",
-    "DDC",
-    "DDD",
-    "DDO",
-    "DOC",
-    "DOD",
-    "DOO",
-    "EEE",
-    "EEO",
-    "EOE",
-    "EOO",
-    "OCC",
-    "OCD",
-    "OCO",
-    "ODC",
-    "ODD",
-    "ODO",
-    "OEE",
-    "OOC",
-    "OOD",
-    "OOO",
-]
-
-STATIC_FEATURES = None  # 모델 로딩 후 채움
+# NOTE: 동적 피처 순서의 단일 출처는 models/dynamic/feature_cols_v5.json 이다
+#       (FUSE-only · PID 단위, 22개). 런타임 PidStats.to_feature_row() 와
+#       학습 추출기(extract_perpid_fuse.py)가 같은 스키마를 공유한다.
 
 
 def load_models():
+    """
+    동적/정적 모델과 동적 피처 목록을 로드한다.
+
+    반환: (dyn_model, dyn_cols, stat_model)
+    """
     try:
         dyn = joblib.load(DYNAMIC_MODEL_PATH)
-        print(f"[ML] 동적 모델 로드 완료")
+
+        with open(DYNAMIC_FEATURE_COLS_PATH, encoding="utf-8") as f:
+            dyn_cols = json.load(f)
+
+        # 모델이 학습된 피처 순서와 json 목록이 어긋나면 점수가
+        # 조용히 엉터리로 나오므로, 기동 자체를 실패시킨다.
+        expected = list(getattr(dyn, "feature_names_in_", []))
+        if expected and expected != dyn_cols:
+            raise RuntimeError(
+                f"동적 모델 피처 불일치: "
+                f"model={len(expected)}개 / json={len(dyn_cols)}개"
+            )
+
+        print(f"[ML] 동적 모델 로드 완료 (v5, FUSE·PID, {len(dyn_cols)} features)")
     except Exception as e:
-        print(f"[ML] 동적 모델 로드 실패: {e}")
-        dyn = None
+        print(f"[ML] 동적 모델 로드 실패: {e}\n")
+        dyn, dyn_cols = None, []
 
     try:
-        dyn_scaler = joblib.load(DYNAMIC_SCALER_PATH)
-        print(f"[ML] 동적 모델 스케일러 로드 완료")
+        stat = StaticAnalyzer(STATIC_VOCAB_PATH, STATIC_MODEL_PATH)
+        print(f"[ML] 정적 모델 로드 완료 (byte 3-gram k={stat.k})\n")
     except Exception as e:
-        print(f"[ML] 동적 모델 스케일러 로드 실패: {e}")
-        dyn_scaler = None
-
-    try:
-        stat = joblib.load(STATIC_MODEL_PATH)
-        global STATIC_FEATURES
-        STATIC_FEATURES = list(stat.feature_names_in_)
-        print(f"[ML] 정적 모델 로드 완료 ({len(STATIC_FEATURES)} features)\n")
-    except Exception as e:
-        print(f"[ML] 정적 모델 로드 실패: {e}")
+        print(f"[ML] 정적 모델 로드 실패: {e}\n")
         stat = None
 
-    return dyn, dyn_scaler, stat
+    # 정적 분석기는 내부에서 예외를 삼키고 None(→0.5 sentinel)을 반환하므로,
+    # sklearn 버전 불일치 등으로 죽어 있어도 로그에 아무것도 남지 않는다.
+    # 기동 시 자기 자신(python3)을 한 번 채점해 파이프라인 생존을 확인한다.
+    if stat is not None:
+        probe = stat.predict_pid(os.getpid())
+        if probe is None:
+            print(
+                "[ML] 경고: 정적 모델 sanity check 실패 — "
+                "모든 정적 점수가 0.5(판단 불가)로 처리됩니다. "
+                "sklearn 버전을 requirements.txt(1.3.2)와 맞추세요."
+            )
+        else:
+            print(f"[ML] 정적 모델 sanity check OK (self={probe:.3f})")
+
+    return dyn, dyn_cols, stat
 
 
 def get_exe_path(pid: int) -> str:
@@ -102,21 +90,22 @@ def get_exe_path(pid: int) -> str:
         return ""
 
 
-def predict_dynamic(model, scaler, features: dict) -> float:
-    """
-    best_model.pkl은 학습 시 StandardScaler로 정규화된 값으로 학습됐다
-    (model.py의 X_train_s = scaler.fit_transform(X_train)).
-    RandomForest의 분기점은 정규화된 분포 기준으로 학습되므로,
-    추론 시에도 반드시 동일한 scaler.transform()을 거쳐야 한다.
-    scaler 없이 원본 카운트값을 그대로 넣으면 예측이 어긋난다.
-    """
+def predict_dynamic(model, cols, features: dict) -> float:
     if model is None:
         return 0.5
     try:
-        row = {f: features.get(f, 0) for f in DYNAMIC_FEATURES}
-        df = pd.DataFrame([row], columns=DYNAMIC_FEATURES)
-        X = scaler.transform(df.values) if scaler is not None else df.values
-        prob = model.predict_proba(X)[0]
+        # 피처 생성기(PidStats)의 스키마가 모델과 어긋나면 결측이
+        # 전부 0으로 채워져 예외 없이 잘못된 점수가 나온다.
+        missing = [c for c in cols if c not in features]
+        if len(missing) > len(cols) // 2:
+            print(
+                f"[ML] 경고: 동적 피처 {len(missing)}/{len(cols)}개 결측 "
+                f"(예: {missing[:5]}) — 피처 생성기 스키마 확인 필요"
+            )
+
+        row = {c: features.get(c, 0) for c in cols}
+        df = pd.DataFrame([row], columns=cols)
+        prob = model.predict_proba(df)[0]
         # 악성(1) 클래스 확률 반환
         classes = list(model.classes_)
         mal_idx = classes.index(1) if 1 in classes else -1
@@ -126,74 +115,46 @@ def predict_dynamic(model, scaler, features: dict) -> float:
         return 0.5
 
 
-def predict_static(model, pid: int) -> float:
+def predict_static(analyzer, pid: int, exe_path: str = "") -> float:
     """
-    블로킹 I/O(exe 파일 읽기)를 포함한다.
-    호출부에서 반드시 trio.to_thread.run_sync로 오프로드해서 호출해야
-    trio 이벤트 루프(FUSE 처리 포함)가 이 호출 동안 멈추지 않는다.
+    byte 3-gram 정적 분석. 분석 불가(ELF 아님/접근 불가)면 0.5 반환
+    (기존 worker의 sentinel 규약 유지: 0.5 = 판단 불가 → stat_cache 폴백).
+
+    exe_path는 프로세스가 이미 종료돼 /proc/<pid>/exe 를 읽지 못할 때의
+    폴백 경로다. Passthrough._pid_exe 가 이벤트 발생 시점에 캐싱해 둔다.
+    exe 단위 캐시는 analyzer 내부에서 처리된다.
     """
-    if model is None or STATIC_FEATURES is None:
+    if analyzer is None:
         return 0.5
     try:
-        exe_path = get_exe_path(pid)
-        if not exe_path or not os.path.exists(exe_path):
-            return 0.5
-
-        # 기본값 0으로 채우고 계산 가능한 값만 채움
-        row = {f: 0 for f in STATIC_FEATURES}
-        row["file_size"] = os.path.getsize(exe_path)
-        row["is_64bit"] = 1
-
-        with open(exe_path, "rb") as f:
-            header = f.read(16)
-
-            if header[:4] == b"\x7fELF":
-                row["is_64bit"] = 1 if header[4] == 2 else 0
-                # ELF type (ET_EXEC=2, ET_DYN=3)
-                f.seek(16)
-                e_type = int.from_bytes(f.read(2), "little")
-                if "elf_type_ET_EXEC" in row:
-                    row["elf_type_ET_EXEC"] = 1 if e_type == 2 else 0
-                if "elf_type_ET_DYN" in row:
-                    row["elf_type_ET_DYN"] = 1 if e_type == 3 else 0
-
-            # byte frequency features
-            f.seek(0)
-
-            data = f.read(4096)
-            freq = [0] * 256
-
-            for b in data:
-                freq[b] += 1
-            for feat in STATIC_FEATURES:
-                if feat.startswith("byte_f_"):
-                    idx = int(feat.split("_")[-1])
-                    if idx < 256:
-                        row[feat] = freq[idx] / max(len(data), 1)
-
-        df = pd.DataFrame([row])
-        prob = model.predict_proba(df)[0]
-        classes = list(model.classes_)
-        mal_idx = classes.index(1) if 1 in classes else -1
-
-        return float(prob[mal_idx]) if mal_idx >= 0 else float(prob[-1])
-
+        prob = analyzer.predict_pid(pid, exe_path or None)
+        return 0.5 if prob is None else prob
     except Exception as e:
         print(f"[ML] 정적 예측 오류: {e}")
         return 0.5
 
 
-async def stage2_worker(recv_chan, ops) -> None:
+def fuse_score(dyn_model, dyn_cols, stat_model, stat_cache, ops, pid, features):
     """
-    Stage2 워커. 신규 이벤트 수신(intake)과 MEDIUM PID 재평가(reeval)를
-    독립된 trio 태스크 두 개로 분리해서 실행한다.
+    (dyn, stat, 가중합 score)를 계산한다. 정적 점수는 프로세스가 살아 있을 때만
+    캐싱하고, 죽었으면 캐시를 쓴다(초기 판정/재평가와 동일한 규약).
+    """
+    dyn_score = predict_dynamic(dyn_model, dyn_cols, features)
+    stat_score = predict_static(stat_model, pid, ops._pid_exe.get(pid, ""))
+    if stat_score != 0.5:
+        stat_cache[pid] = stat_score
+    else:
+        stat_score = stat_cache.get(pid, 0.5)
+    score = DYNAMIC_MODEL_WEIGHT * dyn_score + STATIC_MODEL_WEIGHT * stat_score
+    return dyn_score, stat_score, score
 
-    분리 전에는 둘이 같은 while 루프 안에서 순차 실행되어, MEDIUM PID가
-    여러 개면 그 재평가가 끝날 때까지 신규 이벤트 처리가 밀렸다.
-    predict_static의 블로킹 파일 I/O도 trio.to_thread.run_sync로 오프로드해서
-    reeval 중에도 intake(및 FUSE 이벤트 처리 전반)가 멈추지 않게 한다.
-    """
-    dyn_model, dyn_scaler, stat_model = load_models()
+
+async def stage2_worker(recv_chan, ops) -> None:
+    """신규 PID 평가와 주기적 재평가를 별도 태스크로 실행한다."""
+    dyn_model, dyn_cols, stat_model = load_models()
+
+    # 첫 점수가 낮은 SUSPICIOUS PID의 관찰 시작 시각
+    watch_pids: dict = {}
 
     # 두 태스크가 공유하는 상태 (동일 프로세스 내 단일 trio 스레드에서만 값이 바뀜,
     # to_thread.run_sync로 오프로드된 부분은 순수 함수라 상태를 직접 건드리지 않음)
@@ -202,9 +163,14 @@ async def stage2_worker(recv_chan, ops) -> None:
     stat_cache: dict = {}  # 프로세스 종료 후에도 static 점수 유지
     medium_lock = trio.Lock()
 
-    async def score_pid(pid: int, features: dict) -> float:
-        dyn_score = predict_dynamic(dyn_model, dyn_scaler, features)
-        stat_score = await trio.to_thread.run_sync(predict_static, stat_model, pid)
+    async def score_pid(pid: int, features: dict) -> tuple[float, float, float]:
+        dyn_score = predict_dynamic(dyn_model, dyn_cols, features)
+        stat_score = await trio.to_thread.run_sync(
+            predict_static,
+            stat_model,
+            pid,
+            ops._pid_exe.get(pid, ""),
+        )
 
         if stat_score != 0.5:  # 프로세스 살아있을 때만 캐싱
             stat_cache[pid] = stat_score
@@ -217,9 +183,6 @@ async def stage2_worker(recv_chan, ops) -> None:
         return dyn_score, stat_score, score
 
     async def intake_loop(nursery: trio.Nursery) -> None:
-        from guardfs.stage2.policy.low import handle_low_return
-        from guardfs.stage2.policy.medium import commit_buffers
-
         async with recv_chan:
             while True:
                 try:
@@ -234,24 +197,38 @@ async def stage2_worker(recv_chan, ops) -> None:
                 dyn_score, stat_score, score = await score_pid(pid, features)
 
                 print(
-                    f"[STAGE2] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} final={score:.3f}"
+                    f"[STAGE2] pid={pid} dyn={dyn_score:.3f} "
+                    f"stat={stat_score:.3f} final={score:.3f}"
                 )
 
-                if score >= STAGE2_HIGH_THRESHOLD:
-                    await ops.trigger_high(pid, reason=f"ml_score={score:.3f}")
+                # 가중합이 HIGH에 도달하거나, 동적(행동)만으로도 충분히 확신하면 격상.
+                # 후자는 실행 파일이 양성 인터프리터라 stat 점수가 낮아
+                # 가중합이 눌리는 스크립트형 랜섬웨어를 잡기 위함.
+                if (
+                    score >= STAGE2_HIGH_THRESHOLD
+                    or dyn_score >= STAGE2_DYN_ONLY_HIGH_THRESHOLD
+                ):
+                    reason = (
+                        f"ml_score={score:.3f}"
+                        if score >= STAGE2_HIGH_THRESHOLD
+                        else f"dyn_only={dyn_score:.3f}"
+                    )
+                    await ops.trigger_high(pid, reason=reason)
                 elif score >= STAGE2_MEDIUM_THRESHOLD:
                     await ops.set_proc_state(pid, ProcState.MEDIUM)
                     async with medium_lock:
                         medium_pids[pid] = trio.current_time()
                     print(f"[STAGE2] pid={pid} → MEDIUM (score={score:.3f})")
                 else:
-                    await ops.set_proc_state(pid, ProcState.LOW)
-                    # SUSPICIOUS 대기 중 선제 보호(④)로 버퍼링됐을 수 있으므로 커밋하고,
-                    # _queued_stage2에서 빼서 이후에 다시 의심스러운 행동을 하면
-                    # 재평가될 수 있게 한다 (안 하면 이 pid는 영구히 재평가 대상에서 제외됨).
-                    await commit_buffers(pid, ops)
-                    await handle_low_return(pid, ops)
-                    print(f"[STAGE2] pid={pid} → LOW (score={score:.3f})")
+                    # 바로 LOW로 내리지 않는다. Stage1 첫 트리거 시점에는 이벤트가
+                    # 적어 점수가 낮기 쉽고, LOW로 내리면 재평가 창이 열리지 않아
+                    # 이후 쌓이는 행동을 영영 못 본다. SUSPICIOUS를 유지한 채
+                    # STAGE2_WATCH_TIMEOUT_SEC 동안 1초마다 재채점한다.
+                    watch_pids[pid] = trio.current_time()
+                    print(
+                        f"[STAGE2] pid={pid} → 관찰 시작 "
+                        f"(score={score:.3f}, {STAGE2_WATCH_TIMEOUT_SEC:.0f}초간 재평가)"
+                    )
 
     async def reeval_loop() -> None:
         from guardfs.stage2.policy.low import handle_low_return
@@ -265,6 +242,46 @@ async def stage2_worker(recv_chan, ops) -> None:
         while True:
             await trio.sleep(max(0.0, next_reeval - trio.current_time()))
             next_reeval += STAGE2_REEVAL_INTERVAL_SEC
+
+            # SUSPICIOUS 관찰 창: 최신 피처로 재채점해 올라가면 승격, 끝까지 낮으면 LOW 복귀
+            for pid in list(watch_pids):
+                features = ops._pid_features.get(pid, {})
+                dyn_score, stat_score, score = await score_pid(pid, features)
+                elapsed = trio.current_time() - watch_pids[pid]
+
+                print(
+                    f"[WATCH] pid={pid} dyn={dyn_score:.3f} stat={stat_score:.3f} "
+                    f"score={score:.3f} elapsed={elapsed:.1f}s"
+                )
+
+                if (
+                    score >= STAGE2_HIGH_THRESHOLD
+                    or dyn_score >= STAGE2_DYN_ONLY_HIGH_THRESHOLD
+                ):
+                    reason = (
+                        f"watch_score={score:.3f}"
+                        if score >= STAGE2_HIGH_THRESHOLD
+                        else f"watch_dyn_only={dyn_score:.3f}"
+                    )
+                    watch_pids.pop(pid, None)
+                    await ops.trigger_high(pid, reason=reason)
+                elif score >= STAGE2_MEDIUM_THRESHOLD:
+                    watch_pids.pop(pid, None)
+                    await ops.set_proc_state(pid, ProcState.MEDIUM)
+                    async with medium_lock:
+                        medium_pids[pid] = trio.current_time()
+                    print(f"[WATCH] pid={pid} → MEDIUM (score={score:.3f})")
+                elif elapsed > STAGE2_WATCH_TIMEOUT_SEC:
+                    watch_pids.pop(pid, None)
+                    await ops.set_proc_state(pid, ProcState.LOW)
+                    # SUSPICIOUS 관찰 중 선제 보호로 버퍼링된 내용을 확정한다.
+                    await commit_buffers(pid, ops)
+                    await handle_low_return(pid, ops)
+                    print(
+                        f"[WATCH] pid={pid} 관찰 종료 "
+                        f"→ 현재 상태={await ops.get_proc_state(pid)} "
+                        f"(score={score:.3f})"
+                    )
 
             async with medium_lock:
                 sorted_pids = sorted(
@@ -297,11 +314,20 @@ async def stage2_worker(recv_chan, ops) -> None:
                         medium_pids.pop(pid, None)
                     continue
 
-                if score >= STAGE2_HIGH_THRESHOLD:
-                    print(f"[REEVAL] pid={pid} score={score:.3f} → HIGH 격상")
-                    # trigger_high → handle_high_enter가 내부적으로 drop_buffers를
-                    # 호출해 버퍼 폐기/전역 카운트 반영/unlink 복원을 전담한다.
-                    await ops.trigger_high(pid, reason=f"reeval_score={score:.3f}")
+                if (
+                    score >= STAGE2_HIGH_THRESHOLD
+                    or dyn_score >= STAGE2_DYN_ONLY_HIGH_THRESHOLD
+                ):
+                    reason = (
+                        f"reeval_score={score:.3f}"
+                        if score >= STAGE2_HIGH_THRESHOLD
+                        else f"reeval_dyn_only={dyn_score:.3f}"
+                    )
+                    print(
+                        f"[REEVAL] pid={pid} score={score:.3f} "
+                        f"dyn={dyn_score:.3f} → HIGH 격상 ({reason})"
+                    )
+                    await ops.trigger_high(pid, reason=reason)
                     async with medium_lock:
                         medium_pids.pop(pid, None)
                     continue
@@ -318,6 +344,9 @@ async def stage2_worker(recv_chan, ops) -> None:
                         f"[REEVAL] pid={pid} 헤더 정상 → MEDIUM 유지, "
                         f"{STAGE2_MEDIUM_TIMEOUT_SEC:.0f}초 후 커밋 예정"
                     )
+
+            # 처리 지연으로 지난 재평가가 연속 실행되는 것을 방지한다.
+            next_reeval = max(next_reeval, trio.current_time())
 
     async with trio.open_nursery() as nursery:
         nursery.start_soon(intake_loop, nursery)
