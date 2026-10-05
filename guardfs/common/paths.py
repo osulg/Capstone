@@ -13,6 +13,15 @@ DYNAMIC_MODEL_PATH = os.path.join(
     "rf_model_v5.pkl",
 )
 
+DYNAMIC_SCALER_PATH = os.path.join(
+    PROJECT_ROOT,
+    "models",
+    "dynamic",
+    "dataset",
+    "csv_files",
+    "scaler.pkl",
+)
+
 STATIC_MODEL_PATH = os.path.join(
     PROJECT_ROOT,
     "models",
