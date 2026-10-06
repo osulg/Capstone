@@ -248,7 +248,9 @@ async def stage2_worker(recv_chan, ops) -> None:
                     return
 
                 pid = item["pid"]
-                features = item.get("features") or {}
+
+                # 큐 대기 중 추가된 행동까지 반영한 최신 피처 사용
+                features = ops._pid_features.get(pid) or item.get("features") or {}
 
                 if await discard_if_high(pid):
                     continue

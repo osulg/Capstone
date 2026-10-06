@@ -190,6 +190,10 @@ async def stats_collector(
                 st = stats[ev.pid]
                 st.update(ev)
 
+                # 탐지 여부와 관계없이 재평가용 최신 피처를 저장
+                if ev.pid > 0:
+                    ops._pid_features[ev.pid] = st.to_feature_row()
+
                 # 보조 샘플링 게이트: 신규 PID + 비신뢰 실행 경로면
                 # Stage1 탐지기 결과와 무관하게 일정 확률로 강제 Stage2 등록.
                 # PID당 최초 이벤트에서 단 한 번만 굴린다.
