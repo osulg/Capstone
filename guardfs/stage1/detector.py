@@ -104,7 +104,7 @@ class Stage1Detector:
         if self.honeypot.check(ev):
             return True, "HoneypotDetector"
 
-        if self.ext_change.check_immediate(ev):
+        if self.ext_change.check(ev):
             return True, "ExtChangeDetector"
 
         # FUSE 이벤트는 _emit()에서 계산한 결과를 재사용
