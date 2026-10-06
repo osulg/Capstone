@@ -456,14 +456,34 @@ class Passthrough(pyfuse3.Operations):
         async with self._pid_lock:
             return self._proc_state.get(pid, ProcState.LOW)
 
-    async def set_proc_state(self, pid: int, state: ProcState) -> None:
-        """PID의 GuardFS 상태를 변경한다."""
+    async def set_proc_state(
+        self,
+        pid: int,
+        state: ProcState,
+        *,
+        preserve_high: bool = False,
+        register_medium: bool = False,
+    ) -> bool:
+        """PID의 GuardFS 상태를 변경하고 상태 변경 성공 여부를 반환한다."""
 
         async with self._pid_lock:
             prev = self._proc_state.get(pid, ProcState.LOW)  # 이전 상태 저장
+
+            if preserve_high and prev == ProcState.HIGH:
+                return False
+
             self._proc_state[pid] = state  # 새 상태로 변경
 
+            if state in (ProcState.HIGH, ProcState.LOW):
+                self._medium_pids.pop(pid, None)
+
+            elif state == ProcState.MEDIUM and register_medium:
+                # 상태 변경과 재평가 등록을 같은 잠금에서 처리
+                self._medium_pids.setdefault(pid, trio.current_time())
+
             print(f"[STATE] pid={pid} {prev} → {state}")
+
+            return True
 
     async def trigger_high(self, pid: int, reason: str = "") -> None:
         print(f"[TRIGGER HIGH] pid={pid} reason={reason}")
@@ -504,12 +524,28 @@ class Passthrough(pyfuse3.Operations):
             return state
 
         if state != ProcState.MEDIUM and not await is_trusted_pid(pid):
-            state = ProcState.MEDIUM
-            await self.set_proc_state(pid, ProcState.MEDIUM)
+            changed = await self.set_proc_state(
+                pid,
+                ProcState.MEDIUM,
+                preserve_high=True,
+                register_medium=True,
+            )
 
-        if state == ProcState.MEDIUM and pid not in self._medium_pids:
-            self._medium_pids[pid] = trio.current_time()
-            print(f"[TRUST] pid={pid} untrusted origin → forced MEDIUM (staging)")
+            if not changed:
+                return ProcState.HIGH
+
+            state = ProcState.MEDIUM
+
+        # 신뢰도 확인 중 HIGH가 되었거나
+        # SUSPICIOUS의 실효 상태가 MEDIUM인 경우를 처리
+        async with self._pid_lock:
+            current = self._proc_state.get(pid, ProcState.LOW)
+
+            if current == ProcState.HIGH:
+                return ProcState.HIGH
+
+            if state == ProcState.MEDIUM and pid not in self._medium_pids:
+                self._medium_pids[pid] = trio.current_time()
 
         return state
 
