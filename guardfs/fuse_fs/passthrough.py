@@ -451,8 +451,12 @@ class Passthrough(pyfuse3.Operations):
     async def get_proc_state(self, pid: int) -> ProcState:
         """PID의 현재 상태를 반환한다."""
 
+        if self._collect is not None:
+            return ProcState.LOW
+
         if pid <= 0:
             return ProcState.LOW
+
         async with self._pid_lock:
             return self._proc_state.get(pid, ProcState.LOW)
 
@@ -511,7 +515,12 @@ class Passthrough(pyfuse3.Operations):
         동일하게 적용되도록 한다.
         """
 
+        # 수집 모드는 신뢰도 gate와 staging 정책을 적용하지 않음
+        if self._collect is not None:
+            return ProcState.LOW
+
         override = self._get_forced_state(pid)
+
         if override is not None:
             await self.set_proc_state(pid, override)
             return override
@@ -783,7 +792,7 @@ class Passthrough(pyfuse3.Operations):
         pid = ctx.pid if ctx is not None else -1
 
         # 허니팟 디렉터리는 실제 삭제 전에 이벤트를 기록 및 차단
-        if self._is_honeypot_path(p):
+        if self._collect is None and self._is_honeypot_path(p):
             self._emit_honeypot_event(
                 pid=pid,
                 op="rmdir",
@@ -882,7 +891,7 @@ class Passthrough(pyfuse3.Operations):
         pid = ctx.pid if ctx is not None else -1
 
         # os.open() 전에 honeypot 접근 차단
-        if self._is_honeypot_path(path):
+        if self._collect is None and self._is_honeypot_path(path):
             self._emit_honeypot_event(
                 pid=pid,
                 op="open",
@@ -994,7 +1003,7 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         # 실제 os.read() 전에 honeypot 경로를 확인
-        if self._is_honeypot_path(path):
+        if self._collect is None and self._is_honeypot_path(path):
             self._emit_honeypot_event(
                 pid=pid,
                 op="read",
@@ -1031,7 +1040,7 @@ class Passthrough(pyfuse3.Operations):
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
 
         # create로 발급된 핸들을 통한 허니팟 write도 실제 기록 전에 차단
-        if self._is_honeypot_path(path):
+        if self._collect is None and self._is_honeypot_path(path):
             self._emit_honeypot_event(
                 pid=pid,
                 op="write",
@@ -1196,7 +1205,7 @@ class Passthrough(pyfuse3.Operations):
         pid = ctx.pid if ctx is not None else -1
 
         # 실제 파일 크기를 변경하기 전에 허니팟 경로를 차단
-        if self._is_honeypot_path(p):
+        if self._collect is None and self._is_honeypot_path(p):
             self._emit_honeypot_event(
                 pid=pid,
                 op="truncate",
@@ -1232,7 +1241,7 @@ class Passthrough(pyfuse3.Operations):
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
 
         # 열린 핸들을 통한 크기 변경도 실제 변경 전에 허니팟 경로를 차단
-        if self._is_honeypot_path(path):
+        if self._collect is None and self._is_honeypot_path(path):
             self._emit_honeypot_event(
                 pid=pid,
                 op="ftruncate",
@@ -1263,7 +1272,7 @@ class Passthrough(pyfuse3.Operations):
         pid = ctx.pid if ctx is not None else -1
 
         # 허니팟은 실제 삭제나 staging 처리 전에 차단
-        if self._is_honeypot_path(path):
+        if self._collect is None and self._is_honeypot_path(path):
             self._emit_honeypot_event(
                 pid=pid,
                 op="unlink",
@@ -1309,7 +1318,9 @@ class Passthrough(pyfuse3.Operations):
         pid = ctx.pid if ctx is not None else -1
 
         # 출발지 또는 목적지가 허니팟이면 실제 rename 전에 차단
-        if self._is_honeypot_path(oldp) or self._is_honeypot_path(newp):
+        if self._collect is None and (
+            self._is_honeypot_path(oldp) or self._is_honeypot_path(newp)
+        ):
             self._emit(
                 FsEvent(
                     ts_ns=time.time_ns(),
@@ -1339,7 +1350,10 @@ class Passthrough(pyfuse3.Operations):
             new_path=newp,
         )
 
-        blocked, reason = self._stage1.precheck(ev)
+        if self._collect is None:
+            blocked, reason = self._stage1.precheck(ev)
+        else:
+            blocked, reason = False, None
 
         if blocked:
             ev.applied = False
