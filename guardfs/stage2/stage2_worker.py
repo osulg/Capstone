@@ -2,7 +2,7 @@
 import json
 import os
 import warnings
-from typing import Tuple
+from typing import Optional, Tuple
 
 import joblib
 import pandas as pd
@@ -56,13 +56,16 @@ def load_models():
             )
 
         print(f"[ML] 동적 모델 로드 완료 (v5, FUSE·PID, {len(dyn_cols)} features)")
+
     except Exception as e:
-        print(f"[ML] 동적 모델 로드 실패: {e}\n")
-        dyn, dyn_cols = None, []
+        raise RuntimeError(
+            f"GuardFS 기동 실패: 동적 모델을 사용할 수 없습니다: {e}"
+        ) from e
 
     try:
         stat = StaticAnalyzer(STATIC_VOCAB_PATH, STATIC_MODEL_PATH)
-        print(f"[ML] 정적 모델 로드 완료 (byte 3-gram k={stat.k})\n")
+        print(f"[ML] 정적 모델 로드 완료 (byte 3-gram k={stat.k})")
+
     except Exception as e:
         print(f"[ML] 정적 모델 로드 실패: {e}\n")
         stat = None
@@ -81,6 +84,7 @@ def load_models():
         else:
             print(f"[ML] 정적 모델 sanity check OK (self={probe:.3f})")
 
+    print()
     return dyn, dyn_cols, stat
 
 
@@ -91,13 +95,16 @@ def get_exe_path(pid: int) -> str:
         return ""
 
 
-def predict_dynamic(model, cols, features: dict) -> float:
+def predict_dynamic(model, cols, features: dict) -> Optional[float]:
     if model is None:
-        return 0.5
+        print("[ML] 동적 예측 불가: 모델이 로드되지 않음")
+        return None
+
     try:
         # 피처 생성기(PidStats)의 스키마가 모델과 어긋나면 결측이
         # 전부 0으로 채워져 예외 없이 잘못된 점수가 나온다.
         missing = [c for c in cols if c not in features]
+
         if len(missing) > len(cols) // 2:
             print(
                 f"[ML] 경고: 동적 피처 {len(missing)}/{len(cols)}개 결측 "
@@ -107,13 +114,16 @@ def predict_dynamic(model, cols, features: dict) -> float:
         row = {c: features.get(c, 0) for c in cols}
         df = pd.DataFrame([row], columns=cols)
         prob = model.predict_proba(df)[0]
+
         # 악성(1) 클래스 확률 반환
         classes = list(model.classes_)
         mal_idx = classes.index(1) if 1 in classes else -1
+
         return float(prob[mal_idx]) if mal_idx >= 0 else float(prob[-1])
+
     except Exception as e:
         print(f"[ML] 동적 예측 오류: {e}")
-        return 0.5
+        return None
 
 
 def predict_static(analyzer, pid: int, exe_path: str = "") -> float:
@@ -142,11 +152,17 @@ def fuse_score(dyn_model, dyn_cols, stat_model, stat_cache, ops, pid, features):
     """
     dyn_score = predict_dynamic(dyn_model, dyn_cols, features)
     stat_score = predict_static(stat_model, pid, ops._pid_exe.get(pid, ""))
+
     if stat_score != 0.5:
         stat_cache[pid] = stat_score
     else:
         stat_score = stat_cache.get(pid, 0.5)
+
+    if dyn_score is None:
+        return None, stat_score, None
+
     score = DYNAMIC_MODEL_WEIGHT * dyn_score + STATIC_MODEL_WEIGHT * stat_score
+
     return dyn_score, stat_score, score
 
 
@@ -166,8 +182,11 @@ async def stage2_worker(recv_chan, ops) -> None:
     # 상태와 MEDIUM 재평가 목록은 같은 잠금으로 보호
     medium_lock = ops._pid_lock
 
-    async def score_pid(pid: int, features: dict) -> Tuple[float, float, float]:
+    async def score_pid(
+        pid: int, features: dict
+    ) -> Tuple[Optional[float], float, Optional[float]]:
         dyn_score = predict_dynamic(dyn_model, dyn_cols, features)
+
         stat_score = await trio.to_thread.run_sync(
             predict_static,
             stat_model,
@@ -179,6 +198,9 @@ async def stage2_worker(recv_chan, ops) -> None:
             stat_cache[pid] = stat_score
         else:
             stat_score = stat_cache.get(pid, 0.5)  # 죽었으면 캐시 사용
+
+        if dyn_score is None:
+            return None, stat_score, None
 
         score = DYNAMIC_MODEL_WEIGHT * dyn_score + STATIC_MODEL_WEIGHT * stat_score
         risk_scores[pid] = score
@@ -196,6 +218,25 @@ async def stage2_worker(recv_chan, ops) -> None:
             medium_pids.pop(pid, None)
 
             return True
+
+    async def defer_dynamic_failure(pid: int) -> None:
+        """동적 분석 실패 시 현재 상태를 유지하고 재평가"""
+
+        async with ops._pid_lock:
+            current = ops._proc_state.get(pid, ProcState.LOW)
+
+            if current == ProcState.HIGH:
+                watch_pids.pop(pid, None)
+                medium_pids.pop(pid, None)
+                return
+
+            # MEDIUM 대상은 기존 MEDIUM 재평가를 사용
+            if pid not in medium_pids:
+                watch_pids.setdefault(pid, trio.current_time())
+
+        print(
+            f"[ML] pid={pid} 동적 분석 실패 → ML 판정·타임아웃 커밋 보류, 재평가 예정"
+        )
 
     async def intake_loop(nursery: trio.Nursery) -> None:
         async with recv_chan:
@@ -217,6 +258,10 @@ async def stage2_worker(recv_chan, ops) -> None:
                 # 정적 점수를 계산하는 동안 HIGH가 될 수 있음
                 if await discard_if_high(pid):
                     print(f"[STAGE2] pid={pid} 이미 HIGH → 평가 결과 적용 생략")
+                    continue
+
+                if dyn_score is None or score is None:
+                    await defer_dynamic_failure(pid)
                     continue
 
                 print(
@@ -309,6 +354,10 @@ async def stage2_worker(recv_chan, ops) -> None:
                 if await discard_if_high(pid):
                     continue
 
+                if dyn_score is None or score is None:
+                    await defer_dynamic_failure(pid)
+                    continue
+
                 started_at = watch_pids.get(pid)
                 if started_at is None:
                     continue
@@ -393,6 +442,10 @@ async def stage2_worker(recv_chan, ops) -> None:
                 dyn_score, stat_score, score = await score_pid(pid, features)
 
                 if await discard_if_high(pid):
+                    continue
+
+                if dyn_score is None or score is None:
+                    await defer_dynamic_failure(pid)
                     continue
 
                 # 평가 중 목록에서 제외된 경우 오래된 결과를 적용하지 않음
