@@ -177,12 +177,12 @@ async def stats_collector(
                     next_tick += STATS_WINDOW_SEC
                     continue
 
-                # 파일 생명주기 먼저 반영
-                stage1.update_lifecycle(ev)
-
-                # Stage 1이 누적 엔트로피를 계산한 뒤
-                # 갱신된 이벤트를 로그와 PID 통계에 반영
-                is_suspicious, reason = await stage1.check(ev)
+                # 엔트로피는 _emit()에서 이미 계산함 상태
+                # 여기서는 계산 결과를 재사용하여 탐지 판단만 수행
+                is_suspicious, reason = await stage1.check(
+                    ev,
+                    entropy_suspicious=getattr(ev, "_entropy_suspicious", None),
+                )
 
                 # Stage 1에서 갱신된 이벤트를 로그와 PID 통계에 반영
                 logger.write(ev)
@@ -390,6 +390,10 @@ class Passthrough(pyfuse3.Operations):
         return attr
 
     def _emit(self, ev: FsEvent) -> None:
+        # 수집·탐지 모드가 동일한 생명주기 및 엔트로피 계산을 사용
+        self._stage1.update_lifecycle(ev)
+        ev._entropy_suspicious = self._stage1.entropy.check(ev)
+
         # 수집 모드는 채널을 거치지 않고 동기 기록한다. 채널이 가득 차면
         # 이벤트가 버려지는데, 수집 데이터에서는 유실이 허용되지 않는다.
         if self._collect is not None:
