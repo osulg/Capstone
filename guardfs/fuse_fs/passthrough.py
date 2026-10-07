@@ -566,6 +566,45 @@ class Passthrough(pyfuse3.Operations):
 
         return state
 
+    @staticmethod
+    def _path_is_within(path: str, root: str) -> bool:
+        """root 자체 또는 그 하위 경로인지 확인"""
+
+        return path == root or path.startswith(root + os.sep)
+
+    def _has_pending_destination(self, path: str) -> bool:
+        """rename 목적지에 충돌할 수 있는 지연 작업이 있는지 확인"""
+
+        for buffers in self._write_buffer.values():
+            if any(
+                self._path_is_within(buffer_path, path)
+                for _fd, _off, _buf, buffer_path in buffers
+            ):
+                return True
+
+        for paths in self._trunc_paths.values():
+            if any(self._path_is_within(p, path) for p in paths):
+                return True
+
+        for entries in self._unlink_staged.values():
+            if any(
+                self._path_is_within(orig_path, path)
+                for orig_path, _staging_path in entries
+            ):
+                return True
+
+        # 목적지의 기존 핸들이 다른 파일을 가리키는 상태가 되는 것을
+        # 현재 경로 기반 구현에서는 안전하게 처리하지 못함.
+        for _pid, fh_path, _flags in self._fh_info.values():
+            if self._path_is_within(fh_path, path):
+                return True
+
+        for dir_path in self._dir_fh_path.values():
+            if self._path_is_within(dir_path, path):
+                return True
+
+        return False
+
     def _find_open_fd_for_path(self, path: str) -> Optional[int]:
         """열린 fd 검색 helper"""
 
@@ -579,6 +618,45 @@ class Passthrough(pyfuse3.Operations):
                 return fd
 
         return None
+
+    def _move_pending_paths(
+        self,
+        oldp: str,
+        newp: str,
+        source_is_dir: bool,
+    ) -> None:
+        """rename이 성공한 뒤 지연 작업의 논리적 경로를 갱신"""
+
+        old_prefix = oldp + os.sep
+
+        def moved_path(path):
+            if path == oldp or (source_is_dir and path.startswith(old_prefix)):
+                return newp + path[len(oldp) :]
+
+            return path
+
+        # rename을 요청한 PID뿐 아니라 모든 PID의 관련 버퍼를 갱신
+        for buffer_pid, buffers in list(self._write_buffer.items()):
+            self._write_buffer[buffer_pid] = [
+                (fd, off, buf, moved_path(path)) for fd, off, buf, path in buffers
+            ]
+
+        for trunc_pid, paths in list(self._trunc_paths.items()):
+            self._trunc_paths[trunc_pid] = {moved_path(path) for path in paths}
+
+        # 디렉터리 안에서 삭제를 보류한 파일의 복원 위치도 이동
+        # 실제 /tmp staging 파일의 위치는 그대로 둠
+        if source_is_dir:
+            for unlink_pid, entries in list(self._unlink_staged.items()):
+                self._unlink_staged[unlink_pid] = [
+                    (
+                        moved_path(orig_path)
+                        if orig_path.startswith(old_prefix)
+                        else orig_path,
+                        staging_path,
+                    )
+                    for orig_path, staging_path in entries
+                ]
 
     def _is_honeypot_path(self, path: str) -> bool:
         """경로가 실제 GardFS honeypot 디렉터리 내부인지 확인"""
@@ -1376,6 +1454,28 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
+            source_stat = os.lstat(oldp)
+            source_is_dir = stat_mod.S_ISDIR(source_stat.st_mode)
+
+            try:
+                destination_stat = os.lstat(newp)
+            except FileNotFoundError:
+                destination_stat = None
+
+            # 같은 경로 또는 같은 inode의 hard link는 rename의 no-op이다.
+            # 내부 경로와 지연 작업도 이동시키지 않음
+            if destination_stat is not None and (
+                source_stat.st_dev,
+                source_stat.st_ino,
+            ) == (destination_stat.st_dev, destination_stat.st_ino):
+                self._emit(ev)
+                return
+
+            # 경로 기반 커밋이 기존 목적지의 데이터를 새 파일에 적용하지
+            # 않도록 열린 핸들이나 지연 작업이 있는 목적지는 보호
+            if self._has_pending_destination(newp):
+                raise pyfuse3.FUSEError(errno.EBUSY)
+
             os.rename(oldp, newp)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
@@ -1410,6 +1510,8 @@ class Passthrough(pyfuse3.Operations):
         for fh, path in list(self._dir_fh_path.items()):
             if path == oldp or path.startswith(old_prefix):
                 self._dir_fh_path[fh] = newp + path[len(oldp) :]
+
+        self._move_pending_paths(oldp, newp, source_is_dir)
 
         self._emit(
             FsEvent(
