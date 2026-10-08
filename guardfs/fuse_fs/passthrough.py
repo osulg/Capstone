@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import argparse
 import errno
 import os
@@ -10,7 +12,6 @@ import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
 
 sys.path.insert(
     0,
@@ -27,7 +28,6 @@ from guardfs.collect.fuse_logger import (
 )
 from guardfs.common.config import (
     ENTROPY_MAX_EVENT_SAMPLE_SIZE,
-    ENTROPY_SHORT_SAMPLE_THRESHOLD,
     ENTROPY_THRESHOLD,
     INTERPRETER_BASENAMES,
     STAGE1_SAMPLING_RATE,
@@ -56,6 +56,7 @@ from guardfs.stage2.states import ProcState
 def _full_path(root: str, path: str) -> str:
     if path.startswith("/"):
         path = path[1:]
+
     return os.path.join(root, path)
 
 
@@ -67,6 +68,7 @@ def _resolve_trust_target(pid: int) -> str:
     (그렇지 않으면 /usr/bin/python3로 실행되는 임의의 스크립트가
     전부 "신뢰 경로"로 오분류된다.)
     """
+
     try:
         exe = os.readlink(f"/proc/{pid}/exe")
     except OSError:
@@ -104,13 +106,13 @@ class FsEvent:
     size: int = 0
     off: int = -1
     flags: int = 0
-    entropy: Optional[float] = None
-    new_path: Optional[str] = None
-    sample_data: Optional[bytes] = None
-    original_data: Optional[bytes] = None
-    entropy_before: Optional[float] = None
-    entropy_after: Optional[float] = None
-    entropy_delta: Optional[float] = None
+    entropy: float | None = None
+    new_path: str | None = None
+    sample_data: bytes | None = None
+    original_data: bytes | None = None
+    entropy_before: float | None = None
+    entropy_after: float | None = None
+    entropy_delta: float | None = None
     applied: bool = True
 
 
@@ -118,7 +120,7 @@ async def stats_collector(
     recv_chan: trio.MemoryReceiveChannel,
     log_path: str,
     stage1: Stage1Detector,
-    ops: "Passthrough",
+    ops: Passthrough,
 ) -> None:
     """
     이벤트를 기록하고 PID별 통계 및 Stage 1 탐지를 수행한다.
@@ -234,7 +236,7 @@ class Passthrough(pyfuse3.Operations):
         self,
         root: str,
         stage1: Stage1Detector,
-        collect_logger: Optional[FuseCollectLogger] = None,
+        collect_logger: FuseCollectLogger | None = None,
     ):
         super().__init__()
 
@@ -242,14 +244,14 @@ class Passthrough(pyfuse3.Operations):
         self._stage1 = stage1
         self._collect = collect_logger
 
-        self._inode_path: Dict[int, str] = {pyfuse3.ROOT_INODE: self.root}
-        self._fd_map: Dict[int, int] = {}
+        self._inode_path: dict[int, str] = {pyfuse3.ROOT_INODE: self.root}
+        self._fd_map: dict[int, int] = {}
         self._next_fh = 1
 
-        self._fh_info: Dict[int, Tuple[int, str, int]] = {}
+        self._fh_info: dict[int, tuple[int, str, int]] = {}
 
         # opendir에서 발급한 fh → 해당 디렉토리 경로 매핑
-        self._dir_fh_path: Dict[int, str] = {}
+        self._dir_fh_path: dict[int, str] = {}
 
         self._send_chan, self._recv_chan = trio.open_memory_channel(10000)
         self._stage2_send, self._stage2_recv = trio.open_memory_channel(1000)
@@ -260,54 +262,70 @@ class Passthrough(pyfuse3.Operations):
         self._pid_lock = trio.Lock()
 
         # PID 상태 관리
-        self._proc_state: Dict[int, ProcState] = {}
+        self._proc_state: dict[int, ProcState] = {}
 
         # Stage2 큐 중복 등록 방지
         self._queued_stage2: set[int] = set()
 
-        self._write_buffer: Dict[int, list] = defaultdict(list)
-        self._write_buffer_bytes: Dict[int, int] = defaultdict(int)
+        self._write_buffer: dict[int, list] = defaultdict(list)
+        self._write_buffer_bytes: dict[int, int] = defaultdict(int)
 
         # MEDIUM 진입 시각 (경과시간 기반 지연 계산용, PID당 1회만 기록)
-        self._medium_entered_at: Dict[int, float] = {}
+        self._medium_entered_at: dict[int, float] = {}
 
         # 전체 PID를 통틀어 현재 버퍼링 중인 총 바이트 수 (규칙5: 전역 상한)
         self._global_buffer_bytes: int = 0
-        self._risk_score: Dict[int, float] = {}
+        self._risk_score: dict[int, float] = {}
 
-        self._medium_pids: Dict[int, float] = {}
+        self._medium_pids: dict[int, float] = {}
 
         # MEDIUM/HIGH create 시 사용할 staging 영역
         self._staging_dir = STAGING_DIR
         os.makedirs(self._staging_dir, exist_ok=True)
 
-        self._staging_fh: Dict[int, str] = {}
-        self._staging_pid: Dict[int, list] = defaultdict(list)
+        self._staging_fh: dict[int, str] = {}
+        self._staging_pid: dict[int, list] = defaultdict(list)
 
         self._suspended_pids: set = set()
-        self._high_reason: Dict[int, str] = {}
+        self._high_reason: dict[int, str] = {}
         self._pid_override_file = PID_OVERRIDE_FILE
 
         # Stage1이 전달한 최신 feature
-        self._pid_features: Dict[int, dict] = {}
+        self._pid_features: dict[int, dict] = {}
 
         # PID → 실행파일 경로. 정적 모델이 /proc/<pid>/exe 를 못 읽는
         # 단명 프로세스를 위한 폴백용이다. (PID당 1회만 조회)
-        self._pid_exe: Dict[int, str] = {}
+        self._pid_exe: dict[int, str] = {}
 
         # MEDIUM 진입 시 계산 후 캐싱하는 프로세스 신뢰도
-        self._pid_trusted: Dict[int, bool] = {}
+        self._pid_trusted: dict[int, bool] = {}
 
         # Stage1 보조 샘플링을 이미 굴린 PID (PID당 1회만 시도)
         self._pid_sampled: set = set()
 
         # O_TRUNC로 열렸으나 실제로는 스테이징으로 유도된 (pid, path) 집합.
         # 커밋 시 이 경로는 기존 내용을 먼저 비우고 버퍼를 적용해야 한다.
-        self._trunc_paths: Dict[int, set] = defaultdict(set)
+        self._trunc_paths: dict[int, set] = defaultdict(set)
 
         # MEDIUM 중 unlink를 실제로 지우지 않고 스테이징으로 옮겨둔 목록.
         # (원래_경로, 스테이징_경로) 튜플의 리스트 — 규칙4: 단계적 삭제 차단.
-        self._unlink_staged: Dict[int, list] = defaultdict(list)
+        self._unlink_staged: dict[int, list] = defaultdict(list)
+
+        # 복원 충돌로 보존한 파일. LOW 삭제 확정 대상과 분리
+        self._unlink_preserved: dict[int, list] = defaultdict(list)
+
+        # HIGH 복원 충돌 또는 복원 실패로 보존한 원본.
+        # LOW의 _finalize_unlink()에서 삭제하면 안 된다.
+        self._unlink_recovery: dict[int, list] = defaultdict(list)
+
+        # PID별 원본 파일 identity → 버퍼 전용 fd
+        self._buffer_fds: dict[int, dict] = defaultdict(dict)
+
+        # OS staging fd → 원래 underlay fd (신규 create는 None).
+        self._staging_origin_fd: dict[int, int | None] = {}
+        self._unlink_identity: dict[str, tuple[int, int]] = {}
+        self._buffer_new_files: dict[int, dict[int, str]] = defaultdict(dict)
+        self._staging_recovery: dict[int, list] = defaultdict(list)
 
     # ---------------------------------- helpers ---------------------------------- #
 
@@ -334,20 +352,20 @@ class Passthrough(pyfuse3.Operations):
         """
         return ProcState.LOW if self.is_trusted_process(pid) else ProcState.MEDIUM
 
-    def _get_forced_state(self, pid: int) -> Optional[ProcState]:
+    def _get_forced_state(self, pid: int) -> ProcState | None:
         """override 파일 있으면 해당 상태, 없으면 None (실제 ML 탐지 모드)"""
 
         if self._collect is not None:
             return None
 
         try:
-            with open(get_forced_state_path(pid), "r") as f:
+            with open(get_forced_state_path(pid)) as f:
                 s = f.read().strip().upper()
 
             if s in ("LOW", "MEDIUM", "HIGH"):
                 return ProcState(s)
 
-        except (FileNotFoundError, OSError):
+        except OSError:
             pass
 
         return None
@@ -368,6 +386,7 @@ class Passthrough(pyfuse3.Operations):
             st = os.lstat(path)
         except FileNotFoundError:
             raise pyfuse3.FUSEError(errno.ENOENT)
+
         self._inode_path[st.st_ino] = path
 
         return st
@@ -605,7 +624,7 @@ class Passthrough(pyfuse3.Operations):
 
         return False
 
-    def _find_open_fd_for_path(self, path: str) -> Optional[int]:
+    def _find_open_fd_for_path(self, path: str) -> int | None:
         """열린 fd 검색 helper"""
 
         for fh, (_pid, fh_path, _flags) in self._fh_info.items():
@@ -658,6 +677,14 @@ class Passthrough(pyfuse3.Operations):
                     for orig_path, staging_path in entries
                 ]
 
+        if source_is_dir:
+            for recovery in (self._unlink_recovery, self._staging_recovery):
+                for recovery_pid, entries in list(recovery.items()):
+                    recovery[recovery_pid] = [
+                        (moved_path(path), staging_path)
+                        for path, staging_path in entries
+                    ]
+
     def _is_honeypot_path(self, path: str) -> bool:
         """경로가 실제 GardFS honeypot 디렉터리 내부인지 확인"""
 
@@ -678,7 +705,7 @@ class Passthrough(pyfuse3.Operations):
         size: int = 0,
         off: int = -1,
         flags: int = 0,
-        new_path: Optional[str] = None,
+        new_path: str | None = None,
         applied: bool = False,
     ) -> None:
         self._emit(
@@ -697,9 +724,11 @@ class Passthrough(pyfuse3.Operations):
 
         print(f"[HONEYPOT] pid={pid} op={op} blocked path={path}")
 
-    def _defer_truncate(self, pid: int, path: str, size: int) -> None:
-        """원본을 변경하지 않고 크기 변경을 순서대로 기록"""
-        self._write_buffer[pid].append((-1, size, None, path))
+    def _defer_truncate(self, pid, path, size, target_fd):
+        from guardfs.stage2.policy.medium import _retain_buffer_fd
+
+        held_fd = _retain_buffer_fd(pid, target_fd, self)
+        self._write_buffer[pid].append((held_fd, size, None, path))
 
         print(f"[MEDIUM] pid={pid} path={path} truncate size={size} → 지연 작업 보관")
 
@@ -730,29 +759,30 @@ class Passthrough(pyfuse3.Operations):
         return out
 
     async def getattr(self, inode, ctx=None):
-        p = self._inode_path.get(inode)
-
-        if p is None:
+        path = self._inode_path.get(inode)
+        if path is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         try:
-            st = os.lstat(p)
-
+            st = os.lstat(path)
+            if inode == pyfuse3.ROOT_INODE or st.st_ino == inode:
+                return self._stat_to_attr(st)
         except FileNotFoundError:
-            fd = self._find_open_fd_for_path(p)
+            pass
+        except OSError as e:
+            raise pyfuse3.FUSEError(e.errno) from e
 
-            if fd is None:
-                raise pyfuse3.FUSEError(errno.ENOENT)
-
+        # unlink 이후 경로가 재사용돼도 이전 inode의 열린 파일을 조회한다.
+        for fd in self._fd_map.values():
             try:
                 st = os.fstat(fd)
             except OSError as e:
-                raise pyfuse3.FUSEError(e.errno)
-
-        except OSError as e:
-            raise pyfuse3.FUSEError(e.errno)
-
-        return self._stat_to_attr(st)
+                if e.errno == errno.EBADF:
+                    continue
+                raise pyfuse3.FUSEError(e.errno) from e
+            if st.st_ino == inode:
+                return self._stat_to_attr(st)
+        raise pyfuse3.FUSEError(errno.ENOENT)
 
     async def lookup(self, parent_inode, name, ctx=None):
         # ROOT_INODE 고정 → parent_inode 기반 경로 조합
@@ -784,6 +814,19 @@ class Passthrough(pyfuse3.Operations):
             self._fh_info[fh] = (pid, p, flags)
             self._staging_fh[fh] = staging_path
             self._staging_pid[pid].append(staging_path)
+            self._staging_origin_fd[fd] = None
+            if state == ProcState.MEDIUM:
+                try:
+                    self._defer_truncate(pid, p, 0, fd)
+                except OSError as e:
+                    self._staging_origin_fd.pop(fd, None)
+                    self._staging_fh.pop(fh, None)
+                    self._fh_info.pop(fh, None)
+                    self._fd_map.pop(fh, None)
+                    self._staging_pid[pid].remove(staging_path)
+                    os.close(fd)
+                    os.unlink(staging_path)
+                    raise pyfuse3.FUSEError(e.errno) from e
             self._emit(
                 FsEvent(ts_ns=time.time_ns(), pid=pid, op="create", path=p, flags=flags)
             )
@@ -1015,10 +1058,15 @@ class Passthrough(pyfuse3.Operations):
         if state == ProcState.MEDIUM and flags & os.O_TRUNC:
             staging_path = os.path.join(self._staging_dir, f"fh_{self._next_fh}")
 
+            origin_fd = None
             try:
+                # O_TRUNC 전에 원래 파일의 정체성과 수명을 확보한다.
+                origin_fd = os.open(path, os.O_RDWR)
                 fd = os.open(staging_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
             except OSError as e:
-                raise pyfuse3.FUSEError(e.errno)
+                if origin_fd is not None:
+                    os.close(origin_fd)
+                raise pyfuse3.FUSEError(e.errno) from e
 
             fh = self._next_fh
 
@@ -1027,8 +1075,20 @@ class Passthrough(pyfuse3.Operations):
             self._fh_info[fh] = (pid, path, flags)
             self._staging_fh[fh] = staging_path
             self._staging_pid[pid].append(staging_path)
+            self._staging_origin_fd[fd] = origin_fd
             self._trunc_paths[pid].add(path)
-            self._defer_truncate(pid, path, 0)
+            try:
+                self._defer_truncate(pid, path, 0, fd)
+            except OSError as e:
+                self._staging_origin_fd.pop(fd, None)
+                self._staging_fh.pop(fh, None)
+                self._fh_info.pop(fh, None)
+                self._fd_map.pop(fh, None)
+                self._staging_pid[pid].remove(staging_path)
+                os.close(fd)
+                os.close(origin_fd)
+                os.unlink(staging_path)
+                raise pyfuse3.FUSEError(e.errno) from e
 
             self._emit(
                 FsEvent(
@@ -1198,7 +1258,10 @@ class Passthrough(pyfuse3.Operations):
         elif state == ProcState.MEDIUM:
             from guardfs.stage2.policy.medium import handle_write_medium
 
-            return await handle_write_medium(fd, off, buf, path, pid, self)
+            try:
+                return await handle_write_medium(fd, off, buf, path, pid, self)
+            except OSError as e:
+                raise pyfuse3.FUSEError(e.errno) from e
 
         else:
             from guardfs.stage2.policy.low import handle_write_low
@@ -1366,7 +1429,7 @@ class Passthrough(pyfuse3.Operations):
             # MEDIUM에서도 파일 존재와 쓰기 권한은 확인
             with open(path, "r+b") as f:
                 if state == ProcState.MEDIUM:
-                    self._defer_truncate(pid, path, size)
+                    self._defer_truncate(pid, path, size, f.fileno())
                 else:
                     f.truncate(size)
         except OSError as e:
@@ -1438,7 +1501,7 @@ class Passthrough(pyfuse3.Operations):
             os.fstat(fd)
 
             if state == ProcState.MEDIUM:
-                self._defer_truncate(pid, path, size)
+                self._defer_truncate(pid, path, size, fd)
             else:
                 os.ftruncate(fd, size)
 
@@ -1628,6 +1691,7 @@ class Passthrough(pyfuse3.Operations):
     async def release(self, fh):
         pid, path, flags = self._fh_info.pop(fh, (-1, "?", 0))
         fd = self._fd_map.pop(fh, None)
+        origin_fd = self._staging_origin_fd.pop(fd, None)
 
         inode = None
         file_size = 0
@@ -1644,6 +1708,9 @@ class Passthrough(pyfuse3.Operations):
                 os.close(fd)
             except OSError:
                 pass
+
+        if origin_fd is not None:
+            os.close(origin_fd)
 
         if inode is not None and not os.path.exists(path):
             still_open = False
@@ -1677,7 +1744,15 @@ class Passthrough(pyfuse3.Operations):
 
         staging_path = self._staging_fh.pop(fh, None)
 
-        if staging_path:
+        # 신규 staging은 commit 또는 recovery까지 보존한다.
+        pending_staging = any(
+            staging_path in paths.values() for paths in self._buffer_new_files.values()
+        ) or any(
+            saved_path == staging_path
+            for entries in self._staging_recovery.values()
+            for _target, saved_path in entries
+        )
+        if staging_path and not pending_staging:
             try:
                 os.unlink(staging_path)
             except OSError:
@@ -1854,7 +1929,7 @@ class PidStats:
 async def main(
     mountpoint: str,
     root: str,
-    collect_logger: Optional[FuseCollectLogger] = None,
+    collect_logger: FuseCollectLogger | None = None,
 ):
     honeypot_dir = get_honeypot_dir(root)
 

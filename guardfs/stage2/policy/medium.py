@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 # medium.py
+import errno
 import io
 import os
+import stat
 import time
 import zipfile
 
@@ -106,7 +110,7 @@ def structural_check(path: str, data: bytes) -> bool:
 
 
 def _reconstruct_final_content(
-    path: str, ordered_writes: list, truncated: bool
+    path: str, ordered_writes: list, truncated: bool, source_fd: int | None = None
 ) -> bytes:
     """
     한 경로에 대해 버퍼된 (off, buf)들을 순서대로 적용한 최종 바이트를
@@ -114,7 +118,17 @@ def _reconstruct_final_content(
     상태에서 시작하고, 아니면 디스크에 남아있는 원본 위에 얹는다.
     """
 
-    if truncated or not os.path.exists(path):
+    if truncated:
+        data = bytearray()
+    elif source_fd is not None:
+        data = bytearray()
+        size = os.fstat(source_fd).st_size
+        while len(data) < size:
+            chunk = os.pread(source_fd, io.DEFAULT_BUFFER_SIZE, len(data))
+            if not chunk:
+                raise OSError(errno.EIO, "구조 검증용 원본 읽기 실패")
+            data.extend(chunk)
+    elif not os.path.exists(path):
         data = bytearray()
     else:
         try:
@@ -153,6 +167,98 @@ def _phase_delay_ms(elapsed_sec: float, trusted: bool) -> int:
     return MEDIUM_DELAY_PHASES[-1][2 if trusted else 1]
 
 
+def _retain_buffer_fd(pid: int, fd: int, ops) -> int:
+    """핸들 종료와 경로 재사용에 영향받지 않는 commit 대상을 보관한다."""
+    origins = ops._staging_origin_fd
+    new_file = fd in origins and origins[fd] is None
+    target_fd = origins.get(fd, fd)
+    if target_fd is None:
+        target_fd = fd
+
+    st = os.fstat(target_fd)
+    identity = (st.st_dev, st.st_ino)
+    retained = ops._buffer_fds[pid]
+    held_fd = retained.get(identity)
+    if held_fd is None:
+        # 독립적인 파일 위치와 O_APPEND 없는 descriptor를 확보한다.
+        # Linux /proc에서 열린 파일을 다시 열므로 경로 재사용을 따라가지 않는다.
+        held_fd = os.open(f"/proc/self/fd/{target_fd}", os.O_RDWR)
+        retained[identity] = held_fd
+
+    if new_file:
+        for fh, handle_fd in ops._fd_map.items():
+            if handle_fd == fd:
+                ops._buffer_new_files[pid][held_fd] = ops._staging_fh[fh]
+                break
+        else:
+            raise OSError(errno.EBADF, "신규 staging 핸들을 찾을 수 없음")
+    return held_fd
+
+
+def _close_buffer_fds(pid: int, ops) -> None:
+    error = None
+    for held_fd in ops._buffer_fds.pop(pid, {}).values():
+        try:
+            os.close(held_fd)
+        except OSError as e:
+            error = e
+    ops._buffer_new_files.pop(pid, None)
+    if error is not None:
+        raise error
+
+
+def _pwrite_all(fd: int, buf: bytes, off: int) -> None:
+    view = memoryview(buf)
+    written = 0
+    while written < len(view):
+        count = os.pwrite(fd, view[written:], off + written)
+        if count <= 0:
+            raise OSError(errno.EIO, "지연 write 반영 실패")
+        written += count
+
+
+def _rebind_staging_handles(ops, pid, source_identity, target_fd) -> None:
+    """commit 뒤에도 열려 있는 staging 핸들을 실제 파일로 연결한다."""
+    for fh, staging_path in list(ops._staging_fh.items()):
+        if ops._fh_info.get(fh, (-1, "?", 0))[0] != pid:
+            continue
+        old_fd = ops._fd_map.get(fh)
+        if old_fd is None:
+            continue
+        origin_fd = ops._staging_origin_fd.get(old_fd)
+        source_fd = old_fd if origin_fd is None else origin_fd
+        st = os.fstat(source_fd)
+        if (st.st_dev, st.st_ino) != source_identity:
+            continue
+        replacement = os.dup(target_fd)
+        ops._fd_map[fh] = replacement
+        ops._staging_fh.pop(fh, None)
+        ops._staging_origin_fd.pop(old_fd, None)
+        os.close(old_fd)
+        if origin_fd is not None:
+            os.close(origin_fd)
+
+
+def _publish_new_file(path: str, source_fd: int, pid: int, ops) -> None:
+    """새 파일은 배타적으로 생성한다. 기존 경로를 덮어쓰지 않는다."""
+    st = os.fstat(source_fd)
+    target_fd = os.open(
+        path, os.O_RDWR | os.O_CREAT | os.O_EXCL, stat.S_IMODE(st.st_mode)
+    )
+    try:
+        off = 0
+        while off < st.st_size:
+            chunk = os.pread(source_fd, io.DEFAULT_BUFFER_SIZE, off)
+            if not chunk:
+                raise OSError(errno.EIO, "staging 파일 읽기 실패")
+            _pwrite_all(target_fd, chunk, off)
+            off += len(chunk)
+        os.ftruncate(target_fd, st.st_size)
+        _rebind_staging_handles(ops, pid, (st.st_dev, st.st_ino), target_fd)
+    finally:
+        os.close(target_fd)
+
+
 async def handle_write_medium(
     fd: int,
     off: int,
@@ -176,12 +282,23 @@ async def handle_write_medium(
 
     # 비신뢰 프로세스 또는 truncate 대기 중인 파일은 버퍼링한다.
     # truncate 대기가 없는 신뢰 프로세스는 기존 크기 기준을 유지한다.
+    target_fd = ops._staging_origin_fd.get(fd, fd)
+    if target_fd is None:
+        target_fd = fd
+    target_stat = os.fstat(target_fd)
+    target_identity = (target_stat.st_dev, target_stat.st_ino)
+    held_target = ops._buffer_fds.get(pid, {}).get(target_identity)
     has_pending_truncate = any(
-        pending_path == path and pending_buf is None
-        for _fd, _off, pending_buf, pending_path in ops._write_buffer.get(pid, [])
+        pending_fd == held_target and pending_buf is None
+        for pending_fd, _off, pending_buf, _path in ops._write_buffer.get(pid, [])
     )
 
-    if has_pending_truncate or not trusted or file_size < MEDIUM_SIZE_LIMIT:
+    if (
+        fd in ops._staging_origin_fd
+        or has_pending_truncate
+        or not trusted
+        or file_size < MEDIUM_SIZE_LIMIT
+    ):
         if not validate_magic(path, buf, off):
             print(f"[MEDIUM] pid={pid} path={path} magic number 불일치 → High 격상")
 
@@ -265,7 +382,9 @@ async def handle_write_medium(
 
             return len(buf)
 
-        ops._write_buffer[pid].append((fd, off, buf, path))
+        held_fd = _retain_buffer_fd(pid, fd, ops)
+
+        ops._write_buffer[pid].append((held_fd, off, buf, path))
         ops._write_buffer_bytes[pid] = buffered + len(buf)
         ops._global_buffer_bytes += len(buf)
 
@@ -325,6 +444,8 @@ async def handle_unlink_medium(path: str, pid: int, ops) -> None:
 
         return
 
+    st = os.lstat(staging_path)
+    ops._unlink_identity[staging_path] = (st.st_dev, st.st_ino)
     ops._unlink_staged[pid].append((path, staging_path))
 
     print(f"[MEDIUM] pid={pid} path={path} unlink 요청 → 스테이징 이동 (원본 보존)")
@@ -335,37 +456,107 @@ async def handle_unlink_medium(path: str, pid: int, ops) -> None:
 
 
 def _finalize_unlink(pid: int, ops) -> None:
-    """LOW 복귀: 스테이징으로 옮겨둔 삭제를 실제로 확정한다."""
-
+    """LOW 복귀: 삭제를 확정하되 실패한 이력은 보존한다."""
+    remaining = []
     for orig_path, staging_path in ops._unlink_staged.pop(pid, []):
         try:
+            st = os.lstat(staging_path)
+            expected = ops._unlink_identity.get(staging_path)
+            if expected != (st.st_dev, st.st_ino):
+                raise OSError(errno.ESTALE, "삭제 staging 파일 정체성 불일치")
             os.unlink(staging_path)
+            ops._unlink_identity.pop(staging_path, None)
             print(f"[COMMIT] pid={pid} path={orig_path} → 삭제 확정 (LOW 판정)")
-
             log_medium_event(
                 pid, orig_path, "UNLINK", "CONFIRMED", "정상 판정 후 삭제 확정"
             )
+        except FileNotFoundError:
+            ops._unlink_identity.pop(staging_path, None)
         except OSError as e:
-            print(f"[COMMIT] pid={pid} path={orig_path} 삭제 확정 실패: {e}")
+            remaining.append((orig_path, staging_path))
+            log_medium_event(pid, orig_path, "UNLINK", "FINALIZE_FAILED", str(e))
+    if remaining:
+        ops._unlink_staged[pid].extend(remaining)
 
 
 def _restore_unlink(pid: int, ops) -> None:
-    """HIGH 격상/드롭: 스테이징으로 옮겨둔 파일을 원래 자리로 되돌린다."""
+    """목적지를 덮어쓰지 않고 복원한다. 충돌 원본은 staging에 보존한다."""
 
-    for orig_path, staging_path in ops._unlink_staged.pop(pid, []):
+    entries = ops._unlink_staged.pop(pid, [])
+    retained = []
+
+    # 같은 PID의 반복 삭제에서는 최근 버전부터 복원을 시도
+    for orig_path, staging_path in reversed(entries):
         try:
-            os.rename(staging_path, orig_path)
-            print(f"[DROP] pid={pid} path={orig_path} → 삭제 취소, 원본 복원")
+            st = os.lstat(staging_path)
+            expected = ops._unlink_identity.get(staging_path)
+
+            if expected != (st.st_dev, st.st_ino):
+                raise OSError(errno.ESTALE, "복원 staging 파일 정체성 불일치")
+            # link는 목적지가 존재하면 실패하므로 덮어쓰지 않음
+            # exist() 검사 후 rename하는 방식의 동시 생성 경쟁을 피함
+            os.link(
+                staging_path,
+                orig_path,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            # 목적지의 새 파일은 유지
+            retained.append((orig_path, staging_path))
+
+            print(
+                f"[RESTORE CONFLICT] pid={pid} path={orig_path} "
+                f"→ 기존 파일 유지, 원본 보존={staging_path}"
+            )
+            log_medium_event(
+                pid,
+                orig_path,
+                "UNLINK",
+                "RESTORE_CONFLICT",
+                f"충돌 원본 보존: {staging_path}",
+            )
+            continue
+        except OSError as e:
+            # 복원 실패 시 원본과 이력을 버리지 않음
+            retained.append((orig_path, staging_path))
 
             log_medium_event(
                 pid,
                 orig_path,
                 "UNLINK",
-                "RESTORED",
-                "HIGH 격상으로 삭제 취소, 원본 복원",
+                "RESTORE_FAILED",
+                f"{e}; 원본 보존={staging_path}",
             )
+            continue
+
+        try:
+            os.unlink(staging_path)
         except OSError as e:
-            print(f"[DROP] pid={pid} path={orig_path} 복원 실패: {e}")
+            # 목적지 복원은 성공했지만 staging 정리는 실패한 경우
+            retained.append((orig_path, staging_path))
+
+            log_medium_event(
+                pid,
+                orig_path,
+                "UNLINK",
+                "RESTORE_CLEANUP_FAILED",
+                f"{e}; staging={staging_path}",
+            )
+            continue
+
+        ops._unlink_identity.pop(staging_path, None)
+        print(f"[DROP] pid={pid} path={orig_path} → 삭제 취소, 원본 복원")
+        log_medium_event(
+            pid,
+            orig_path,
+            "UNLINK",
+            "RESTORED",
+            "목적지를 덮어쓰지 않고 복원",
+        )
+
+    if retained:
+        # 충돌 원본을 후속 LOW 삭제 확정 목록과 분리
+        ops._unlink_recovery[pid].extend(reversed(retained))
 
 
 def _reconstruct_pending_content(path, changes):
@@ -396,108 +587,87 @@ def _reconstruct_pending_content(path, changes):
 
 async def commit_buffers(pid: int, ops) -> None:
     buffers = ops._write_buffer.pop(pid, [])
-
     ops._write_buffer_bytes.pop(pid, None)
     ops._pid_trusted.pop(pid, None)
     ops._medium_entered_at.pop(pid, None)
+    ops._trunc_paths.pop(pid, None)
 
-    trunc_paths = ops._trunc_paths.pop(pid, set())
-
-    # path별로 버퍼된 (off, buf)를 순서대로 모아, HIGH_VALUE 확장자면
-    # 커밋 전에 구조 검증(규칙2)까지 마친 뒤에 실제로 적용한다.
-    by_path: dict = {}
-
+    # 경로가 같아도 다른 파일이면 작업을 섞지 않는다.
+    by_file = {}
     for fd, off, buf, path in buffers:
-        by_path.setdefault(path, []).append((off, buf))
+        entry = by_file.setdefault(fd, {"path": path, "changes": []})
+
+        entry["path"] = path
+        entry["changes"].append((off, buf))
 
         if buf is not None:
             ops._global_buffer_bytes = max(0, ops._global_buffer_bytes - len(buf))
 
-    for path in trunc_paths:
-        by_path.setdefault(path, [])
+    new_files = dict(ops._buffer_new_files.get(pid, {}))
+    preserve_staging = set()
+    failed = False
+    try:
+        # 기존 검증을 유지하되, 경로가 아닌 실제 commit 대상에서 재구성한다.
+        # 모든 검증이 끝나기 전에는 원본에 적용하지 않는다.
+        for fd, entry in by_file.items():
+            path, changes = entry["path"], entry["changes"]
+            for off, buf in changes:
+                if buf is not None and not validate_magic(path, buf, off):
+                    await ops.trigger_high(pid, reason="magic_mismatch_on_commit")
+                    return
+            group = EXTENSION_GROUPS[classify_extension(path)]
+            if group["structural_check"]:
+                final_content = _reconstruct_final_content(
+                    path, changes, False, source_fd=fd
+                )
+                if not structural_check(path, final_content):
+                    log_medium_event(
+                        pid, path, "COMMIT", "FAILED", "structural_check 실패"
+                    )
+                    await ops.trigger_high(pid, reason="structural_check_failed")
+                    return
 
-    truncated_already = set()
+        for fd, entry in by_file.items():
+            path, changes = entry["path"], entry["changes"]
+            try:
+                for off, buf in changes:
+                    if buf is None:
+                        os.ftruncate(fd, off)
+                    elif buf:
+                        _pwrite_all(fd, buf, off)
+                if fd in new_files:
+                    _publish_new_file(path, fd, pid, ops)
+                else:
+                    st = os.fstat(fd)
+                    _rebind_staging_handles(ops, pid, (st.st_dev, st.st_ino), fd)
+                print(
+                    f"[COMMIT] pid={pid} path={path} → 커밋 완료 ({len(changes)}개 작업)"
+                )
+                log_medium_event(
+                    pid, path, "COMMIT", "SUCCESS", "원래 파일에 순서대로 반영"
+                )
+            except OSError as e:
+                failed = True
+                if fd in new_files:
+                    staging_path = new_files[fd]
+                    preserve_staging.add(staging_path)
+                    ops._staging_recovery[pid].append((path, staging_path))
+                log_medium_event(pid, path, "COMMIT", "FAILED", str(e))
 
-    for path, ordered_writes in by_path.items():
-        # 첫 청크(off==0) 기준 magic byte는 기존과 동일하게 유지
-        for off, buf in ordered_writes:
-            if buf is None:
+        for staging_path in ops._staging_pid.pop(pid, []):
+            if staging_path in preserve_staging:
                 continue
-
-            if not validate_magic(path, buf, off):
-                print(f"[COMMIT] pid={pid} path={path} 구조 깨짐(magic) → 커밋 취소")
-
-                # trigger_high → handle_high_enter가 drop_buffers를 호출해
-                # unlink 복원까지 전담한다 (여기서 중복 호출하지 않음).
-                await ops.trigger_high(pid, reason="magic_mismatch_on_commit")
-                return
-
-        group_name = classify_extension(path)
-        group = EXTENSION_GROUPS[group_name]
-
-        has_ordered_truncate = any(buf is None for _off, buf in ordered_writes)
-
-        is_truncated = path in trunc_paths and not has_ordered_truncate
-
-        if group["structural_check"]:
-            final_content = _reconstruct_final_content(
-                path, ordered_writes, is_truncated
-            )
-
-            if not structural_check(path, final_content):
-                print(f"[COMMIT] pid={pid} path={path} 구조 깨짐(내부구조) → 커밋 취소")
-
-                log_medium_event(pid, path, "COMMIT", "FAILED", "structural_check 실패")
-
-                await ops.trigger_high(pid, reason="structural_check_failed")
-                return
-
-        try:
-            if is_truncated and path not in truncated_already:
-                open(path, "wb").close()
-                truncated_already.add(path)
-
-            with open(path, "r+b") as f:
-                for off, buf in ordered_writes:
-                    if buf is None:
-                        f.truncate(off)
-                    elif buf:
-                        f.seek(off)
-                        f.write(buf)
-
-            print(
-                f"[COMMIT] pid={pid} path={path} → 커밋 완료 ({len(ordered_writes)}개 write)"
-            )
-
-            log_medium_event(pid, path, "COMMIT", "SUCCESS", "정상 판정 후 LOW 복귀")
-
-        except FileNotFoundError:
-            with open(path, "wb") as f:
-                for off, buf in ordered_writes:
-                    if buf is None:
-                        f.truncate(off)
-                    elif buf:
-                        f.seek(off)
-                        f.write(buf)
-
-            truncated_already.add(path)
-            print(
-                f"[COMMIT] pid={pid} path={path} → 새 파일 커밋 완료 ({len(ordered_writes)}개 write)"
-            )
-
-            log_medium_event(pid, path, "COMMIT", "SUCCESS", "새 파일 생성 후 커밋")
-
-        except OSError as e:
-            print(f"[COMMIT] pid={pid} path={path} 오류: {e}")
-            log_medium_event(pid, path, "COMMIT", "FAILED", str(e))
-
-    for staging_path in ops._staging_pid.pop(pid, []):
-        try:
-            os.unlink(staging_path)
-        except OSError:
-            pass
-
-    _finalize_unlink(pid, ops)
+            try:
+                os.unlink(staging_path)
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                log_medium_event(pid, staging_path, "COMMIT", "CLEANUP_FAILED", str(e))
+        # 실패한 commit 때문에 삭제 보류 원본까지 확정 삭제하지 않는다.
+        if not failed:
+            _finalize_unlink(pid, ops)
+    finally:
+        _close_buffer_fds(pid, ops)
 
 
 async def drop_buffers(pid: int, ops) -> None:
@@ -515,18 +685,22 @@ async def drop_buffers(pid: int, ops) -> None:
                 ops._global_buffer_bytes - len(buf),
             )
 
-    for staging_path in ops._staging_pid.pop(pid, []):
-        try:
-            os.unlink(staging_path)
-        except OSError:
-            pass
+    try:
+        for staging_path in ops._staging_pid.pop(pid, []):
+            try:
+                os.unlink(staging_path)
+            except OSError:
+                pass
 
-    _restore_unlink(pid, ops)
+        _restore_unlink(pid, ops)
 
-    print(f"[DROP] pid={pid} 버퍼 {len(dropped)}개 드롭 → 원본 보존")
-    log_medium_event(
-        pid, "", "DROP", "BUFFER_DROPPED", f"버퍼 {len(dropped)}개 드롭, 원본 보존"
-    )
+        print(f"[DROP] pid={pid} 버퍼 {len(dropped)}개 드롭 → 원본 보존")
+        log_medium_event(
+            pid, "", "DROP", "BUFFER_DROPPED", f"버퍼 {len(dropped)}개 드롭, 원본 보존"
+        )
+
+    finally:
+        _close_buffer_fds(pid, ops)
 
 
 async def validate_medium_buffers(pid: int, ops) -> bool:
