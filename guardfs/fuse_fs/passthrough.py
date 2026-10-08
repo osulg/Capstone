@@ -697,6 +697,12 @@ class Passthrough(pyfuse3.Operations):
 
         print(f"[HONEYPOT] pid={pid} op={op} blocked path={path}")
 
+    def _defer_truncate(self, pid: int, path: str, size: int) -> None:
+        """원본을 변경하지 않고 크기 변경을 순서대로 기록"""
+        self._write_buffer[pid].append((-1, size, None, path))
+
+        print(f"[MEDIUM] pid={pid} path={path} truncate size={size} → 지연 작업 보관")
+
     # ---------------------------------- FUSE ops ---------------------------------- #
     async def access(self, inode, mode, ctx=None):
         # pyfuse3는 반환값이 참일 때만 허용한다. None이면 chdir/access(2)가 EACCES로 실패한다.
@@ -884,7 +890,6 @@ class Passthrough(pyfuse3.Operations):
                 op="rmdir",
                 path=p,
             )
-
             raise pyfuse3.FUSEError(errno.EACCES)
 
         override = self._get_forced_state(pid)
@@ -1016,16 +1021,22 @@ class Passthrough(pyfuse3.Operations):
                 raise pyfuse3.FUSEError(e.errno)
 
             fh = self._next_fh
+
             self._next_fh += 1
             self._fd_map[fh] = fd
             self._fh_info[fh] = (pid, path, flags)
             self._staging_fh[fh] = staging_path
             self._staging_pid[pid].append(staging_path)
             self._trunc_paths[pid].add(path)
+            self._defer_truncate(pid, path, 0)
 
             self._emit(
                 FsEvent(
-                    ts_ns=time.time_ns(), pid=pid, op="open", path=path, flags=flags
+                    ts_ns=time.time_ns(),
+                    pid=pid,
+                    op="open",
+                    path=path,
+                    flags=flags,
                 )
             )
 
@@ -1171,6 +1182,12 @@ class Passthrough(pyfuse3.Operations):
 
         state = await self._resolve_effective_state(pid)
 
+        info = self._fh_info.get(fh)
+        if info is None:
+            raise pyfuse3.FUSEError(errno.EBADF)
+
+        _owner_pid, path, _flags = info
+
         print(f"[WRITE] pid={pid} state={state} path={path}")
 
         if state == ProcState.HIGH:
@@ -1188,26 +1205,12 @@ class Passthrough(pyfuse3.Operations):
 
             return await handle_write_low(fd, off, buf, path, pid, self)
 
-    async def setattr(
-        self,
-        inode,
-        attr,
-        fields,
-        fh,
-        ctx=None,
-    ):
+    async def setattr(self, inode, attr, fields, fh, ctx=None):
         if fields.update_size:
             if fh is None:
-                await self.truncate(
-                    inode,
-                    attr.st_size,
-                    ctx,
-                )
+                await self.truncate(inode, attr.st_size, ctx)
             else:
-                await self.ftruncate(
-                    fh,
-                    attr.st_size,
-                )
+                await self.ftruncate(fh, attr.st_size, ctx)
 
         if (
             fields.update_mode
@@ -1218,7 +1221,41 @@ class Passthrough(pyfuse3.Operations):
         ):
             await self._set_metadata(inode, attr, fields, ctx)
 
-        return await self.getattr(inode, ctx)
+        result = await self.getattr(inode, ctx)
+
+        # MEDIUM에서 성공 처리함 크기 변경의 논리적 크기를 반환
+        if fields.update_size:
+            if ctx is not None:
+                pid = ctx.pid
+            elif fh is not None:
+                pid = self._fh_info.get(fh, (-1, "?", 0))[0]
+            else:
+                pid = -1
+
+            if fh is not None:
+                path = self._fh_info.get(fh, (-1, None, 0))[1]
+            else:
+                path = self._inode_path.get(inode)
+
+            logical_size = result.st_size
+            has_pending = False
+
+            for _fd, off, buf, target in self._write_buffer.get(pid, []):
+                if target != path:
+                    continue
+
+                has_pending = True
+
+                if buf is None:
+                    logical_size = off
+                elif buf:
+                    logical_size = max(logical_size, off + len(buf))
+
+            if has_pending:
+                result.st_size = logical_size
+                result.attr_timeout = 0
+
+        return result
 
     async def _set_metadata(self, inode, attr, fields, ctx=None):
         """chmod / chown / utimens. ctime은 커널이 갱신하므로 따로 설정하지 않는다."""
@@ -1283,48 +1320,80 @@ class Passthrough(pyfuse3.Operations):
             self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="utime", path=p))
 
     async def truncate(self, inode, size, ctx=None):
-        p = self._inode_path.get(inode)
-
-        if p is None:
-            raise pyfuse3.FUSEError(errno.ENOENT)
+        if size < 0:
+            raise pyfuse3.FUSEError(errno.EINVAL)
 
         pid = ctx.pid if ctx is not None else -1
 
-        # 실제 파일 크기를 변경하기 전에 허니팟 경로를 차단
-        if self._collect is None and self._is_honeypot_path(p):
+        path = self._inode_path.get(inode)
+
+        if path is None:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        # 실제 변경 및 지연 작업 등록 전에 차단
+        if self._collect is None and self._is_honeypot_path(path):
             self._emit_honeypot_event(
                 pid=pid,
                 op="truncate",
-                path=p,
+                path=path,
                 size=size,
             )
-
             raise pyfuse3.FUSEError(errno.EACCES)
 
-        if await self.get_proc_state(pid) == ProcState.HIGH:
+        state = await self._resolve_effective_state(pid)
+
+        # await 중 rename이 실행될 수 있음
+        path = self._inode_path.get(inode)
+        if path is None:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        if self._collect is None and self._is_honeypot_path(path):
+            self._emit_honeypot_event(
+                pid=pid,
+                op="truncate",
+                path=path,
+                size=size,
+            )
+            raise pyfuse3.FUSEError(errno.EACCES)
+
+        if state == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_truncate_high
 
-            await handle_truncate_high(p, size, pid, self)
-
+            await handle_truncate_high(path, size, pid, self)
             return
 
         try:
-            with open(p, "r+b") as f:
-                f.truncate(size)
+            # MEDIUM에서도 파일 존재와 쓰기 권한은 확인
+            with open(path, "r+b") as f:
+                if state == ProcState.MEDIUM:
+                    self._defer_truncate(pid, path, size)
+                else:
+                    f.truncate(size)
         except OSError as e:
-            raise pyfuse3.FUSEError(e.errno)
+            raise pyfuse3.FUSEError(e.errno) from e
 
         self._emit(
-            FsEvent(ts_ns=time.time_ns(), pid=pid, op="truncate", path=p, size=size)
+            FsEvent(
+                ts_ns=time.time_ns(),
+                pid=pid,
+                op="truncate",
+                path=path,
+                size=size,
+            )
         )
 
-    async def ftruncate(self, fh, size):
-        fd = self._fd_map.get(fh)
+    async def ftruncate(self, fh, size, ctx=None):
+        if size < 0:
+            raise pyfuse3.FUSEError(errno.EINVAL)
 
-        if fd is None:
+        fd = self._fd_map.get(fh)
+        info = self._fh_info.get(fh)
+
+        if fd is None or info is None:
             raise pyfuse3.FUSEError(errno.EBADF)
 
-        pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
+        owner_pid, path, flags = info
+        pid = ctx.pid if ctx is not None else owner_pid
 
         # 열린 핸들을 통한 크기 변경도 실제 변경 전에 허니팟 경로를 차단
         if self._collect is None and self._is_honeypot_path(path):
@@ -1334,23 +1403,56 @@ class Passthrough(pyfuse3.Operations):
                 path=path,
                 size=size,
             )
-
             raise pyfuse3.FUSEError(errno.EACCES)
 
-        if await self.get_proc_state(pid) == ProcState.HIGH:
+        state = await self._resolve_effective_state(pid)
+
+        # await 이후 최신 핸들 정보 다시 읽기
+        fd = self._fd_map.get(fh)
+        info = self._fh_info.get(fh)
+
+        if fd is None or info is None:
+            raise pyfuse3.FUSEError(errno.EBADF)
+
+        _owner_pid, path, flags = info
+
+        if self._collect is None and self._is_honeypot_path(path):
+            self._emit_honeypot_event(
+                pid=pid,
+                op="ftruncate",
+                path=path,
+                size=size,
+            )
+            raise pyfuse3.FUSEError(errno.EACCES)
+
+        if state == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_truncate_high
 
             await handle_truncate_high(path, size, pid, self)
-
             return
 
+        if (flags & os.O_ACCMODE) == os.O_RDONLY:
+            raise pyfuse3.FUSEError(errno.EBADF)
+
         try:
-            os.ftruncate(fd, size)
+            os.fstat(fd)
+
+            if state == ProcState.MEDIUM:
+                self._defer_truncate(pid, path, size)
+            else:
+                os.ftruncate(fd, size)
+
         except OSError as e:
-            raise pyfuse3.FUSEError(e.errno)
+            raise pyfuse3.FUSEError(e.errno) from e
 
         self._emit(
-            FsEvent(ts_ns=time.time_ns(), pid=pid, op="ftruncate", path=path, size=size)
+            FsEvent(
+                ts_ns=time.time_ns(),
+                pid=pid,
+                op="ftruncate",
+                path=path,
+                size=size,
+            )
         )
 
     async def unlink(self, parent_inode, name, ctx=None):
