@@ -112,6 +112,8 @@ class Stage1Detector:
         if entropy_suspicious is None:
             entropy_suspicious = self.entropy.check(ev)
 
+        # 최종 탐지 이유를 선택하기 전에 유효한 표본의 관측을 완료한다.
+        delta_result = self.entropy_delta.check(ev)
         burst_suspicious = self.entropy_burst.observe(ev)
 
         if burst_suspicious:
@@ -120,16 +122,11 @@ class Stage1Detector:
         if entropy_suspicious:
             return True, "EntropyDetector"
 
-        delta_result = self.entropy_delta.check(ev)
-
         if (
             delta_result is not None
             and delta_result.is_suspicious
             and not self.entropy_delta.observe_only
         ):
             return True, "EntropyDeltaDetector"
-
-        if entropy_suspicious:
-            return True, "EntropyDetector"
 
         return False, None
