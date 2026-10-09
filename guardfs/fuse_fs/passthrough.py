@@ -12,6 +12,7 @@ import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 sys.path.insert(
     0,
@@ -70,14 +71,14 @@ def _resolve_trust_target(pid: int) -> str:
     """
 
     try:
-        exe = os.readlink(f"/proc/{pid}/exe")
+        path = os.readlink(f"/proc/{pid}/exe")
     except OSError:
         return ""
 
-    basename = re.sub(r"[\d.]+$", "", os.path.basename(exe))
+    basename = re.sub(r"[\d.]+$", "", os.path.basename(path))
 
     if basename not in INTERPRETER_BASENAMES:
-        return exe
+        return path
 
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as f:
@@ -327,6 +328,16 @@ class Passthrough(pyfuse3.Operations):
         self._buffer_new_files: dict[int, dict[int, str]] = defaultdict(dict)
         self._staging_recovery: dict[int, list] = defaultdict(list)
 
+        # 신규 staging 파일의 FUSE inode별 생명주기.
+        self._staging_inodes: dict[int, dict] = {}
+
+        # commit 후 실제 inode가 바뀌어도 FUSE inode는 유지
+        self._inode_alias: dict[tuple[int, int], int] = {}
+
+        # 열린 핸들과 FUSE inode 연결.
+        self._fh_inode: dict[int, int] = {}
+        self._dir_fh_pid: dict[int, int] = {}
+
     # ---------------------------------- helpers ---------------------------------- #
 
     def is_trusted_process(self, pid: int) -> bool:
@@ -337,8 +348,8 @@ class Passthrough(pyfuse3.Operations):
         if pid in self._pid_trusted:
             return self._pid_trusted[pid]
 
-        target = _resolve_trust_target(pid)
-        trusted = bool(target) and target.startswith(TRUSTED_EXE_PREFIXES)
+        path = _resolve_trust_target(pid)
+        trusted = bool(path) and path.startswith(TRUSTED_EXE_PREFIXES)
         self._pid_trusted[pid] = trusted
 
         return trusted
@@ -387,7 +398,11 @@ class Passthrough(pyfuse3.Operations):
         except FileNotFoundError:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
-        self._inode_path[st.st_ino] = path
+        inode = self._inode_alias.get(
+            (st.st_dev, st.st_ino),
+            st.st_ino,
+        )
+        self._inode_path[inode] = path
 
         return st
 
@@ -395,7 +410,10 @@ class Passthrough(pyfuse3.Operations):
         """os.stat_result → pyfuse3.EntryAttributes 변환."""
 
         attr = pyfuse3.EntryAttributes()
-        attr.st_ino = st.st_ino
+        attr.st_ino = self._inode_alias.get(
+            (st.st_dev, st.st_ino),
+            st.st_ino,
+        )
         attr.st_mode = st.st_mode
         attr.st_nlink = st.st_nlink
         attr.st_uid = st.st_uid
@@ -602,7 +620,9 @@ class Passthrough(pyfuse3.Operations):
                 return True
 
         for paths in self._trunc_paths.values():
-            if any(self._path_is_within(p, path) for p in paths):
+            if any(
+                self._path_is_within(candidate_path, path) for candidate_path in paths
+            ):
                 return True
 
         for entries in self._unlink_staged.values():
@@ -640,17 +660,17 @@ class Passthrough(pyfuse3.Operations):
 
     def _move_pending_paths(
         self,
-        oldp: str,
-        newp: str,
+        old_path: str,
+        new_path: str,
         source_is_dir: bool,
     ) -> None:
         """rename이 성공한 뒤 지연 작업의 논리적 경로를 갱신"""
 
-        old_prefix = oldp + os.sep
+        old_prefix = old_path + os.sep
 
         def moved_path(path):
-            if path == oldp or (source_is_dir and path.startswith(old_prefix)):
-                return newp + path[len(oldp) :]
+            if path == old_path or (source_is_dir and path.startswith(old_prefix)):
+                return new_path + path[len(old_path) :]
 
             return path
 
@@ -688,11 +708,11 @@ class Passthrough(pyfuse3.Operations):
     def _is_honeypot_path(self, path: str) -> bool:
         """경로가 실제 GardFS honeypot 디렉터리 내부인지 확인"""
 
-        honeypot_dir = os.path.realpath(get_honeypot_dir(self.root))
-        target = os.path.realpath(path)
+        honeypot_path = os.path.realpath(get_honeypot_dir(self.root))
+        resolved_path = os.path.realpath(path)
 
         try:
-            return os.path.commonpath([target, honeypot_dir]) == honeypot_dir
+            return os.path.commonpath([resolved_path, honeypot_path]) == honeypot_path
         except ValueError:
             # 서로 다른 드라이브 등으로 commonpath 계산이 불가능한 경우
             return False
@@ -732,6 +752,158 @@ class Passthrough(pyfuse3.Operations):
 
         print(f"[MEDIUM] pid={pid} path={path} truncate size={size} → 지연 작업 보관")
 
+    def _refresh_staging_inode(self, inode):
+        """닫힌 보관용 fd 번호를 다른 파일의 fd로 오인하지 않음"""
+        entry = self._staging_inodes.get(inode)
+        if entry is None or entry["state"] != "pending":
+            return
+        held_fd = entry["held_fd"]
+        owned_fd = self._buffer_fds.get(entry["pid"], {}).get(entry["source_identity"])
+        if held_fd is not None and owned_fd == held_fd:
+            return
+
+        # 이미 commit이 전환한 열린 핸들이 있으면 그 identity를 사용
+        for fh, handle_inode in self._fh_inode.items():
+            if handle_inode == inode and fh not in self._staging_fh:
+                fd = self._fd_map.get(fh)
+
+                if fd is not None:
+                    self._finish_staging_commit(
+                        entry["pid"], entry["source_identity"], fd
+                    )
+                    return
+
+        state = self._proc_state.get(entry["pid"], ProcState.LOW)
+        entry["state"] = "dropped" if state == ProcState.HIGH else "recovery"
+        entry["held_fd"] = None
+
+    def _pending_staging(self, inode, ctx=None):
+        self._refresh_staging_inode(inode)
+        entry = self._staging_inodes.get(inode)
+
+        if entry is None:
+            return None
+
+        if entry["state"] in ("dropped", "recovery"):
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        if entry["state"] != "pending":
+            return None
+
+        # 확정 전 신규 파일은 생성 PID에만 노출
+        if ctx is not None and ctx.pid != entry["pid"]:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        return entry
+
+    def _check_staging_handle(self, fh):
+        inode = self._fh_inode.get(fh)
+        self._refresh_staging_inode(inode)
+        entry = self._staging_inodes.get(inode)
+
+        if entry is not None and entry["state"] in ("dropped", "recovery"):
+            raise pyfuse3.FUSEError(errno.EIO)
+
+    def _pending_view(self, pid, fd, off=0, size=0):
+        """같은 파일의 지연 작업을 반영한 크기와 읽기 결과"""
+        if off < 0 or size < 0:
+            raise OSError(errno.EINVAL, "잘못된 read 범위")
+
+        source_fd = self._staging_origin_fd.get(fd, fd)
+
+        if source_fd is None:
+            source_fd = fd
+
+        st = os.fstat(source_fd)
+        identity = (st.st_dev, st.st_ino)
+        held_fd = self._buffer_fds.get(pid, {}).get(identity)
+
+        changes = [
+            (position, buf)
+            for pending_fd, position, buf, _path in self._write_buffer.get(pid, [])
+            if held_fd is not None and pending_fd == held_fd
+        ]
+
+        logical_size = st.st_size
+
+        for position, buf in changes:
+            if buf is None:
+                logical_size = position
+            elif buf:
+                logical_size = max(logical_size, position + len(buf))
+
+        length = min(size, max(0, logical_size - off))
+        data = bytearray(length)
+
+        if length:
+            read_bytes = 0
+            while read_bytes < length:
+                original = os.pread(source_fd, length - read_bytes, off + read_bytes)
+
+                if not original:
+                    break
+                data[read_bytes : read_bytes + len(original)] = original
+                read_bytes += len(original)
+
+        for position, buf in changes:
+            if buf is None:
+                # 축소로 지운 내용은 이후 확장해도 복원하지 않음
+                start = max(0, position - off)
+
+                if start < length:
+                    data[start:] = b"\x00" * (length - start)
+
+            elif buf:
+                start = max(off, position)
+                end = min(off + length, position + len(buf))
+
+                if start < end:
+                    data[start - off : end - off] = buf[
+                        start - position : end - position
+                    ]
+
+        return logical_size, bytes(data)
+
+    def _view_attr(self, st, inode, pid=None):
+        result = self._stat_to_attr(st)
+        result.st_ino = inode
+
+        if pid is not None:
+            held_fd = self._buffer_fds.get(pid, {}).get((st.st_dev, st.st_ino))
+
+            if held_fd is not None:
+                result.st_size, _ = self._pending_view(pid, held_fd)
+                result.attr_timeout = 0
+
+        return result
+
+    def _finish_staging_commit(self, pid, source_identity, target_fd):
+        st = os.fstat(target_fd)
+        target_identity = (st.st_dev, st.st_ino)
+
+        for inode, entry in self._staging_inodes.items():
+            if (
+                entry["pid"] == pid
+                and entry["state"] == "pending"
+                and entry["source_identity"] == source_identity
+            ):
+                entry["state"] = "committed"
+                entry["held_fd"] = None
+                entry["target_identity"] = target_identity
+                self._inode_alias[target_identity] = inode
+
+    def _finish_staging_drop(self, pid):
+        for entry in self._staging_inodes.values():
+            if entry["pid"] == pid and entry["state"] == "pending":
+                entry["state"] = "dropped"
+                entry["held_fd"] = None
+
+    def _finish_staging_recovery(self, pid, source_identity):
+        for entry in self._staging_inodes.values():
+            if entry["pid"] == pid and entry["source_identity"] == source_identity:
+                entry["state"] = "recovery"
+                entry["held_fd"] = None
+
     # ---------------------------------- FUSE ops ---------------------------------- #
     async def access(self, inode, mode, ctx=None):
         # pyfuse3는 반환값이 참일 때만 허용한다. None이면 chdir/access(2)가 EACCES로 실패한다.
@@ -759,43 +931,90 @@ class Passthrough(pyfuse3.Operations):
         return out
 
     async def getattr(self, inode, ctx=None):
+        pid = ctx.pid if ctx is not None else None
+        entry = self._pending_staging(inode, ctx)
+
+        if entry is not None:
+            fd = entry["held_fd"]
+
+            if fd is None:
+                raise pyfuse3.FUSEError(errno.EACCES)
+
+            try:
+                st = os.fstat(fd)
+                result = self._view_attr(st, inode, entry["pid"])
+                result.entry_timeout = 0
+                result.attr_timeout = 0
+                return result
+
+            except OSError as e:
+                raise pyfuse3.FUSEError(e.errno) from e
+
         path = self._inode_path.get(inode)
         if path is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         try:
             st = os.lstat(path)
-            if inode == pyfuse3.ROOT_INODE or st.st_ino == inode:
-                return self._stat_to_attr(st)
+            identity = (st.st_dev, st.st_ino)
+
+            if (
+                inode == pyfuse3.ROOT_INODE
+                or self._inode_alias.get(identity, st.st_ino) == inode
+            ):
+                return self._view_attr(st, inode, pid)
         except FileNotFoundError:
             pass
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno) from e
 
-        # unlink 이후 경로가 재사용돼도 이전 inode의 열린 파일을 조회한다.
-        for fd in self._fd_map.values():
+        # 경로가 재사용됐더라도 원래 열린 파일을 조회
+        for fh, fd in self._fd_map.items():
             try:
                 st = os.fstat(fd)
             except OSError as e:
                 if e.errno == errno.EBADF:
                     continue
                 raise pyfuse3.FUSEError(e.errno) from e
-            if st.st_ino == inode:
-                return self._stat_to_attr(st)
+
+            identity = (st.st_dev, st.st_ino)
+            matches = (
+                self._fh_inode.get(fh) == inode
+                or self._inode_alias.get(identity, st.st_ino) == inode
+            )
+
+            if matches:
+                return self._view_attr(st, inode, pid)
+
         raise pyfuse3.FUSEError(errno.ENOENT)
 
     async def lookup(self, parent_inode, name, ctx=None):
         # ROOT_INODE 고정 → parent_inode 기반 경로 조합
-        p = self._resolve_path(parent_inode, name)
-        st = self._register_inode(p)
+        path = self._resolve_path(parent_inode, name)
+
+        if ctx is not None:
+            for inode, entry in self._staging_inodes.items():
+                if (
+                    self._inode_path.get(inode) == path
+                    and entry["state"] == "pending"
+                    and entry["pid"] == ctx.pid
+                ):
+                    self._emit(
+                        FsEvent(
+                            ts_ns=time.time_ns(), pid=ctx.pid, op="lookup", path=path
+                        )
+                    )
+                    return await self.getattr(inode, ctx)
+
+        st = self._register_inode(path)
 
         pid = ctx.pid if ctx is not None else -1
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="lookup", path=p))
+        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="lookup", path=path))
 
         return self._stat_to_attr(st)
 
     async def create(self, parent_inode, name, mode, flags, ctx=None):
-        p = self._resolve_path(parent_inode, name)
+        path = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
 
         state = await self._resolve_effective_state(pid)
@@ -811,13 +1030,13 @@ class Passthrough(pyfuse3.Operations):
             fh = self._next_fh
             self._next_fh += 1
             self._fd_map[fh] = fd
-            self._fh_info[fh] = (pid, p, flags)
+            self._fh_info[fh] = (pid, path, flags)
             self._staging_fh[fh] = staging_path
             self._staging_pid[pid].append(staging_path)
             self._staging_origin_fd[fd] = None
             if state == ProcState.MEDIUM:
                 try:
-                    self._defer_truncate(pid, p, 0, fd)
+                    self._defer_truncate(pid, path, 0, fd)
                 except OSError as e:
                     self._staging_origin_fd.pop(fd, None)
                     self._staging_fh.pop(fh, None)
@@ -828,11 +1047,35 @@ class Passthrough(pyfuse3.Operations):
                     os.unlink(staging_path)
                     raise pyfuse3.FUSEError(e.errno) from e
             self._emit(
-                FsEvent(ts_ns=time.time_ns(), pid=pid, op="create", path=p, flags=flags)
+                FsEvent(
+                    ts_ns=time.time_ns(), pid=pid, op="create", path=path, flags=flags
+                )
             )
 
+            inode = fh + 0x80000000
+            while inode in self._inode_path:
+                inode += 1
+
+            self._inode_path[inode] = path
+            self._fh_inode[fh] = inode
+
+            st = os.fstat(fd)
+
+            self._staging_inodes[inode] = {
+                "pid": pid,
+                "staging_path": staging_path,
+                "source_identity": (st.st_dev, st.st_ino),
+                "target_identity": None,
+                "held_fd": (
+                    self._write_buffer[pid][-1][0]
+                    if state == ProcState.MEDIUM
+                    else None
+                ),
+                "state": "pending",
+            }
+
             attr = pyfuse3.EntryAttributes()
-            attr.st_ino = fh + 0x80000000
+            attr.st_ino = inode
             attr.st_mode = stat_mod.S_IFREG | (mode & 0o7777)
             attr.st_nlink = 1
             attr.st_uid = ctx.uid if ctx is not None else os.getuid()
@@ -852,25 +1095,29 @@ class Passthrough(pyfuse3.Operations):
                 if state == ProcState.MEDIUM
                 else "HIGH 차단 (underlay 미생성)"
             )
-            print(f"[CREATE] pid={pid} path={p} → {label}")
+            print(f"[CREATE] pid={pid} path={path} → {label}")
 
             fi = pyfuse3.FileInfo()
             fi.fh = fh
+            fi.direct_io = True
+            attr.entry_timeout = 0
+            attr.attr_timeout = 0
 
             return fi, attr
 
         try:
-            fd = os.open(p, flags | os.O_CREAT, mode)
+            fd = os.open(path, flags | os.O_CREAT, mode)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
-        st = self._register_inode(p)
+        st = self._register_inode(path)
         fh = self._next_fh
         self._next_fh += 1
         self._fd_map[fh] = fd
-        self._fh_info[fh] = (pid, p, flags)
+        self._fh_info[fh] = (pid, path, flags)
+        self._fh_inode[fh] = self._stat_to_attr(st).st_ino
         self._emit(
-            FsEvent(ts_ns=time.time_ns(), pid=pid, op="create", path=p, flags=flags)
+            FsEvent(ts_ns=time.time_ns(), pid=pid, op="create", path=path, flags=flags)
         )
 
         fi = pyfuse3.FileInfo()
@@ -879,7 +1126,7 @@ class Passthrough(pyfuse3.Operations):
         return fi, self._stat_to_attr(st)
 
     async def mkdir(self, parent_inode, name, mode, ctx=None):
-        p = self._resolve_path(parent_inode, name)
+        path = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
 
         override = self._get_forced_state(pid)
@@ -897,7 +1144,7 @@ class Passthrough(pyfuse3.Operations):
             from guardfs.stage2.policy.high import handle_mkdir_high
 
             await handle_mkdir_high(
-                path=p,
+                path=path,
                 pid=pid,
                 ops=self,
             )
@@ -905,33 +1152,33 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
-            os.mkdir(p, mode)
+            os.mkdir(path, mode)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
-        st = self._register_inode(p)
+        st = self._register_inode(path)
 
         self._emit(
             FsEvent(
                 ts_ns=time.time_ns(),
                 pid=pid,
                 op="mkdir",
-                path=p,
+                path=path,
             )
         )
 
         return self._stat_to_attr(st)
 
     async def rmdir(self, parent_inode, name, ctx=None):
-        p = self._resolve_path(parent_inode, name)
+        path = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
 
         # 허니팟 디렉터리는 실제 삭제 전에 이벤트를 기록 및 차단
-        if self._collect is None and self._is_honeypot_path(p):
+        if self._collect is None and self._is_honeypot_path(path):
             self._emit_honeypot_event(
                 pid=pid,
                 op="rmdir",
-                path=p,
+                path=path,
             )
             raise pyfuse3.FUSEError(errno.EACCES)
 
@@ -950,7 +1197,7 @@ class Passthrough(pyfuse3.Operations):
             from guardfs.stage2.policy.high import handle_rmdir_high
 
             await handle_rmdir_high(
-                path=p,
+                path=path,
                 pid=pid,
                 ops=self,
             )
@@ -958,7 +1205,7 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
-            os.rmdir(p)
+            os.rmdir(path)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
@@ -967,32 +1214,33 @@ class Passthrough(pyfuse3.Operations):
                 ts_ns=time.time_ns(),
                 pid=pid,
                 op="rmdir",
-                path=p,
+                path=path,
             )
         )
 
     async def opendir(self, inode, ctx=None):
         # [수정] fh 고정값 1 → inode별 fh 발급, 경로 매핑 저장
-        p = self._inode_path.get(inode)
-        if p is None:
+        path = self._inode_path.get(inode)
+        if path is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         fh = self._next_fh
         self._next_fh += 1
-        self._dir_fh_path[fh] = p
+        self._dir_fh_path[fh] = path
 
         pid = ctx.pid if ctx is not None else -1
-        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="opendir", path=p))
+        self._dir_fh_pid[fh] = pid
+        self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="opendir", path=path))
 
         return fh
 
     async def readdir(self, fh, off, token):
         # fh == 1 고정 → fh로 경로 조회
-        dir_path = self._dir_fh_path.get(fh)
-        if dir_path is None:
+        directory_path = self._dir_fh_path.get(fh)
+        if directory_path is None:
             raise pyfuse3.FUSEError(errno.EBADF)
 
-        with os.scandir(dir_path) as it:
+        with os.scandir(directory_path) as it:
             entries = []
 
             for e in it:
@@ -1001,11 +1249,27 @@ class Passthrough(pyfuse3.Operations):
                 except FileNotFoundError:
                     continue
 
-                full = os.path.join(dir_path, e.name)
-                self._inode_path[st.st_ino] = full
+                entry_path = os.path.join(directory_path, e.name)
+                entry_inode = self._stat_to_attr(st).st_ino
+                self._inode_path[entry_inode] = entry_path
                 entries.append(
                     (e.name.encode("utf-8", "surrogateescape"), self._stat_to_attr(st))
                 )
+
+        # 대기 신규 파일은 디렉터리를 연 PID에만 노출한다.
+        dir_pid = self._dir_fh_pid.get(fh, -1)
+        for inode, entry in list(self._staging_inodes.items()):
+            path = self._inode_path.get(inode)
+            if (
+                entry["state"] == "pending"
+                and entry["pid"] == dir_pid
+                and path is not None
+                and os.path.dirname(path) == directory_path
+            ):
+                attr = await self.getattr(inode)
+                name_b = os.path.basename(path).encode("utf-8", "surrogateescape")
+                entries = [(name, info) for name, info in entries if name != name_b]
+                entries.append((name_b, attr))
 
         for i, (name_b, attr) in enumerate(entries[int(off) :], start=int(off)):
             if not pyfuse3.readdir_reply(token, name_b, attr, i + 1):
@@ -1014,6 +1278,7 @@ class Passthrough(pyfuse3.Operations):
     async def releasedir(self, fh):
         # opendir에서 발급한 fh 정리
         self._dir_fh_path.pop(fh, None)
+        self._dir_fh_pid.pop(fh, None)
 
     async def open(self, inode, flags, ctx=None):
         path = self._inode_path.get(inode)
@@ -1051,9 +1316,53 @@ class Passthrough(pyfuse3.Operations):
 
             raise pyfuse3.FUSEError(errno.EACCES)
 
+        entry = self._pending_staging(inode, ctx)
+        if entry is not None:
+            if state == ProcState.HIGH:
+                raise pyfuse3.FUSEError(errno.EACCES)
+            try:
+                fd = os.open(entry["staging_path"], flags & ~os.O_TRUNC)
+                st = os.fstat(fd)
+                if (st.st_dev, st.st_ino) != entry["source_identity"]:
+                    os.close(fd)
+                    raise pyfuse3.FUSEError(errno.ESTALE)
+            except OSError as e:
+                raise pyfuse3.FUSEError(e.errno) from e
+
+            fh = self._next_fh
+            self._next_fh += 1
+            self._fd_map[fh] = fd
+            self._fh_info[fh] = (pid, path, flags)
+            self._fh_inode[fh] = inode
+            self._staging_fh[fh] = entry["staging_path"]
+            self._staging_origin_fd[fd] = None
+
+            if flags & os.O_TRUNC:
+                try:
+                    self._defer_truncate(pid, path, 0, fd)
+                except OSError as e:
+                    self._fd_map.pop(fh, None)
+                    self._fh_info.pop(fh, None)
+                    self._fh_inode.pop(fh, None)
+                    self._staging_fh.pop(fh, None)
+                    self._staging_origin_fd.pop(fd, None)
+                    os.close(fd)
+                    raise pyfuse3.FUSEError(e.errno) from e
+
+            self._emit(
+                FsEvent(
+                    ts_ns=time.time_ns(), pid=pid, op="open", path=path, flags=flags
+                )
+            )
+            fi = pyfuse3.FileInfo()
+            fi.fh = fh
+            fi.direct_io = True
+
+            return fi
+
         # MEDIUM(SUSPICIOUS 매핑 포함)에서도 O_TRUNC는 os.open() 순간
         # 원본을 비워버리므로, write 버퍼링과 동일하게 스테이징으로 유도한다.
-        # (기존에는 여기서 바로 os.open(p, flags)가 실행되어 write()의
+        # (기존에는 여기서 바로 os.open(path, flags)가 실행되어 write()의
         # 버퍼링 로직이 개입하기도 전에 원본이 이미 잘려나갔다.)
         if state == ProcState.MEDIUM and flags & os.O_TRUNC:
             staging_path = os.path.join(self._staging_dir, f"fh_{self._next_fh}")
@@ -1073,6 +1382,7 @@ class Passthrough(pyfuse3.Operations):
             self._next_fh += 1
             self._fd_map[fh] = fd
             self._fh_info[fh] = (pid, path, flags)
+            self._fh_inode[fh] = inode
             self._staging_fh[fh] = staging_path
             self._staging_pid[pid].append(staging_path)
             self._staging_origin_fd[fd] = origin_fd
@@ -1083,6 +1393,7 @@ class Passthrough(pyfuse3.Operations):
                 self._staging_origin_fd.pop(fd, None)
                 self._staging_fh.pop(fh, None)
                 self._fh_info.pop(fh, None)
+                self._fh_inode.pop(fh, None)
                 self._fd_map.pop(fh, None)
                 self._staging_pid[pid].remove(staging_path)
                 os.close(fd)
@@ -1106,7 +1417,7 @@ class Passthrough(pyfuse3.Operations):
 
             fi = pyfuse3.FileInfo()
             fi.fh = fh
-            fi.direct_io = False
+            fi.direct_io = True
 
             return fi
 
@@ -1120,6 +1431,7 @@ class Passthrough(pyfuse3.Operations):
 
         self._fd_map[fh] = fd
         self._fh_info[fh] = (pid, path, flags)
+        self._fh_inode[fh] = inode
 
         self._emit(
             FsEvent(
@@ -1142,6 +1454,8 @@ class Passthrough(pyfuse3.Operations):
 
         if fd is None:
             raise pyfuse3.FUSEError(errno.EBADF)
+
+        self._check_staging_handle(fh)
 
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
 
@@ -1181,10 +1495,16 @@ class Passthrough(pyfuse3.Operations):
             )
         )
 
-        os.lseek(fd, off, os.SEEK_SET)
+        # 상태 조회 중 commit이 핸들을 전환했을 수 있음
+        self._check_staging_handle(fh)
+        fd = self._fd_map.get(fh)
+
+        if fd is None:
+            raise pyfuse3.FUSEError(errno.EBADF)
 
         try:
-            return os.read(fd, size)
+            _logical_size, data = self._pending_view(pid, fd, off, size)
+            return data
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
@@ -1193,6 +1513,8 @@ class Passthrough(pyfuse3.Operations):
 
         if fd is None:
             raise pyfuse3.FUSEError(errno.EBADF)
+
+        self._check_staging_handle(fh)
 
         pid, path, _flags = self._fh_info.get(fh, (-1, "?", 0))
 
@@ -1242,8 +1564,11 @@ class Passthrough(pyfuse3.Operations):
 
         state = await self._resolve_effective_state(pid)
 
+        self._check_staging_handle(fh)
+        fd = self._fd_map.get(fh)
         info = self._fh_info.get(fh)
-        if info is None:
+
+        if fd is None or info is None:
             raise pyfuse3.FUSEError(errno.EBADF)
 
         _owner_pid, path, _flags = info
@@ -1255,7 +1580,7 @@ class Passthrough(pyfuse3.Operations):
 
             return await handle_write_high(fd, off, buf, path, pid, self)
 
-        elif state == ProcState.MEDIUM:
+        elif state == ProcState.MEDIUM or fd in self._staging_origin_fd:
             from guardfs.stage2.policy.medium import handle_write_medium
 
             try:
@@ -1284,47 +1609,21 @@ class Passthrough(pyfuse3.Operations):
         ):
             await self._set_metadata(inode, attr, fields, ctx)
 
-        result = await self.getattr(inode, ctx)
+        # 크기와 내용은 동일한 identity 기반 view에서 계산
+        view_ctx = ctx
 
-        # MEDIUM에서 성공 처리함 크기 변경의 논리적 크기를 반환
-        if fields.update_size:
-            if ctx is not None:
-                pid = ctx.pid
-            elif fh is not None:
-                pid = self._fh_info.get(fh, (-1, "?", 0))[0]
-            else:
-                pid = -1
+        if view_ctx is None and fh is not None:
+            info = self._fh_info.get(fh)
+            if info is not None:
+                view_ctx = SimpleNamespace(pid=info[0])
 
-            if fh is not None:
-                path = self._fh_info.get(fh, (-1, None, 0))[1]
-            else:
-                path = self._inode_path.get(inode)
-
-            logical_size = result.st_size
-            has_pending = False
-
-            for _fd, off, buf, target in self._write_buffer.get(pid, []):
-                if target != path:
-                    continue
-
-                has_pending = True
-
-                if buf is None:
-                    logical_size = off
-                elif buf:
-                    logical_size = max(logical_size, off + len(buf))
-
-            if has_pending:
-                result.st_size = logical_size
-                result.attr_timeout = 0
-
-        return result
+        return await self.getattr(inode, view_ctx)
 
     async def _set_metadata(self, inode, attr, fields, ctx=None):
         """chmod / chown / utimens. ctime은 커널이 갱신하므로 따로 설정하지 않는다."""
-        p = self._inode_path.get(inode)
+        path = self._inode_path.get(inode)
 
-        if p is None:
+        if path is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         pid = ctx.pid if ctx is not None else -1
@@ -1334,30 +1633,33 @@ class Passthrough(pyfuse3.Operations):
 
             if fields.update_mode:
                 await handle_setattr_high(
-                    p, f"CHMOD(mode={stat_mod.S_IMODE(attr.st_mode):o})", pid, self
+                    path, f"CHMOD(mode={stat_mod.S_IMODE(attr.st_mode):o})", pid, self
                 )
             if fields.update_uid or fields.update_gid:
-                await handle_setattr_high(p, "CHOWN", pid, self)
+                await handle_setattr_high(path, "CHOWN", pid, self)
             if fields.update_atime or fields.update_mtime:
-                await handle_setattr_high(p, "UTIME", pid, self)
+                await handle_setattr_high(path, "UTIME", pid, self)
             return
+
+        entry = self._pending_staging(inode, ctx)
+        target_path = entry["staging_path"] if entry is not None else path
 
         try:
             if fields.update_mode:
-                os.chmod(p, stat_mod.S_IMODE(attr.st_mode))
+                os.chmod(target_path, stat_mod.S_IMODE(attr.st_mode))
 
             if fields.update_uid or fields.update_gid:
                 os.chown(
-                    p,
+                    target_path,
                     attr.st_uid if fields.update_uid else -1,
                     attr.st_gid if fields.update_gid else -1,
                     follow_symlinks=False,
                 )
 
             if fields.update_atime or fields.update_mtime:
-                st = os.lstat(p)
+                st = os.lstat(target_path)
                 os.utime(
-                    p,
+                    target_path,
                     ns=(
                         attr.st_atime_ns if fields.update_atime else st.st_atime_ns,
                         attr.st_mtime_ns if fields.update_mtime else st.st_mtime_ns,
@@ -1373,14 +1675,14 @@ class Passthrough(pyfuse3.Operations):
                     ts_ns=time.time_ns(),
                     pid=pid,
                     op="chmod",
-                    path=p,
+                    path=path,
                     flags=stat_mod.S_IMODE(attr.st_mode),
                 )
             )
         if fields.update_uid or fields.update_gid:
-            self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="chown", path=p))
+            self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="chown", path=path))
         if fields.update_atime or fields.update_mtime:
-            self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="utime", path=p))
+            self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="utime", path=path))
 
     async def truncate(self, inode, size, ctx=None):
         if size < 0:
@@ -1425,6 +1727,20 @@ class Passthrough(pyfuse3.Operations):
             await handle_truncate_high(path, size, pid, self)
             return
 
+        entry = self._pending_staging(inode, ctx)
+
+        if entry is not None:
+            try:
+                self._defer_truncate(pid, path, size, entry["held_fd"])
+            except OSError as e:
+                raise pyfuse3.FUSEError(e.errno) from e
+            self._emit(
+                FsEvent(
+                    ts_ns=time.time_ns(), pid=pid, op="truncate", path=path, size=size
+                )
+            )
+            return
+
         try:
             # MEDIUM에서도 파일 존재와 쓰기 권한은 확인
             with open(path, "r+b") as f:
@@ -1455,6 +1771,8 @@ class Passthrough(pyfuse3.Operations):
         if fd is None or info is None:
             raise pyfuse3.FUSEError(errno.EBADF)
 
+        self._check_staging_handle(fh)
+
         owner_pid, path, flags = info
         pid = ctx.pid if ctx is not None else owner_pid
 
@@ -1477,6 +1795,7 @@ class Passthrough(pyfuse3.Operations):
         if fd is None or info is None:
             raise pyfuse3.FUSEError(errno.EBADF)
 
+        self._check_staging_handle(fh)
         _owner_pid, path, flags = info
 
         if self._collect is None and self._is_honeypot_path(path):
@@ -1500,7 +1819,7 @@ class Passthrough(pyfuse3.Operations):
         try:
             os.fstat(fd)
 
-            if state == ProcState.MEDIUM:
+            if state == ProcState.MEDIUM or fd in self._staging_origin_fd:
                 self._defer_truncate(pid, path, size, fd)
             else:
                 os.ftruncate(fd, size)
@@ -1563,42 +1882,44 @@ class Passthrough(pyfuse3.Operations):
     async def rename(
         self, parent_inode_old, name_old, parent_inode_new, name_new, flags, ctx=None
     ):
-        oldp = self._resolve_path(parent_inode_old, name_old)
-        newp = self._resolve_path(parent_inode_new, name_new)
+        old_path = self._resolve_path(parent_inode_old, name_old)
+        new_path = self._resolve_path(parent_inode_new, name_new)
 
         pid = ctx.pid if ctx is not None else -1
 
         # 출발지 또는 목적지가 허니팟이면 실제 rename 전에 차단
         if self._collect is None and (
-            self._is_honeypot_path(oldp) or self._is_honeypot_path(newp)
+            self._is_honeypot_path(old_path) or self._is_honeypot_path(new_path)
         ):
             self._emit(
                 FsEvent(
                     ts_ns=time.time_ns(),
                     pid=pid,
                     op="rename",
-                    path=oldp,
-                    new_path=newp,
+                    path=old_path,
+                    new_path=new_path,
                     applied=False,
                 )
             )
 
-            print(f"[HONEYPOT] pid={pid} op=rename blocked path={oldp} new_path={newp}")
+            print(
+                f"[HONEYPOT] pid={pid} op=rename blocked path={old_path} new_path={new_path}"
+            )
 
             raise pyfuse3.FUSEError(errno.EACCES)
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_rename_high
 
-            await handle_rename_high(oldp, newp, pid, self)
+            await handle_rename_high(old_path, new_path, pid, self)
             return
 
         ev = FsEvent(
             ts_ns=time.time_ns(),
             pid=pid,
             op="rename",
-            path=oldp,
-            new_path=newp,
+            path=old_path,
+            new_path=new_path,
         )
 
         if self._collect is None:
@@ -1612,18 +1933,18 @@ class Passthrough(pyfuse3.Operations):
 
             print(
                 f"[PRECHECK] pid={pid} op=rename "
-                f"path={oldp} new_path={newp} "
+                f"path={old_path} new_path={new_path} "
                 f"reason={reason} blocked"
             )
 
             raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
-            source_stat = os.lstat(oldp)
+            source_stat = os.lstat(old_path)
             source_is_dir = stat_mod.S_ISDIR(source_stat.st_mode)
 
             try:
-                destination_stat = os.lstat(newp)
+                destination_stat = os.lstat(new_path)
             except FileNotFoundError:
                 destination_stat = None
 
@@ -1638,57 +1959,58 @@ class Passthrough(pyfuse3.Operations):
 
             # 경로 기반 커밋이 기존 목적지의 데이터를 새 파일에 적용하지
             # 않도록 열린 핸들이나 지연 작업이 있는 목적지는 보호
-            if self._has_pending_destination(newp):
+            if self._has_pending_destination(new_path):
                 raise pyfuse3.FUSEError(errno.EBUSY)
 
-            os.rename(oldp, newp)
+            os.rename(old_path, new_path)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
-        old_prefix = oldp + os.sep
-        new_prefix = newp + os.sep
+        old_prefix = old_path + os.sep
+        new_prefix = new_path + os.sep
 
         moved_inodes = {
             inode
             for inode, path in self._inode_path.items()
-            if path == oldp or path.startswith(old_prefix)
+            if path == old_path or path.startswith(old_prefix)
         }
 
         for inode, path in list(self._inode_path.items()):
             if inode not in moved_inodes and (
-                path == newp or path.startswith(new_prefix)
+                path == new_path or path.startswith(new_prefix)
             ):
                 self._inode_path.pop(inode, None)
 
         for inode in moved_inodes:
             path = self._inode_path[inode]
-            self._inode_path[inode] = newp + path[len(oldp) :]
+            self._inode_path[inode] = new_path + path[len(old_path) :]
 
         for fh, (fh_pid, path, fh_flags) in list(self._fh_info.items()):
-            if path == oldp or path.startswith(old_prefix):
+            if path == old_path or path.startswith(old_prefix):
                 self._fh_info[fh] = (
                     fh_pid,
-                    newp + path[len(oldp) :],
+                    new_path + path[len(old_path) :],
                     fh_flags,
                 )
 
         for fh, path in list(self._dir_fh_path.items()):
-            if path == oldp or path.startswith(old_prefix):
-                self._dir_fh_path[fh] = newp + path[len(oldp) :]
+            if path == old_path or path.startswith(old_prefix):
+                self._dir_fh_path[fh] = new_path + path[len(old_path) :]
 
-        self._move_pending_paths(oldp, newp, source_is_dir)
+        self._move_pending_paths(old_path, new_path, source_is_dir)
 
         self._emit(
             FsEvent(
                 ts_ns=time.time_ns(),
                 pid=pid,
                 op="rename",
-                path=oldp,
-                new_path=newp,
+                path=old_path,
+                new_path=new_path,
             )
         )
 
     async def release(self, fh):
+        self._fh_inode.pop(fh, None)
         pid, path, flags = self._fh_info.pop(fh, (-1, "?", 0))
         fd = self._fd_map.pop(fh, None)
         origin_fd = self._staging_origin_fd.pop(fd, None)
@@ -1750,7 +2072,7 @@ class Passthrough(pyfuse3.Operations):
         ) or any(
             saved_path == staging_path
             for entries in self._staging_recovery.values()
-            for _target, saved_path in entries
+            for _original_path, saved_path in entries
         )
         if staging_path and not pending_staging:
             try:
@@ -1931,9 +2253,9 @@ async def main(
     root: str,
     collect_logger: FuseCollectLogger | None = None,
 ):
-    honeypot_dir = get_honeypot_dir(root)
+    honeypot_path = get_honeypot_dir(root)
 
-    stage1 = Stage1Detector(honeypot_dir)
+    stage1 = Stage1Detector(honeypot_path)
     ops = Passthrough(root, stage1, collect_logger)
 
     pyfuse3.init(ops, mountpoint, set())

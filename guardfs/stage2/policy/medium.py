@@ -159,6 +159,59 @@ def _reconstruct_final_content(
     return bytes(data)
 
 
+def pending_file_view(ops, pid, fd, off=0, size=0):
+    """같은 파일의 대기 write/truncate를 반영한 크기와 읽기 결과"""
+
+    if off < 0 or size < 0:
+        raise OSError(errno.EINVAL, "잘못된 read 범위")
+
+    source_fd = ops._staging_origin_fd.get(fd, fd)
+
+    if source_fd is None:
+        source_fd = fd
+
+    st = os.fstat(source_fd)
+    identity = (st.st_dev, st.st_ino)
+    held_fd = ops._buffer_fds.get(pid, {}).get(identity)
+
+    changes = [
+        (position, buf)
+        for pending_fd, position, buf, _path in ops._write_buffer.get(pid, [])
+        if held_fd is not None and pending_fd == held_fd
+    ]
+
+    logical_size = st.st_size
+
+    for position, buf in changes:
+        if buf is None:
+            logical_size = position
+        elif buf:
+            logical_size = max(logical_size, position + len(buf))
+
+    length = min(size, max(0, logical_size - off))
+    data = bytearray(length)
+
+    if length:
+        original = os.pread(source_fd, length, off)
+        data[: len(original)] = original
+
+    # truncate로 제거된 바이트가 이후 확장에서 되살아나지 않게 설정
+    for position, buf in changes:
+        if buf is None:
+            start = max(0, position - off)
+            if start < length:
+                data[start:] = b"\x00" * (length - start)
+
+        elif buf:
+            start = max(off, position)
+            end = min(off + length, position + len(buf))
+
+            if start < end:
+                data[start - off : end - off] = buf[start - position : end - position]
+
+    return logical_size, bytes(data)
+
+
 def _phase_delay_ms(elapsed_sec: float, trusted: bool) -> int:
     for phase_end, untrusted_ms, trusted_ms in MEDIUM_DELAY_PHASES:
         if elapsed_sec < phase_end:
@@ -218,25 +271,49 @@ def _pwrite_all(fd: int, buf: bytes, off: int) -> None:
 
 
 def _rebind_staging_handles(ops, pid, source_identity, target_fd) -> None:
-    """commit 뒤에도 열려 있는 staging 핸들을 실제 파일로 연결한다."""
-    for fh, staging_path in list(ops._staging_fh.items()):
-        if ops._fh_info.get(fh, (-1, "?", 0))[0] != pid:
-            continue
-        old_fd = ops._fd_map.get(fh)
-        if old_fd is None:
-            continue
-        origin_fd = ops._staging_origin_fd.get(old_fd)
-        source_fd = old_fd if origin_fd is None else origin_fd
-        st = os.fstat(source_fd)
-        if (st.st_dev, st.st_ino) != source_identity:
-            continue
-        replacement = os.dup(target_fd)
+    """commit 또는 원본 복귀 시 열린 staging 핸들을 연결"""
+    replacements = []
+
+    try:
+        # dup 실패 전에 기존 핸들을 바꾸거나 닫지 않는다.
+        for fh in list(ops._staging_fh):
+            if ops._fh_info.get(fh, (-1, "?", 0))[0] != pid:
+                continue
+            old_fd = ops._fd_map.get(fh)
+            if old_fd is None:
+                continue
+            origin_fd = ops._staging_origin_fd.get(old_fd)
+            source_fd = old_fd if origin_fd is None else origin_fd
+            st = os.fstat(source_fd)
+            if (st.st_dev, st.st_ino) == source_identity:
+                replacements.append((fh, old_fd, origin_fd, os.dup(target_fd)))
+    except OSError:
+        for _fh, _old_fd, _origin_fd, replacement in replacements:
+            os.close(replacement)
+
+        raise
+
+    cleanup_error = None
+
+    for fh, old_fd, origin_fd, replacement in replacements:
         ops._fd_map[fh] = replacement
         ops._staging_fh.pop(fh, None)
         ops._staging_origin_fd.pop(old_fd, None)
-        os.close(old_fd)
-        if origin_fd is not None:
-            os.close(origin_fd)
+        for obsolete_fd in (old_fd, origin_fd):
+            if obsolete_fd is not None:
+                try:
+                    os.close(obsolete_fd)
+                except OSError as e:
+                    cleanup_error = e
+
+    # 핸들이 이미 release된 경우에도 가상 inode를 확정
+    finish = getattr(ops, "_finish_staging_commit", None)
+
+    if finish is not None:
+        finish(pid, source_identity, target_fd)
+
+    if cleanup_error is not None:
+        log_medium_event(pid, "", "COMMIT", "HANDLE_CLEANUP_FAILED", str(cleanup_error))
 
 
 def _publish_new_file(path: str, source_fd: int, pid: int, ops) -> None:
@@ -592,27 +669,29 @@ async def commit_buffers(pid: int, ops) -> None:
     ops._medium_entered_at.pop(pid, None)
     ops._trunc_paths.pop(pid, None)
 
-    # 경로가 같아도 다른 파일이면 작업을 섞지 않는다.
     by_file = {}
     for fd, off, buf, path in buffers:
         entry = by_file.setdefault(fd, {"path": path, "changes": []})
-
         entry["path"] = path
         entry["changes"].append((off, buf))
-
         if buf is not None:
             ops._global_buffer_bytes = max(0, ops._global_buffer_bytes - len(buf))
 
     new_files = dict(ops._buffer_new_files.get(pid, {}))
-    preserve_staging = set()
+    identities = {
+        held_fd: identity for identity, held_fd in ops._buffer_fds.get(pid, {}).items()
+    }
+    applied = set()
+    rejected = False
     failed = False
     try:
-        # 기존 검증을 유지하되, 경로가 아닌 실제 commit 대상에서 재구성한다.
-        # 모든 검증이 끝나기 전에는 원본에 적용하지 않는다.
+        # 모든 대상의 검증이 끝나기 전에는 원본에 적용하지 않는다.
         for fd, entry in by_file.items():
             path, changes = entry["path"], entry["changes"]
             for off, buf in changes:
                 if buf is not None and not validate_magic(path, buf, off):
+                    rejected = True
+
                     await ops.trigger_high(pid, reason="magic_mismatch_on_commit")
                     return
             group = EXTENSION_GROUPS[classify_extension(path)]
@@ -622,8 +701,13 @@ async def commit_buffers(pid: int, ops) -> None:
                 )
                 if not structural_check(path, final_content):
                     log_medium_event(
-                        pid, path, "COMMIT", "FAILED", "structural_check 실패"
+                        pid,
+                        path,
+                        "COMMIT",
+                        "VALIDATION_FAILED",
+                        "structural_check 실패; 원본 미반영",
                     )
+                    rejected = True
                     await ops.trigger_high(pid, reason="structural_check_failed")
                     return
 
@@ -638,36 +722,92 @@ async def commit_buffers(pid: int, ops) -> None:
                 if fd in new_files:
                     _publish_new_file(path, fd, pid, ops)
                 else:
-                    st = os.fstat(fd)
-                    _rebind_staging_handles(ops, pid, (st.st_dev, st.st_ino), fd)
+                    _rebind_staging_handles(ops, pid, identities[fd], fd)
+                applied.add(fd)
                 print(
-                    f"[COMMIT] pid={pid} path={path} → 커밋 완료 ({len(changes)}개 작업)"
+                    f"[COMMIT] pid={pid} path={path} → 파일 반영 완료 ({len(changes)}개 작업)"
                 )
                 log_medium_event(
-                    pid, path, "COMMIT", "SUCCESS", "원래 파일에 순서대로 반영"
+                    pid,
+                    path,
+                    "COMMIT",
+                    "FILE_APPLIED",
+                    "원래 파일에 순서대로 반영; PID 전체 성공과 구분",
                 )
             except OSError as e:
                 failed = True
-                if fd in new_files:
-                    staging_path = new_files[fd]
-                    preserve_staging.add(staging_path)
-                    ops._staging_recovery[pid].append((path, staging_path))
-                log_medium_event(pid, path, "COMMIT", "FAILED", str(e))
+                # 현재 파일도 일부 변경됐을 수 있다. rollback 성공으로 기록하지 않음
+                log_medium_event(
+                    pid,
+                    path,
+                    "COMMIT",
+                    "APPLY_FAILED",
+                    f"{e}; 부분 반영 가능, 이후 적용 중단",
+                )
+                break
 
-        for staging_path in ops._staging_pid.pop(pid, []):
-            if staging_path in preserve_staging:
-                continue
-            try:
-                os.unlink(staging_path)
-            except FileNotFoundError:
-                continue
-            except OSError as e:
-                log_medium_event(pid, staging_path, "COMMIT", "CLEANUP_FAILED", str(e))
-        # 실패한 commit 때문에 삭제 보류 원본까지 확정 삭제하지 않는다.
         if not failed:
             _finalize_unlink(pid, ops)
+            log_medium_event(
+                pid,
+                "",
+                "COMMIT",
+                "DATA_APPLIED",
+                "모든 파일 데이터 적용 완료; 삭제 확정/정리 오류는 별도 로그 확인",
+            )
+
+    except OSError as e:
+        failed = True
+        log_medium_event(
+            pid, "", "COMMIT", "IO_FAILED", f"{e}; 적용 완료 파일 수={len(applied)}"
+        )
+
     finally:
-        _close_buffer_fds(pid, ops)
+        try:
+            if not rejected:
+                preserve_staging = set()
+
+                for fd, staging_path in new_files.items():
+                    if fd in applied:
+                        continue
+                    path = by_file[fd]["path"]
+                    preserve_staging.add(staging_path)
+                    record = (path, staging_path)
+
+                    if record not in ops._staging_recovery[pid]:
+                        ops._staging_recovery[pid].append(record)
+                    finish = getattr(ops, "_finish_staging_recovery", None)
+
+                    if finish is not None:
+                        finish(pid, identities[fd])
+                    log_medium_event(
+                        pid, path, "COMMIT", "STAGING_PRESERVED", staging_path
+                    )
+
+                if failed:
+                    for fd, entry in by_file.items():
+                        if fd not in applied:
+                            log_medium_event(
+                                pid,
+                                entry["path"],
+                                "COMMIT",
+                                "NOT_COMPLETED",
+                                "실패 또는 미적용; 전체 commit 성공 아님",
+                            )
+
+                for staging_path in ops._staging_pid.pop(pid, []):
+                    if staging_path in preserve_staging:
+                        continue
+                    try:
+                        os.unlink(staging_path)
+                    except FileNotFoundError:
+                        continue
+                    except OSError as e:
+                        log_medium_event(
+                            pid, staging_path, "COMMIT", "CLEANUP_FAILED", str(e)
+                        )
+        finally:
+            _close_buffer_fds(pid, ops)
 
 
 async def drop_buffers(pid: int, ops) -> None:
@@ -686,11 +826,24 @@ async def drop_buffers(pid: int, ops) -> None:
             )
 
     try:
+        new_files = ops._buffer_new_files.get(pid, {})
+        # 기존 O_TRUNC 핸들은 변경하지 않은 원본으로 돌아간다.
+        for identity, held_fd in list(ops._buffer_fds.get(pid, {}).items()):
+            if held_fd not in new_files:
+                _rebind_staging_handles(ops, pid, identity, held_fd)
+
+        finish = getattr(ops, "_finish_staging_drop", None)
+
+        if finish is not None:
+            finish(pid)
+
         for staging_path in ops._staging_pid.pop(pid, []):
             try:
                 os.unlink(staging_path)
-            except OSError:
-                pass
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                log_medium_event(pid, staging_path, "DROP", "CLEANUP_FAILED", str(e))
 
         _restore_unlink(pid, ops)
 
