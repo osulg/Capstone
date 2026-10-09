@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CCCV EDR Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Ctext x='16' y='21' font-size='13' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'%3ECC%3C/text%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #f0f2f5;
+    color: #1a202c;
+    font-family: 'Inter', 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Segoe UI', sans-serif;
+    height: 100vh;
+    display: flex; flex-direction: column;
+  }
+  button { font-family: inherit; }
+
+  /* ── 헤더 ── */
+  header {
+    background: #ffffff;
+    padding: 0 32px;
+    height: 60px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid #e2e8f0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    position: sticky; top: 0; z-index: 100; flex-shrink: 0;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo-icon {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 0.85rem;
+  }
+  .logo h1 { font-size: 1rem; font-weight: 700; color: #1a202c; }
+  .logo span { font-size: 0.75rem; color: #64748b; font-weight: 400; margin-left: 6px; }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .live-dot { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: #16a34a; font-weight: 500; }
+  .live-dot::before {
+    content: ''; width: 8px; height: 8px; border-radius: 50%;
+    background: #16a34a; animation: pulse 1.8s infinite;
+  }
+  .live-dot.offline { color: #dc2626; }
+  .live-dot.offline::before { background: #dc2626; animation: none; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.5; transform: scale(1.3); }
+  }
+  #last-update { font-size: 0.72rem; color: #94a3b8; }
+
+  /* ── 메인 레이아웃 ── */
+  .main-layout {
+    display: flex; flex: 1; overflow: hidden;
+    min-height: 0;
+  }
+
+  /* ── 왼쪽: 대시보드 ── */
+  .dashboard-pane {
+    flex: 1; overflow-y: auto;
+    padding: 24px 24px 24px 32px;
+    min-width: 0;
+  }
+
+  /* ── 통계 카드 ── */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+  .card {
+    background: #fff; border-radius: 12px;
+    padding: 18px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+    border: 1px solid #e2e8f0;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .card-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.3rem; flex-shrink: 0; }
+  .card-total  .card-icon { background: #eff6ff; }
+  .card-high   .card-icon { background: #fef2f2; }
+  .card-medium .card-icon { background: #fffbeb; }
+  .card-low    .card-icon { background: #f0fdf4; }
+  .card-body .num { font-size: 1.7rem; font-weight: 700; line-height: 1; }
+  .card-body .lbl { font-size: 0.72rem; color: #64748b; margin-top: 4px; font-weight: 500; }
+  .card-total  .num { color: #3b82f6; }
+  .card-high   .num { color: #ef4444; }
+  .card-medium .num { color: #f59e0b; }
+  .card-low    .num { color: #22c55e; }
+
+  /* ── 테이블 섹션 ── */
+  .section { background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.07); overflow: hidden; }
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 16px 20px; border-bottom: 1px solid #edf2f7; flex-wrap: wrap;
+  }
+  .section-head h2 { font-size: 0.9rem; font-weight: 700; }
+  .section-head h2 { white-space: nowrap; }
+  .section-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .filter-btn, #event-count { white-space: nowrap; }
+  .filter-btn {
+    border: 1px solid #e2e8f0; background: #fff; color: #64748b;
+    font-size: 0.7rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .filter-btn.active { background: #1e293b; color: #fff; border-color: #1e293b; }
+  #event-count { font-size: 0.72rem; color: #94a3b8; margin-left: 4px; }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+  thead th {
+    text-align: left; font-weight: 600; color: #64748b; font-size: 0.7rem;
+    padding: 10px 12px; background: #f8fafc; border-bottom: 1px solid #edf2f7; white-space: nowrap;
+  }
+  tbody td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; white-space: nowrap; vertical-align: middle; }
+  tbody tr.lv-HIGH   { background: #fff1f2; }
+  tbody tr.lv-MEDIUM { background: #fffbeb; }
+  tbody tr.lv-LOW    { background: #f0fdf4; }
+  tbody tr:hover { filter: brightness(0.98); }
+  tbody tr.new { animation: flash 1.6s ease-out; }
+  @keyframes flash { from { box-shadow: inset 4px 0 0 #3b82f6; background: #dbeafe; } }
+  td.time { color: #64748b; font-variant-numeric: tabular-nums; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 0.66rem; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+  }
+  .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .badge-HIGH   { color: #dc2626; background: #fee2e2; }
+  .badge-MEDIUM { color: #b45309; background: #fef3c7; }
+  .badge-LOW    { color: #15803d; background: #dcfce7; }
+  .badge-SUSPICIOUS { color: #7c3aed; background: #ede9fe; }
+  .pid-link { color: #3b82f6; cursor: pointer; font-variant-numeric: tabular-nums; }
+  .pid-link:hover { text-decoration: underline; }
+  td.proc { font-weight: 600; }
+  td.target { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: #2563eb; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  .action {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.64rem; font-weight: 600;
+    background: #f1f5f9; color: #334155; padding: 2px 7px; border-radius: 4px;
+  }
+  td.result { font-weight: 700; font-size: 0.7rem; }
+  .res-BLOCKED, .res-HIGH, .res-ESCALATED_TO_HIGH, .res-SUSPENDED, .res-FAILED { color: #dc2626; }
+  .res-BUFFERED, .res-MEDIUM, .res-STAGED { color: #d97706; }
+  .res-SUCCESS, .res-CONFIRMED, .res-RESTORED, .res-LOW { color: #16a34a; }
+  .res-BUFFER_DROPPED { color: #334155; font-weight: 500; }
+  td.reason { color: #94a3b8; font-size: 0.7rem; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+  .empty { text-align: center; color: #94a3b8; padding: 48px 0; font-size: 0.8rem; white-space: normal; }
+  .empty code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.72rem; color: #334155; }
+
+  /* ── 오른쪽: AI 분석관 ── */
+  .ai-pane {
+    width: 400px; flex-shrink: 0;
+    background: #fff; border-left: 1px solid #e2e8f0;
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .ai-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 12px; }
+  .ai-title { display: flex; align-items: center; gap: 10px; }
+  .ai-icon {
+    width: 34px; height: 34px; border-radius: 9px;
+    background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+    display: flex; align-items: center; justify-content: center; font-size: 1.05rem;
+  }
+  .ai-title h3 { font-size: 0.86rem; font-weight: 700; }
+  .ai-title small { display: block; font-size: 0.66rem; color: #94a3b8; margin-top: 1px; }
+  #ai-status { font-size: 0.7rem; font-weight: 600; color: #16a34a; }
+  #ai-status.local { color: #d97706; }
+  #ai-status.busy { color: #7c3aed; }
+  .quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 18px 12px; border-bottom: 1px solid #f1f5f9; }
+  .quick button {
+    border: 1px solid #e2e8f0; background: #f8fafc; color: #334155;
+    font-size: 0.68rem; font-weight: 600; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .quick button:hover { background: #eef2ff; border-color: #c7d2fe; color: #4338ca; }
+  .quick button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .chat { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .intro {
+    background: #ede9fe; border: 1px solid #c4b5fd; border-radius: 12px;
+    padding: 14px; font-size: 0.74rem; color: #4c1d95; line-height: 1.6;
+  }
+  .intro b { display: block; font-size: 0.78rem; margin-bottom: 4px; }
+  .msg { display: flex; gap: 8px; align-items: flex-start; }
+  .msg.user { flex-direction: row-reverse; }
+  .avatar {
+    width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.64rem; font-weight: 700;
+  }
+  .msg.ai .avatar { background: #7c3aed; color: #fff; }
+  .msg.user .avatar { background: #dbeafe; color: #2563eb; }
+  .bubble { font-size: 0.74rem; line-height: 1.65; border-radius: 10px; padding: 10px 12px; max-width: 86%; word-break: break-word; }
+  .msg.user .bubble { background: #3b82f6; color: #fff; border-top-right-radius: 3px; white-space: pre-wrap; }
+  .msg.ai .bubble { background: #f8fafc; border: 1px solid #e2e8f0; color: #334155; border-top-left-radius: 3px; }
+  .bubble h3, .bubble h4 { font-size: 0.78rem; font-weight: 700; color: #1e293b; margin: 10px 0 4px; }
+  .bubble h3:first-child, .bubble h4:first-child { margin-top: 0; }
+  .bubble p { margin: 4px 0; }
+  .bubble ol, .bubble ul { margin: 4px 0 4px 18px; }
+  .bubble li { margin: 2px 0; }
+  .bubble code { font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; background: #e2e8f0; padding: 1px 4px; border-radius: 3px; }
+  .bubble pre { background: #1e293b; color: #e2e8f0; padding: 8px; border-radius: 6px; overflow-x: auto; margin: 6px 0; }
+  .bubble pre code { background: none; color: inherit; padding: 0; }
+  .bubble blockquote { border-left: 3px solid #f59e0b; padding-left: 8px; color: #92400e; margin: 4px 0; }
+  .bubble strong { color: #0f172a; }
+  .sources { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #e2e8f0; font-size: 0.62rem; color: #94a3b8; }
+  .typing span { display: inline-block; width: 6px; height: 6px; margin-right: 3px; border-radius: 50%; background: #a78bfa; animation: bounce 1.2s infinite; }
+  .typing span:nth-child(2) { animation-delay: .15s; }
+  .typing span:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .5; } 40% { transform: translateY(-4px); opacity: 1; } }
+
+  .composer { border-top: 1px solid #e2e8f0; padding: 12px 14px; display: flex; gap: 8px; align-items: flex-end; }
+  .composer textarea {
+    flex: 1; resize: none; border: 1px solid #e2e8f0; border-radius: 10px;
+    padding: 9px 11px; font-family: inherit; font-size: 0.76rem; line-height: 1.45;
+    max-height: 120px; outline: none; background: #f8fafc;
+  }
+  .composer textarea:focus { border-color: #a78bfa; background: #fff; }
+  .composer button {
+    background: #3b82f6; color: #fff; border: none; border-radius: 10px;
+    padding: 9px 14px; font-size: 0.74rem; font-weight: 600; cursor: pointer;
+  }
+  .composer button:disabled { background: #93c5fd; cursor: not-allowed; }
+
+  /* ── 반응형 ── */
+  @media (max-width: 1180px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 960px) {
+    body { height: auto; min-height: 100vh; }
+    .main-layout { flex-direction: column; height: auto; overflow: visible; }
+    .dashboard-pane { padding: 16px; overflow: visible; }
+    .ai-pane { width: 100%; border-left: none; border-top: 1px solid #e2e8f0; height: 80vh; }
+    header { padding: 0 16px; }
+    .logo span { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">
+    <div class="logo-icon">CC</div>
+    <h1>CCCV EDR<span>Endpoint Detection &amp; Response</span></h1>
+  </div>
+  <div class="header-right">
+    <div class="live-dot" id="live">실시간 모니터링</div>
+    <div id="last-update">-</div>
+  </div>
+</header>
+
+<div class="main-layout">
+  <!-- ── 대시보드 ── -->
+  <main class="dashboard-pane">
+    <div class="stats">
+      <div class="card card-total">
+        <div class="card-icon">📋</div>
+        <div class="card-body"><div class="num" id="stat-total">0</div><div class="lbl">전체 이벤트</div></div>
+      </div>
+      <div class="card card-high">
+        <div class="card-icon">🚨</div>
+        <div class="card-body"><div class="num" id="stat-high">0</div><div class="lbl">HIGH 위협</div></div>
+      </div>
+      <div class="card card-medium">
+        <div class="card-icon">⚠️</div>
+        <div class="card-body"><div class="num" id="stat-medium">0</div><div class="lbl">MEDIUM 의심</div></div>
+      </div>
+      <div class="card card-low">
+        <div class="card-icon">🛡️</div>
+        <div class="card-body"><div class="num" id="stat-blocked">0</div><div class="lbl">차단된 작업</div></div>
+      </div>
+    </div>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>보안 이벤트 로그</h2>
+        <div class="section-tools">
+          <button class="filter-btn active" data-filter="ALL">전체</button>
+          <button class="filter-btn" data-filter="HIGH">HIGH</button>
+          <button class="filter-btn" data-filter="MEDIUM">MEDIUM</button>
+          <button class="filter-btn" data-filter="ESCALATE">격상 이력</button>
+          <span id="event-count">0개 이벤트</span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>시각</th><th>위험도</th><th>PID</th><th>프로세스</th>
+              <th>대상 파일</th><th>동작</th><th>결과</th><th>탐지 사유</th>
+            </tr>
+          </thead>
+          <tbody id="event-body">
+            <tr><td colspan="8" class="empty">
+              수신된 이벤트가 없습니다.<br><br>
+              에이전트 실행: <code>python dashboard/agent.py</code> &nbsp;·&nbsp; 샘플: <code>python dashboard/agent.py --demo</code>
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- ── AI 분석관 ── -->
+  <aside class="ai-pane">
+    <div class="ai-head">
+      <div class="ai-title">
+        <div class="ai-icon">🤖</div>
+        <div><h3>AI 보안 분석관</h3><small>RAG + LLM 침입 분석</small></div>
+      </div>
+      <div id="ai-status">● 준비됨</div>
+    </div>
+    <div class="quick">
+      <button data-q="현재 이벤트 로그를 기반으로 위협 분석을 해줘. 어떤 프로세스가 언제, 왜 MEDIUM/HIGH로 격상됐는지 공격 진행 경위를 정리해줘.">🔍 위협 분석</button>
+      <button data-q="탐지된 행위를 MITRE ATT&CK 기법에 매핑하고 각 기법의 근거 이벤트를 알려줘.">📊 ATT&amp;CK 매핑</button>
+      <button data-q="지금 상황에서 보안팀이 즉시 취해야 할 대응 방안과 추가 모니터링 권고사항을 알려줘.">🛡️ 대응 방안</button>
+      <button data-q="관찰된 행위 패턴과 가장 유사한 랜섬웨어 패밀리를 분석해줘.">🧬 패밀리 분석</button>
+    </div>
+    <div class="chat" id="chat">
+      <div class="intro">
+        <b>⚡ CCCV AI 보안 분석관</b>
+        현재 수신된 EDR 이벤트를 기반으로 침입 시나리오를 분석합니다.<br>
+        위협 분석, MITRE ATT&amp;CK 매핑, 대응 방안을 물어보세요.
+        표의 PID를 클릭하면 해당 프로세스를 바로 분석합니다.
+      </div>
+    </div>
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="예: pid 905425가 뭘 한건지 알려줘"></textarea>
+      <button id="send">전송</button>
+    </div>
+  </aside>
+</div>
+
+<script>
+(() => {
+  const POLL_MS = 2000;
+  const state = { events: [], lastId: 0, gen: 0, filter: 'ALL', history: [], busy: false };
+  const $ = (id) => document.getElementById(id);
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // ── 이벤트 폴링 ──
+  async function poll() {
+    try {
+      const res = await fetch(`/api/events?since_id=${state.lastId}&gen=${state.gen}`);
+      const data = await res.json();
+      let fresh = [];
+      if (data.reset) {
+        state.events = data.events;
+      } else {
+        fresh = data.events;
+        state.events.push(...fresh);
+      }
+      state.gen = data.gen;
+      state.lastId = data.last_id;
+      renderStats(data.stats);
+      if (data.reset || fresh.length) renderTable(new Set(fresh.map((e) => e.id)));
+      $('live').classList.remove('offline');
+      $('live').textContent = '실시간 모니터링';
+      $('last-update').textContent =
+        new Date().toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ' 갱신';
+    } catch (e) {
+      $('live').classList.add('offline');
+      $('live').textContent = '서버 연결 끊김';
+    }
+  }
+
+  function renderStats(s) {
+    $('stat-total').textContent = s.total;
+    $('stat-high').textContent = s.high;
+    $('stat-medium').textContent = s.medium;
+    $('stat-blocked').textContent = s.blocked;
+  }
+
+  function matchFilter(e) {
+    if (state.filter === 'ALL') return true;
+    if (state.filter === 'ESCALATE') return ['ESCALATE', 'SIGSTOP', 'RETURN'].includes(e.action) || e.result === 'ESCALATED_TO_HIGH';
+    return e.level === state.filter;
+  }
+
+  function renderTable(newIds = new Set()) {
+    const rows = state.events.filter(matchFilter).slice().reverse();
+    $('event-count').textContent = `${rows.length}개 이벤트`;
+    if (!rows.length) {
+      $('event-body').innerHTML = `<tr><td colspan="8" class="empty">${state.events.length
+        ? '필터에 해당하는 이벤트가 없습니다.'
+        : '수신된 이벤트가 없습니다.<br><br>에이전트 실행: <code>python dashboard/agent.py</code> &nbsp;·&nbsp; 샘플: <code>python dashboard/agent.py --demo</code>'}</td></tr>`;
+      return;
+    }
+    $('event-body').innerHTML = rows.slice(0, 500).map((e) => `
+      <tr class="lv-${esc(e.level)}${newIds.has(e.id) ? ' new' : ''}">
+        <td class="time">${esc(e.time)}</td>
+        <td><span class="badge badge-${esc(e.level)}">${esc(e.level)}</span></td>
+        <td><span class="pid-link" data-pid="${esc(e.pid)}" title="AI 분석관에게 이 PID 분석 요청">${esc(e.pid)}</span></td>
+        <td class="proc">${esc(e.process || '-')}</td>
+        <td class="target" title="${esc(e.target)}">${esc(e.target)}</td>
+        <td><span class="action">${esc(e.action)}</span></td>
+        <td class="result res-${esc(e.result)}">${esc(e.result)}</td>
+        <td class="reason" title="${esc(e.reason)}">${esc(e.reason)}</td>
+      </tr>`).join('');
+  }
+
+  document.querySelectorAll('.filter-btn').forEach((b) => b.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    state.filter = b.dataset.filter;
+    renderTable();
+  }));
+
+  $('event-body').addEventListener('click', (ev) => {
+    const el = ev.target.closest('.pid-link');
+    if (el) ask(`pid ${el.dataset.pid}가 뭘 한건지 알려줘. 왜 격상됐는지도 설명해줘.`);
+  });
+
+  // ── 마크다운 렌더러 (LLM 응답용, 외부 라이브러리 없이) ──
+  function inline(s) {
+    return esc(s)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
+  }
+  function markdown(src) {
+    const lines = String(src).replace(/\r/g, '').split('\n');
+    const out = [];
+    let list = null, inCode = false, code = [];
+    const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+    for (const line of lines) {
+      if (line.trim().startsWith('```')) {
+        if (inCode) { out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`); code = []; inCode = false; }
+        else { closeList(); inCode = true; }
+        continue;
+      }
+      if (inCode) { code.push(line); continue; }
+      let m;
+      if ((m = line.match(/^\s*#{1,6}\s+(.*)/))) { closeList(); out.push(`<h3>${inline(m[1])}</h3>`); }
+      else if ((m = line.match(/^\s*\d+[.)]\s+(.*)/))) {
+        if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; }
+        out.push(`<li>${inline(m[1])}</li>`);
+      } else if ((m = line.match(/^\s*[-*•]\s+(.*)/))) {
+        if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; }
+        out.push(`<li>${inline(m[1])}</li>`);
+      } else if ((m = line.match(/^\s*>\s?(.*)/))) { closeList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); }
+      else if (!line.trim()) { closeList(); }
+      else { closeList(); out.push(`<p>${inline(line)}</p>`); }
+    }
+    if (inCode) out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+    closeList();
+    return out.join('');
+  }
+
+  // ── 채팅 ──
+  function addMsg(role, html) {
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    div.innerHTML = `<div class="avatar">${role === 'ai' ? 'AI' : '나'}</div><div class="bubble">${html}</div>`;
+    $('chat').appendChild(div);
+    $('chat').scrollTop = $('chat').scrollHeight;
+    return div;
+  }
+
+  function setBusy(b) {
+    state.busy = b;
+    $('send').disabled = b;
+    document.querySelectorAll('.quick button').forEach((x) => { x.disabled = b; });
+    const st = $('ai-status');
+    if (b) { st.className = 'busy'; st.textContent = '● 분석 중'; }
+    else refreshHealth();
+  }
+
+  async function ask(text) {
+    text = (text || '').trim();
+    if (!text || state.busy) return;
+    addMsg('user', esc(text));
+    const pending = addMsg('ai', '<div class="typing"><span></span><span></span><span></span></div>');
+    setBusy(true);
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, history: state.history }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      const src = data.sources || {};
+      const meta = [
+        data.mode === 'llm' ? 'LLM 분석' : '로컬 규칙 기반 분석',
+        src.pids && src.pids.length ? `참조 PID: ${src.pids.join(', ')}` : '',
+        src.events ? `이벤트 ${src.events}건` : '',
+        src.docs && src.docs.length ? `지식: ${src.docs.join(' · ')}` : '',
+      ].filter(Boolean).join(' | ');
+      pending.querySelector('.bubble').innerHTML = markdown(data.reply) + `<div class="sources">${esc(meta)}</div>`;
+      state.history.push({ role: 'user', content: text }, { role: 'assistant', content: data.reply });
+      state.history = state.history.slice(-16);
+    } catch (e) {
+      pending.querySelector('.bubble').innerHTML = `<blockquote>분석 요청 실패: ${esc(e.message)}</blockquote>`;
+    } finally {
+      setBusy(false);
+      $('chat').scrollTop = $('chat').scrollHeight;
+    }
+  }
+
+  async function refreshHealth() {
+    try {
+      const h = await (await fetch('/api/health')).json();
+      const st = $('ai-status');
+      if (h.llm) { st.className = ''; st.textContent = '● 준비됨'; st.title = h.model; }
+      else { st.className = 'local'; st.textContent = '● 로컬 모드'; st.title = 'OPENAI_API_KEY 미설정 — 규칙 기반 분석'; }
+    } catch (e) { /* 폴링에서 연결 상태 표시 */ }
+  }
+
+  document.querySelectorAll('.quick button').forEach((b) => b.addEventListener('click', () => ask(b.dataset.q)));
+  $('send').addEventListener('click', () => { ask($('input').value); $('input').value = ''; autosize(); });
+  $('input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      ask($('input').value); $('input').value = ''; autosize();
+    }
+  });
+  const autosize = () => { const t = $('input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px'; };
+  $('input').addEventListener('input', autosize);
+
+  refreshHealth();
+  poll();
+  setInterval(poll, POLL_MS);
+})();
+</script>
+</body>
+</html>
