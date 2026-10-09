@@ -194,6 +194,11 @@ async def stage2_worker(recv_chan, ops) -> None:
                 pid = item["pid"]
                 features = item.get("features") or {}
 
+                # 큐에 들어간 뒤 다른 경로(MEDIUM 정책 등)에서 이미 HIGH가 됐으면
+                # 재평가하지 않는다. HIGH는 종단 상태이며 낮은 점수로 강등되면 안 된다.
+                if await ops.get_proc_state(pid) == ProcState.HIGH:
+                    continue
+
                 dyn_score, stat_score, score = await score_pid(pid, features)
 
                 print(
@@ -245,6 +250,12 @@ async def stage2_worker(recv_chan, ops) -> None:
 
             # SUSPICIOUS 관찰 창: 최신 피처로 재채점해 올라가면 승격, 끝까지 낮으면 LOW 복귀
             for pid in list(watch_pids):
+                # 관찰 중 MEDIUM 정책 등에서 HIGH로 격상된 PID는 관찰을 끝낸다.
+                # (확인하지 않으면 타임아웃 분기에서 HIGH → LOW로 강등된다)
+                if await ops.get_proc_state(pid) == ProcState.HIGH:
+                    watch_pids.pop(pid, None)
+                    continue
+
                 features = ops._pid_features.get(pid, {})
                 dyn_score, stat_score, score = await score_pid(pid, features)
                 elapsed = trio.current_time() - watch_pids[pid]
@@ -295,6 +306,14 @@ async def stage2_worker(recv_chan, ops) -> None:
                     started_at = medium_pids.get(pid)
                 if started_at is None:
                     continue  # intake_loop이 그 사이 이미 정리함
+
+                # trigger_high()는 medium_pids를 정리하지 않으므로, 재평가 중
+                # 다른 경로에서 HIGH가 된 PID는 여기서 제외한다.
+                # (확인하지 않으면 10초 타임아웃 분기에서 HIGH → LOW로 강등된다)
+                if await ops.get_proc_state(pid) == ProcState.HIGH:
+                    async with medium_lock:
+                        medium_pids.pop(pid, None)
+                    continue
 
                 features = ops._pid_features.get(pid, {})
                 dyn_score, stat_score, score = await score_pid(pid, features)
