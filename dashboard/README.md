@@ -18,6 +18,23 @@ GuardFS 코드(`guardfs/`)는 수정하지 않는다. 에이전트가 GuardFS가
 | `rag.py` | 이벤트·지식 검색(RAG), LLM 미연결 시 규칙 기반 로컬 분석 |
 | `templates/index.html` | 대시보드 UI |
 
+## 빠른 실행 (권장): `run_all.sh`
+
+```bash
+bash dashboard/run_all.sh            # 서버 + GuardFS + 에이전트
+bash dashboard/run_all.sh --demo     # + 샘플 이벤트
+bash dashboard/run_all.sh --no-guardfs   # GuardFS 없이 화면만 확인
+```
+
+- 시작 전에 이전에 떠 있던 서버 / 에이전트 / GuardFS 마운트를 정리한다 (중복 에이전트, 옛 코드로 도는 GuardFS 방지).
+- LLM 제공자(Gemini / Groq / OpenAI / 로컬)를 고르고 **API 키를 화면에 보이지 않게 입력**한다.
+  키는 파일에 저장하지 않고 서버 프로세스 환경변수로만 전달한다. Enter만 누르면 로컬 모드.
+- 로그: `~/guardfs_runtime/dashboard_logs/{server,guardfs_stdout,agent}.log`
+- **Ctrl+C 한 번**이면 세 프로세스를 모두 종료하고 마운트를 해제한다.
+- 테스트는 다른 터미널에서: `python3 experiments/simulators/sim_highentropy.py ~/guardfs_runtime/mount/sim_target --keep`
+
+아래는 각 구성 요소를 따로 실행하는 방법이다.
+
 ## 1. 설치
 
 ```bash
