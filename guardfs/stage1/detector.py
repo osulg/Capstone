@@ -93,28 +93,27 @@ class Stage1Detector:
                 new_path=ev.new_path,
             )
 
-    async def check(self, ev):
+    async def check(self, ev, *, entropy_suspicious=None):
         """
-        이벤트를 각 Stage 1 탐지기에 순서대로 전달
+        엔트로피 계산 결과를 재사용하여 Stage 1 탐지를 수행한다.
 
-        하나의 탐지기라도 True를 반환하면:
-            (True, 탐지기 클래스 이름)
-
-        모든 탐지기가 False를 반환하면:
-            (False, None)
-
+        entropy_suspicious가 None이면 직접 계산한다.
+        기존 단위 테스트처럼 이 함수를 단독 호출하는 경우도 지원한다.
         """
 
         if self.honeypot.check(ev):
-            reason = "HoneypotDetector"
-            return True, reason
+            return True, "HoneypotDetector"
 
-        if self.ext_change.check_immediate(ev):
-            reason = "ExtChangeDetector"
-            return True, reason
+        if self.ext_change.check(ev):
+            return True, "ExtChangeDetector"
 
-        entropy_suspicious = self.entropy.check(ev)
+        # FUSE 이벤트는 _emit()에서 계산한 결과를 재사용
+        # 단독 호출일 때만 엔트로피를 직접 계산
+        if entropy_suspicious is None:
+            entropy_suspicious = self.entropy.check(ev)
 
+        # 최종 탐지 이유를 선택하기 전에 유효한 표본의 관측을 완료한다.
+        delta_result = self.entropy_delta.check(ev)
         burst_suspicious = self.entropy_burst.observe(ev)
 
         if burst_suspicious:
@@ -123,17 +122,11 @@ class Stage1Detector:
         if entropy_suspicious:
             return True, "EntropyDetector"
 
-        entropy_suspicious = self.entropy.check(ev)
-        delta_result = self.entropy_delta.check(ev)
-
         if (
             delta_result is not None
             and delta_result.is_suspicious
             and not self.entropy_delta.observe_only
         ):
             return True, "EntropyDeltaDetector"
-
-        if entropy_suspicious:
-            return True, "EntropyDetector"
 
         return False, None
