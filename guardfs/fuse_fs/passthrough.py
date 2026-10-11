@@ -1881,7 +1881,11 @@ class Passthrough(pyfuse3.Operations):
         if state == ProcState.MEDIUM:
             from guardfs.stage2.policy.medium import handle_unlink_medium
 
-            await handle_unlink_medium(path, pid, self)
+            try:
+                await handle_unlink_medium(path, pid, self)
+            except OSError as e:
+                raise pyfuse3.FUSEError(e.errno) from e
+
             self._emit(
                 FsEvent(
                     ts_ns=time.time_ns(),

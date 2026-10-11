@@ -648,12 +648,103 @@ async def handle_write_medium(
 
 
 # ========== 규칙 4: unlink 단계적 차단 ========== #
+def _unlink_pending_new_file(path: str, pid: int, ops) -> bool:
+    """닫힌 pending 신규 파일을 삭제하고 publish 예약을 취소한다."""
+
+    for inode in list(ops._staging_inodes):
+        if ops._inode_path.get(inode) != path:
+            continue
+
+        ops._refresh_staging_inode(inode)
+        entry = ops._staging_inodes.get(inode)
+        if entry is None or entry["state"] != "pending":
+            continue
+
+        if entry["pid"] != pid:
+            raise OSError(errno.ENOENT, "다른 PID의 staging 파일", path)
+
+        identity = entry["source_identity"]
+        held_fd = entry["held_fd"]
+        staging_path = entry["staging_path"]
+
+        # 열린 핸들의 unlink 이후 동작은 별도 지원이 필요하다.
+        for fh, fd in ops._fd_map.items():
+            if ops._fh_inode.get(fh) == inode:
+                raise OSError(errno.EBUSY, "열린 staging 파일", path)
+            st = os.fstat(fd)
+            if (st.st_dev, st.st_ino) == identity:
+                raise OSError(errno.EBUSY, "열린 staging 파일", path)
+
+        if (
+            held_fd is None
+            or ops._buffer_fds.get(pid, {}).get(identity) != held_fd
+            or ops._buffer_new_files.get(pid, {}).get(held_fd) != staging_path
+        ):
+            raise OSError(errno.ESTALE, "staging 소유 정보 불일치", path)
+
+        try:
+            st = os.lstat(staging_path)
+        except FileNotFoundError:
+            pass  # 물리적 파일이 없어도 남은 예약은 취소한다.
+        else:
+            if (st.st_dev, st.st_ino) != identity:
+                raise OSError(errno.ESTALE, "staging 파일 정체성 불일치", path)
+            os.unlink(staging_path)
+
+        remaining = []
+        removed_bytes = 0
+        for item in ops._write_buffer.get(pid, []):
+            fd, off, buf, buffer_path = item
+            if fd == held_fd:
+                if buf is not None:
+                    removed_bytes += len(buf)
+            else:
+                remaining.append(item)
+
+        ops._write_buffer[pid] = remaining
+        ops._write_buffer_bytes[pid] = max(
+            0, ops._write_buffer_bytes.get(pid, 0) - removed_bytes
+        )
+        ops._global_buffer_bytes = max(
+            0, ops._global_buffer_bytes - removed_bytes
+        )
+        ops._buffer_new_files[pid].pop(held_fd, None)
+        ops._buffer_fds[pid].pop(identity, None)
+        ops._trunc_paths.get(pid, set()).discard(path)
+        ops._pending_metadata[pid] = [
+            (target_path, metadata)
+            for target_path, metadata in ops._pending_metadata.get(pid, [])
+            if target_path != path
+        ]
+        ops._staging_pid[pid] = [
+            saved_path
+            for saved_path in ops._staging_pid.get(pid, [])
+            if saved_path != staging_path
+        ]
+        ops._staging_inodes.pop(inode, None)
+        ops._inode_path.pop(inode, None)
+        os.close(held_fd)
+        return True
+
+    return False
+
+
 async def handle_unlink_medium(path: str, pid: int, ops) -> None:
     """
     MEDIUM 중 unlink는 실제로 지우지 않고 스테이징으로 옮긴다.
     - 호출자에게는 삭제가 성공한 것처럼 보이게 한다 (경로에서 사라짐).
     - LOW로 판정나면 실제로 삭제를 확정하고, HIGH로 격상되면 원래 자리로 복원한다.
     """
+
+    if _unlink_pending_new_file(path, pid, ops):
+        log_medium_event(
+            pid,
+            path,
+            "UNLINK",
+            "REMOVED_PENDING",
+            "신규 staging 파일 삭제 및 commit 예약 취소",
+        )
+        return
 
     staging_path = os.path.join(
         ops._staging_dir,
@@ -662,13 +753,9 @@ async def handle_unlink_medium(path: str, pid: int, ops) -> None:
 
     try:
         os.rename(path, staging_path)
-    except FileNotFoundError:
-        # 이미 없는 파일 — 조용히 무시
-        return
-    except OSError as e:
-        print(f"[MEDIUM] pid={pid} path={path} unlink 스테이징 실패: {e} → 삭제 차단")
-
-        return
+    except OSError:
+        # 삭제 실패를 성공으로 처리하지 않고 호출 측에 전달한다.
+        raise
 
     st = os.lstat(staging_path)
     ops._unlink_identity[staging_path] = (st.st_dev, st.st_ino)
