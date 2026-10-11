@@ -32,7 +32,7 @@ def _read_stat_after_comm(pid: int):
 def _get_exe_path(pid: int):
     try:
         return os.path.realpath(f"/proc/{pid}/exe")
-    except FileNotFoundError, PermissionError:
+    except (FileNotFoundError, PermissionError):
         return None
 
 
@@ -42,7 +42,7 @@ def _get_parent_pid(pid: int):
         return None
     try:
         return int(fields[1])  # ppid
-    except IndexError, ValueError:
+    except (IndexError, ValueError):
         return None
 
 
@@ -52,7 +52,7 @@ def _get_start_time(pid: int):
         return None
     try:
         return int(fields[19])  # starttime (clock ticks)
-    except IndexError, ValueError:
+    except (IndexError, ValueError):
         return None
 
 
@@ -65,7 +65,7 @@ def _dpkg_query_owner(exe_path: str) -> str | None:
         if owner.returncode != 0 or not owner.stdout.strip():
             return None
         return owner.stdout.split(":")[0].strip().split(",")[0].strip()
-    except subprocess.TimeoutExpired, FileNotFoundError, Exception:
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         return None
 
 
@@ -197,7 +197,7 @@ def _check_package_sync(exe_path: str) -> bool:
                 return False  # 같은 파일의 원래/대체 경로 이상 보고
 
         return True
-    except OSError, subprocess.SubprocessError:
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
