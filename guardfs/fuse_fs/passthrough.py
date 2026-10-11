@@ -998,8 +998,21 @@ class Passthrough(pyfuse3.Operations):
 
         state = await self._resolve_effective_state(pid)
 
+        if state == ProcState.HIGH:
+            from guardfs.stage2.policy.high import handle_create_high
+
+            await handle_create_high(
+                path=path,
+                pid=pid,
+                ops=self,
+            )
+            raise pyfuse3.FUSEError(errno.EACCES)
+
         if state in (ProcState.MEDIUM, ProcState.HIGH):
-            staging_path = os.path.join(self._staging_dir, f"fh_{self._next_fh}")
+            staging_path = os.path.join(
+                self._staging_dir,
+                f"fh_{self._next_fh}",
+            )
 
             try:
                 fd = os.open(staging_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, mode)
