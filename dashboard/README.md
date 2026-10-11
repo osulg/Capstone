@@ -16,6 +16,7 @@ GuardFS 코드(`guardfs/`)는 수정하지 않는다. 에이전트가 GuardFS가
 | `server.py` | Flask 서버. 이벤트 수신/조회 API, 대시보드 페이지, AI 분석 API |
 | `agent.py` | GuardFS 로그 tail → JSON 변환 → 서버 전송. `--demo` 샘플 전송 |
 | `rag.py` | 이벤트·지식 검색(RAG), LLM 미연결 시 규칙 기반 로컬 분석 |
+| `files.py` | 파일 상태 탭: 보호/비보호 폴더 읽기 전용 스캔, 엔트로피 판정 |
 | `templates/index.html` | 대시보드 UI |
 
 ## 빠른 실행 (권장): `run_all.sh`
@@ -106,6 +107,24 @@ rm -f /tmp/guardfs_state_*
 강제 상태는 ML을 거치지 않으므로 `ESCALATE` 행(격상 이유)은 나오지 않는다.
 격상 이유까지 보려면 실제 탐지 시나리오(예: `scripts/run_sample.sh`)를 돌린다.
 
+## 파일 상태 탭
+
+왼쪽 📁 탭에서 두 폴더를 나란히 비교한다 (2초마다 갱신, 읽기 전용).
+
+| 폴더 | 기본 경로 | 환경변수 |
+|---|---|---|
+| 보호 폴더 (GuardFS underlay) | `~/guardfs_runtime/underlay` | `DASH_PROTECTED_DIR` |
+| 보호 없는 폴더 (비교용) | `~/guardfs_demo/unprotected` | `DASH_UNPROTECTED_DIR` |
+
+- 파일 앞부분 4KB 엔트로피가 GuardFS 기준(`ENTROPY_THRESHOLD`, 7.0) 이상이면 "암호화 의심", 64B 미만은 "판정 불가".
+- `.locked` / `.enc` 등은 "의심 확장자"로 표시. `honeypot/`, 숨김 파일, 심볼릭 링크는 제외.
+- 시연: 같은 시뮬레이터를 두 경로에 각각 실행한다.
+  ```bash
+  python3 experiments/simulators/sim_highentropy.py ~/guardfs_runtime/mount/sim_target --keep      # 보호
+  python3 experiments/simulators/sim_highentropy.py ~/guardfs_demo/unprotected/sim_target --keep   # 비보호
+  ```
+  보호 폴더는 반드시 **마운트 경로**로 실행해야 GuardFS가 개입한다(탭은 그 결과가 저장되는 underlay를 보여준다).
+
 ## API
 
 | 메서드 | 경로 | 설명 |
@@ -114,6 +133,8 @@ rm -f /tmp/guardfs_state_*
 | GET | `/api/events?since_id=N&gen=G` | 증분 조회 + 통계 |
 | DELETE | `/api/events` | 이벤트 전체 삭제 |
 | POST | `/api/chat` | `{"message": "...", "history": [...]}` → `{"reply", "mode", "sources"}` |
+| GET | `/api/files` | 파일 상태 탭: 두 폴더 스캔 결과 |
+| GET | `/api/files/preview?folder=&path=` | 파일 앞부분 미리보기 (텍스트 또는 hex) |
 | GET | `/api/health` | LLM 연결 여부 |
 
 이벤트 JSON 예:

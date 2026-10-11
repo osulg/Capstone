@@ -90,6 +90,9 @@ cd "$PROJECT_ROOT" || fail "프로젝트 경로로 이동 실패"
 source "$VENV_DIR/bin/activate"
 python -c "import flask" 2>/dev/null || fail "flask가 없습니다: pip install -r dashboard/requirements.txt"
 mkdir -p "$LOG_DIR"
+# 파일 상태 탭의 '보호 없는 폴더' (비교 시연용, GuardFS를 거치지 않음)
+UNPROTECTED_DIR="${DASH_UNPROTECTED_DIR:-$HOME/guardfs_demo/unprotected}"
+mkdir -p "$UNPROTECTED_DIR"
 
 say "이전 실행 정리 (서버 / 에이전트 / GuardFS)"
 cleanup_previous
@@ -194,7 +197,10 @@ cat <<EOF
  로그      : $LOG_DIR/{server,guardfs_stdout,agent}.log
  테스트    : (다른 터미널에서)
    cd $PROJECT_ROOT && source venv/bin/activate
+   # 보호 폴더 (GuardFS 마운트를 거침)
    python3 experiments/simulators/sim_highentropy.py $MOUNT_DIR/sim_target --keep
+   # 보호 없는 폴더 (비교용) → 대시보드 '파일 상태' 탭에서 나란히 확인
+   python3 experiments/simulators/sim_highentropy.py $UNPROTECTED_DIR/sim_target --keep
 ========================================================
  아래는 에이전트가 대시보드로 보낸 이벤트입니다.
 

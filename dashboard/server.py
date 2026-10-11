@@ -19,8 +19,10 @@ from flask import Flask, jsonify, render_template, request
 
 try:
     from dashboard.rag import build_context, local_analysis
+    from dashboard import files as file_scan
 except ImportError:  # python dashboard/server.py 로 직접 실행한 경우
     from rag import build_context, local_analysis
+    import files as file_scan
 
 try:
     from openai import OpenAI
@@ -176,6 +178,20 @@ def clear_events():
         events.clear()
         _generation += 1
     return jsonify({"ok": True})
+
+
+@app.route("/api/files")
+def list_files():
+    """파일 상태 탭: 보호/비보호 폴더 스캔 결과 (읽기 전용)."""
+    return jsonify(file_scan.scan_all())
+
+
+@app.route("/api/files/preview")
+def file_preview():
+    data = file_scan.preview(request.args.get("folder", ""), request.args.get("path", ""))
+    if data is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(data)
 
 
 @app.route("/api/health")

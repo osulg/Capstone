@@ -267,10 +267,6 @@
   .files-tools { display: flex; align-items: center; gap: 8px; font-size: 0.7rem; color: #64748b; flex-wrap: wrap; }
   .files-tools .chip { background: #fff; border: 1px solid #e2e8f0; border-radius: 999px; padding: 4px 10px; font-weight: 600; white-space: nowrap; }
   .files-tools .chip b { color: #1e293b; }
-  .skeleton-note {
-    font-size: 0.66rem; font-weight: 700; color: #7c3aed; background: #ede9fe;
-    border: 1px dashed #c4b5fd; border-radius: 999px; padding: 4px 10px; white-space: nowrap;
-  }
   .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
   .folder { background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.07); overflow: hidden; }
   .folder-head { padding: 14px 18px; border-bottom: 1px solid #edf2f7; display: flex; align-items: center; gap: 12px; }
@@ -284,7 +280,13 @@
   .sum { font-size: 0.66rem; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
   .sum.ok { color: #15803d; background: #dcfce7; }
   .sum.bad { color: #dc2626; background: #fee2e2; }
-  .file-list { list-style: none; }
+  .file-list { list-style: none; max-height: 430px; overflow-y: auto; }
+  .fname .fdir { display: block; color: #94a3b8; font-size: 0.6rem; }
+  .fname .tag-ext { display: inline-block; margin-left: 6px; color: #dc2626; background: #fee2e2; font-size: 0.58rem; font-weight: 700; padding: 1px 6px; border-radius: 4px; font-family: 'Inter', sans-serif; }
+  .fstate.unknown { color: #64748b; background: #f1f5f9; }
+  .folder-empty { padding: 28px 18px; text-align: center; font-size: 0.72rem; color: #94a3b8; line-height: 1.7; }
+  .folder-empty code { display: inline-block; margin-top: 6px; background: #f1f5f9; color: #334155; padding: 3px 8px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 0.64rem; overflow-wrap: anywhere; }
+  .preview:empty { display: none; }
   .file-row {
     display: grid; grid-template-columns: minmax(0, 1.4fr) auto minmax(90px, 1fr) auto;
     align-items: center; gap: 12px; padding: 10px 18px; border-bottom: 1px solid #f1f5f9;
@@ -433,9 +435,8 @@
         <p>VM 안의 폴더를 읽기 전용으로 보여줍니다. 같은 공격을 받은 두 폴더를 비교하세요.</p>
       </div>
       <div class="files-tools">
-        <span class="skeleton-note">미리보기 · 목업 데이터</span>
-        <span class="chip">암호화 판정 엔트로피 ≥ <b>7.0</b></span>
-        <span class="chip" id="files-updated">2초마다 갱신</span>
+        <span class="chip">암호화 판정 엔트로피 ≥ <b id="files-threshold">7.0</b></span>
+        <span class="chip" id="files-updated">불러오는 중…</span>
       </div>
     </div>
 
@@ -445,7 +446,7 @@
           <div class="folder-icon">🛡️</div>
           <div class="folder-title">
             <h3>보호 폴더 (GuardFS)</h3>
-            <code>~/guardfs_runtime/underlay/attack_target</code>
+            <code id="path-protected">-</code>
           </div>
           <div class="folder-sum" id="sum-protected"></div>
         </div>
@@ -458,7 +459,7 @@
           <div class="folder-icon">⚠️</div>
           <div class="folder-title">
             <h3>보호 없는 폴더</h3>
-            <code>~/guardfs_demo/unprotected/attack_target</code>
+            <code id="path-unprotected">-</code>
           </div>
           <div class="folder-sum" id="sum-unprotected"></div>
         </div>
@@ -607,7 +608,7 @@
     $('view-files').hidden = name !== 'files';
     $('tab-events').classList.toggle('active', name === 'events');
     $('tab-files').classList.toggle('active', name === 'files');
-    if (name === 'files') renderFiles();
+    if (name === 'files') pollFiles();
   }
   $('tab-events').addEventListener('click', () => showView('events'));
   $('tab-files').addEventListener('click', () => showView('files'));
@@ -728,63 +729,119 @@
   const autosize = () => { const t = $('input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px'; };
   $('input').addEventListener('input', autosize);
 
-  // ── 파일 상태 (뼈대) ──
-  // TODO: 서버 /api/files 연동. 지금은 화면 확인용 목업 데이터.
-  const MOCK_FILES = {
-    protected: [
-      { name: 'report_q3.docx', size: 18432, mtime: '13:33:41', entropy: 4.31, preview: 'Q3 분기 보고서\n1. 매출 현황: 전년 대비 12% 증가\n2. 주요 고객사 계약 갱신 완료\n3. 다음 분기 목표 ...' },
-      { name: 'customers.csv', size: 6120, mtime: '13:33:41', entropy: 4.86, preview: 'id,name,email,phone\n1001,김민수,minsu@example.com,010-1234-5678\n1002,이서연,seoyeon@example.com,010-2345-6789' },
-      { name: 'meeting_notes.txt', size: 2048, mtime: '13:33:41', entropy: 4.12, preview: '[회의록] 10월 11일\n- 참석: 개발팀 4명\n- 안건: 전시회 시연 준비\n- 결정: 시나리오 3개 확정' },
-      { name: 'budget_2026.xlsx', size: 24576, mtime: '13:33:41', entropy: 5.02, preview: '2026 예산안\n인건비 | 운영비 | 장비비\n4,200 | 1,150 | 860' },
-      { name: 'photo_team.jpg', size: 512000, mtime: '13:33:41', entropy: 6.21, preview: 'JFIF 이미지 (미리보기 생략)' },
-    ],
-    unprotected: [
-      { name: 'report_q3.docx', renamed: 'report_q3.docx.locked', size: 18448, mtime: '13:33:52', entropy: 7.98 },
-      { name: 'customers.csv', renamed: 'customers.csv.locked', size: 6128, mtime: '13:33:52', entropy: 7.97 },
-      { name: 'meeting_notes.txt', renamed: 'meeting_notes.txt.locked', size: 2064, mtime: '13:33:53', entropy: 7.91 },
-      { name: 'budget_2026.xlsx', renamed: 'budget_2026.xlsx.locked', size: 24592, mtime: '13:33:53', entropy: 7.99 },
-      { name: 'photo_team.jpg', size: 512000, mtime: '13:33:41', entropy: 6.21, preview: 'JFIF 이미지 (미리보기 생략)' },
-    ],
+  // ── 파일 상태 (/api/files, 읽기 전용) ──
+  const FILE_POLL_MS = 2000;
+  const files = { data: null, selected: {}, preview: {}, previewKey: {} };
+  // 비어 있을 때 안내할 시뮬레이터 실행 경로 (보호 폴더는 마운트를 거쳐야 GuardFS가 개입한다)
+  const SIM_TARGET = {
+    protected: '~/guardfs_runtime/mount/sim_target',
+    unprotected: '~/guardfs_demo/unprotected/sim_target',
   };
-  const ENC_THRESHOLD = 7.0;
-  const selectedFile = { protected: 0, unprotected: 0 };
-
-  function fakeHex(seed, n = 96) {
-    let x = seed * 2654435761 % 4294967296, out = [];
-    for (let i = 0; i < n; i++) { x = (x * 1103515245 + 12345) % 2147483648; out.push((x >> 16 & 255).toString(16).padStart(2, '0')); }
-    return out.join(' ').replace(/((?:\S+ ){16})/g, '$1\n');
-  }
   const fmtSize = (b) => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : b >= 1024 ? (b / 1024).toFixed(1) + ' KB' : b + ' B';
+  const hhmmss = (d) => [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
+  const fmtTime = (t) => hhmmss(new Date(t * 1000));
+  const filesVisible = () => !$('view-files').hidden;
 
-  function renderFolder(key) {
-    const files = MOCK_FILES[key];
-    const enc = files.filter((f) => f.entropy >= ENC_THRESHOLD).length;
-    $('sum-' + key).innerHTML =
-      `<span class="sum ok">정상 ${files.length - enc}</span>` + (enc ? `<span class="sum bad">암호화 ${enc}</span>` : '');
-    $('list-' + key).innerHTML = files.map((f, i) => {
-      const hi = f.entropy >= ENC_THRESHOLD;
-      return `<li class="file-row${hi ? ' enc' : ''}${i === selectedFile[key] ? ' selected' : ''}" data-key="${key}" data-i="${i}">
-        <div class="fname">${esc(f.name)}${f.renamed ? `<span class="renamed">→ ${esc(f.renamed)}</span>` : ''}</div>
-        <span class="fstate ${hi ? 'enc' : 'ok'}">${hi ? '🔴 암호화 의심' : '✅ 정상'}</span>
-        <div><div class="entbar${hi ? ' hi' : ''}"><span style="width:${(f.entropy / 8 * 100).toFixed(1)}%"></span></div>
-             <div class="entval">엔트로피 ${f.entropy.toFixed(2)}</div></div>
-        <div class="fmeta">${fmtSize(f.size)}<br>${esc(f.mtime)}</div>
-      </li>`;
-    }).join('');
-    const f = files[selectedFile[key]];
-    const hi = f.entropy >= ENC_THRESHOLD;
-    $('preview-' + key).innerHTML = `
-      <div class="preview-head"><span>미리보기 · <b>${esc(f.renamed || f.name)}</b></span><span>앞부분 ${hi ? '96 바이트 (hex)' : '텍스트'}</span></div>
-      <pre class="${hi ? 'hex' : ''}">${esc(hi ? fakeHex(f.size) : f.preview)}</pre>`;
+  const STATE_LABEL = {
+    ok: ['ok', '✅ 정상'],
+    encrypted: ['enc', '🔴 암호화 의심'],
+    unknown: ['unknown', '판정 불가'],
+    unreadable: ['unknown', '읽기 실패'],
+  };
+
+  function emptyHtml(folder) {
+    const cmd = `python3 experiments/simulators/sim_highentropy.py ${SIM_TARGET[folder.key]} --keep`;
+    if (!folder.exists) {
+      return `<div class="folder-empty">폴더가 없습니다.<br><code>mkdir -p ${esc(folder.path)}</code></div>`;
+    }
+    return `<div class="folder-empty">파일이 없습니다. 시뮬레이터를 실행해 보세요.<br><code>${esc(cmd)}</code></div>`;
   }
-  function renderFiles() { renderFolder('protected'); renderFolder('unprotected'); }
+
+  function renderFolder(folder) {
+    const key = folder.key;
+    const list = $('list-' + key);
+    const scroll = list.scrollTop;
+    $('path-' + key).textContent = folder.path;
+
+    const enc = folder.files.filter((f) => f.state === 'encrypted').length;
+    const ok = folder.files.filter((f) => f.state === 'ok').length;
+    $('sum-' + key).innerHTML = folder.files.length
+      ? `<span class="sum ok">정상 ${ok}</span>` + (enc ? `<span class="sum bad">암호화 ${enc}</span>` : '')
+      : '';
+
+    if (!folder.files.length) {
+      list.innerHTML = emptyHtml(folder);
+      $('preview-' + key).innerHTML = '';
+      files.selected[key] = null;
+      return;
+    }
+
+    // 선택 유지. 없으면 암호화 의심 파일 → 첫 파일 순으로 고른다.
+    let sel = folder.files.find((f) => f.path === files.selected[key]);
+    if (!sel) sel = folder.files.find((f) => f.state === 'encrypted') || folder.files[0];
+    files.selected[key] = sel.path;
+
+    list.innerHTML = folder.files.map((f) => {
+      const [cls, label] = STATE_LABEL[f.state] || STATE_LABEL.unknown;
+      const hi = f.state === 'encrypted';
+      const ent = f.entropy;
+      return `<li class="file-row${hi ? ' enc' : ''}${f.path === sel.path ? ' selected' : ''}" data-key="${key}" data-path="${esc(f.path)}">
+        <div class="fname">${f.dir ? `<span class="fdir">${esc(f.dir)}/</span>` : ''}${esc(f.name)}${f.ransom_ext ? '<span class="tag-ext">의심 확장자</span>' : ''}</div>
+        <span class="fstate ${cls}">${label}</span>
+        <div><div class="entbar${hi ? ' hi' : ''}"><span style="width:${ent == null ? 0 : (ent / 8 * 100).toFixed(1)}%"></span></div>
+             <div class="entval">${ent == null ? '샘플 부족' : '엔트로피 ' + ent.toFixed(2)}</div></div>
+        <div class="fmeta">${fmtSize(f.size)}<br>${fmtTime(f.mtime)}</div>
+      </li>`;
+    }).join('') + (folder.truncated ? '<li class="folder-empty">파일이 많아 일부만 표시합니다.</li>' : '');
+    list.scrollTop = scroll;
+    loadPreview(key, sel);
+  }
+
+  async function loadPreview(key, f) {
+    const pkey = `${f.path}|${f.mtime}|${f.size}`;
+    if (files.previewKey[key] !== pkey) {
+      files.previewKey[key] = pkey;
+      try {
+        const res = await fetch(`/api/files/preview?folder=${key}&path=${encodeURIComponent(f.path)}`);
+        files.preview[key] = res.ok ? await res.json() : { kind: 'error' };
+      } catch (e) {
+        files.preview[key] = { kind: 'error' };
+      }
+    }
+    const p = files.preview[key];
+    if (!p || files.selected[key] !== f.path) return;
+    const desc = p.kind === 'text' ? '앞부분 텍스트' : p.kind === 'hex' ? `앞부분 ${p.bytes} 바이트 (hex)` : '';
+    $('preview-' + key).innerHTML = `
+      <div class="preview-head"><span>미리보기 · <b>${esc(f.path)}</b></span><span>${desc}</span></div>
+      <pre class="${p.kind === 'hex' ? 'hex' : ''}">${p.kind === 'error' ? '미리보기를 불러오지 못했습니다.' : esc(p.content)}</pre>`;
+  }
+
+  function renderFiles() {
+    if (!files.data) return;
+    $('files-threshold').textContent = files.data.threshold.toFixed(1);
+    files.data.folders.forEach(renderFolder);
+  }
+
+  async function pollFiles() {
+    if (!filesVisible()) return;
+    try {
+      const res = await fetch('/api/files');
+      files.data = await res.json();
+      renderFiles();
+      $('files-updated').textContent = hhmmss(new Date()) + ' 갱신';
+    } catch (e) {
+      $('files-updated').textContent = '서버 연결 끊김';
+    }
+  }
 
   $('view-files').addEventListener('click', (ev) => {
     const row = ev.target.closest('.file-row');
     if (!row) return;
-    selectedFile[row.dataset.key] = Number(row.dataset.i);
-    renderFolder(row.dataset.key);
+    files.selected[row.dataset.key] = row.dataset.path;
+    renderFiles();
   });
+
+  setInterval(pollFiles, FILE_POLL_MS);
 
   refreshHealth();
   poll();
