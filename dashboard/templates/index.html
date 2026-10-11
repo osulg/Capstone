@@ -280,10 +280,15 @@
   .sum { font-size: 0.66rem; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
   .sum.ok { color: #15803d; background: #dcfce7; }
   .sum.bad { color: #dc2626; background: #fee2e2; }
+  .sum.honey { color: #b45309; background: #fef3c7; }
   .file-list { list-style: none; max-height: 430px; overflow-y: auto; }
   .fname .fdir { display: block; color: #94a3b8; font-size: 0.6rem; }
   .fname .tag-ext { display: inline-block; margin-left: 6px; color: #dc2626; background: #fee2e2; font-size: 0.58rem; font-weight: 700; padding: 1px 6px; border-radius: 4px; font-family: 'Inter', sans-serif; }
   .fstate.unknown { color: #64748b; background: #f1f5f9; }
+  .fstate.honey { color: #b45309; background: #fef3c7; }
+  .file-row.honey { background: #fffbeb; }
+  .file-row.honey.selected { background: #fef3c7; }
+  .entbar.honey span { background: #f59e0b; }
   .folder-empty { padding: 28px 18px; text-align: center; font-size: 0.72rem; color: #94a3b8; line-height: 1.7; }
   .folder-empty code { display: inline-block; margin-top: 6px; background: #f1f5f9; color: #334155; padding: 3px 8px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 0.64rem; overflow-wrap: anywhere; }
   .preview:empty { display: none; }
@@ -746,6 +751,7 @@
     ok: ['ok', '✅ 정상'],
     encrypted: ['enc', '🔴 암호화 의심'],
     unknown: ['unknown', '판정 불가'],
+    honeypot: ['honey', '🍯 미끼 파일'],
     unreadable: ['unknown', '읽기 실패'],
   };
 
@@ -765,8 +771,10 @@
 
     const enc = folder.files.filter((f) => f.state === 'encrypted').length;
     const ok = folder.files.filter((f) => f.state === 'ok').length;
+    const honey = folder.files.filter((f) => f.state === 'honeypot').length;
     $('sum-' + key).innerHTML = folder.files.length
       ? `<span class="sum ok">정상 ${ok}</span>` + (enc ? `<span class="sum bad">암호화 ${enc}</span>` : '')
+        + (honey ? `<span class="sum honey" title="정상/암호화 개수에서 제외">미끼 ${honey}</span>` : '')
       : '';
 
     if (!folder.files.length) {
@@ -784,11 +792,12 @@
     list.innerHTML = folder.files.map((f) => {
       const [cls, label] = STATE_LABEL[f.state] || STATE_LABEL.unknown;
       const hi = f.state === 'encrypted';
+      const hp = f.state === 'honeypot';
       const ent = f.entropy;
-      return `<li class="file-row${hi ? ' enc' : ''}${f.path === sel.path ? ' selected' : ''}" data-key="${key}" data-path="${esc(f.path)}">
+      return `<li class="file-row${hi ? ' enc' : ''}${hp ? ' honey' : ''}${f.path === sel.path ? ' selected' : ''}" data-key="${key}" data-path="${esc(f.path)}">
         <div class="fname">${f.dir ? `<span class="fdir">${esc(f.dir)}/</span>` : ''}${esc(f.name)}${f.ransom_ext ? '<span class="tag-ext">의심 확장자</span>' : ''}</div>
         <span class="fstate ${cls}">${label}</span>
-        <div><div class="entbar${hi ? ' hi' : ''}"><span style="width:${ent == null ? 0 : (ent / 8 * 100).toFixed(1)}%"></span></div>
+        <div><div class="entbar${hi ? ' hi' : ''}${hp ? ' honey' : ''}"><span style="width:${ent == null ? 0 : (ent / 8 * 100).toFixed(1)}%"></span></div>
              <div class="entval">${ent == null ? '샘플 부족' : '엔트로피 ' + ent.toFixed(2)}</div></div>
         <div class="fmeta">${fmtSize(f.size)}<br>${fmtTime(f.mtime)}</div>
       </li>`;

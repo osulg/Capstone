@@ -117,7 +117,8 @@ rm -f /tmp/guardfs_state_*
 | 보호 없는 폴더 (비교용) | `~/guardfs_demo/unprotected` | `DASH_UNPROTECTED_DIR` |
 
 - 파일 앞부분 4KB 엔트로피가 GuardFS 기준(`ENTROPY_THRESHOLD`, 7.0) 이상이면 "암호화 의심", 64B 미만은 "판정 불가".
-- `.locked` / `.enc` 등은 "의심 확장자"로 표시. `honeypot/`, 숨김 파일, 심볼릭 링크는 제외.
+- `.locked` / `.enc` 등은 "의심 확장자"로 표시. 숨김 파일, 심볼릭 링크는 제외.
+- 보호 폴더의 `honeypot/` 파일은 "🍯 미끼 파일"로 목록 맨 위에 따로 표시하고, 정상/암호화 개수에서는 뺀다.
 - 시연: 같은 시뮬레이터를 두 경로에 각각 실행한다.
   ```bash
   python3 experiments/simulators/sim_highentropy.py ~/guardfs_runtime/mount/sim_target --keep      # 보호

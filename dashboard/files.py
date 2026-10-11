@@ -29,7 +29,9 @@ MIN_SAMPLE_BYTES = 64      # 이보다 작으면 엔트로피 판정이 무의�
 PREVIEW_BYTES = 512
 HEX_PREVIEW_BYTES = 96
 MAX_FILES = 300
-SKIP_DIRS = {"honeypot"}   # GuardFS 미끼 파일은 비교 대상이 아님
+# 보호 폴더 최상위의 honeypot/ 은 GuardFS 미끼 파일 (guardfs/common/paths.get_honeypot_dir).
+# 목록에는 '미끼 파일'로 따로 표시하고, 정상/암호화 판정 대상에서는 뺀다.
+HONEYPOT_DIR = "honeypot"
 RANSOM_EXTS = {".locked", ".enc", ".encrypted", ".crypt", ".crypted", ".lock", ".ransom"}
 
 FOLDERS = [
@@ -71,7 +73,7 @@ def _read_head(path: str, size: int) -> bytes:
         return f.read(size)
 
 
-def _file_info(root: str, path: str) -> dict:
+def _file_info(root: str, path: str, honeypot: bool = False) -> dict:
     st = os.stat(path)
     rel = os.path.relpath(path, root)
     info = {
@@ -83,11 +85,16 @@ def _file_info(root: str, path: str) -> dict:
         "entropy": None,
         "state": "unknown",
         "ransom_ext": os.path.splitext(rel)[1].lower() in RANSOM_EXTS,
+        "honeypot": honeypot,
     }
     try:
         head = _read_head(path, SAMPLE_BYTES)
     except OSError:
         info["state"] = "unreadable"
+        return info
+    if honeypot:
+        info["entropy"] = round(shannon_entropy(head), 2) if len(head) >= MIN_SAMPLE_BYTES else None
+        info["state"] = "honeypot"
         return info
     if len(head) >= MIN_SAMPLE_BYTES:
         ent = shannon_entropy(head)
@@ -106,7 +113,7 @@ def scan_folder(folder: dict) -> dict:
     root_real = os.path.realpath(root)
     for dirpath, dirnames, filenames in os.walk(root_real):
         dirnames[:] = sorted(d for d in dirnames
-                             if not d.startswith(".") and d not in SKIP_DIRS)
+                             if not d.startswith("."))
         for fn in sorted(filenames):
             if fn.startswith("."):
                 continue
@@ -117,9 +124,13 @@ def scan_folder(folder: dict) -> dict:
                 out["truncated"] = True
                 return out
             try:
-                out["files"].append(_file_info(root_real, full))
+                rel_top = os.path.relpath(full, root_real).split(os.sep, 1)[0]
+                is_honeypot = folder["key"] == "protected" and rel_top == HONEYPOT_DIR
+                out["files"].append(_file_info(root_real, full, is_honeypot))
             except OSError:
                 continue  # 스캔 중 삭제·이동된 파일
+    # 미끼 파일을 목록 맨 위로 (시연 시 바로 보이도록)
+    out["files"].sort(key=lambda f: not f["honeypot"])
     return out
 
 
