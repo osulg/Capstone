@@ -145,6 +145,7 @@
   tbody tr.lv-HIGH   { background: #fff1f2; }
   tbody tr.lv-MEDIUM { background: #fffbeb; }
   tbody tr.lv-LOW    { background: #f0fdf4; }
+  tbody tr.lv-SUSPICIOUS { background: #f5f3ff; }
   tbody tr:hover { filter: brightness(0.98); }
   tbody tr.new { animation: flash 1.6s ease-out; }
   @keyframes flash { from { box-shadow: inset 4px 0 0 #3b82f6; background: #dbeafe; } }
@@ -174,6 +175,7 @@
   .res-BUFFERED, .res-MEDIUM, .res-STAGED { color: #d97706; }
   .res-SUCCESS, .res-CONFIRMED, .res-RESTORED, .res-LOW { color: #16a34a; }
   .res-BUFFER_DROPPED { color: #334155; font-weight: 500; }
+  .res-SUSPICIOUS { color: #7c3aed; }
   td.reason { color: #94a3b8; font-size: 0.7rem; white-space: normal; word-break: break-word; min-width: 180px; max-width: 340px; line-height: 1.45; }
   .empty { text-align: center; color: #94a3b8; padding: 48px 0; font-size: 0.8rem; white-space: normal; }
   .empty code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.72rem; color: #334155; }
@@ -410,6 +412,7 @@
           <button class="filter-btn" data-filter="HIGH">HIGH</button>
           <button class="filter-btn" data-filter="MEDIUM">MEDIUM</button>
           <button class="filter-btn" data-filter="ESCALATE">격상 이력</button>
+          <button class="filter-btn" data-filter="HONEYPOT">허니팟</button>
           <span id="event-count">0개 이벤트</span>
         </div>
       </div>
@@ -559,6 +562,7 @@
 
   function matchFilter(e) {
     if (state.filter === 'ALL') return true;
+    if (state.filter === 'HONEYPOT') return /honeypot/i.test(e.reason || '');
     if (state.filter === 'ESCALATE') return ['ESCALATE', 'SIGSTOP', 'RETURN'].includes(e.action) || e.result === 'ESCALATED_TO_HIGH';
     return e.level === state.filter;
   }

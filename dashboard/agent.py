@@ -168,6 +168,11 @@ RE_HIGH = re.compile(r"\[TRIGGER HIGH\] pid=(\d+) reason=(.*)$")
 RE_SUSPEND = re.compile(r"\[HIGH\] pid=(\d+) suspend 완료")
 RE_LOW_REEVAL = re.compile(r"\[REEVAL\] pid=(\d+) 10초 경과 → Low 복귀")
 RE_LOW_WATCH = re.compile(r"\[WATCH\] pid=(\d+) 관찰 종료")
+# passthrough.py: 허니팟 경로에 대한 open/read/write/truncate/unlink/rmdir/rename 차단
+RE_HONEYPOT = re.compile(r"\[HONEYPOT\] pid=(\d+) op=(\S+) blocked path=(.+?)(?: new_path=(.+))?$")
+
+HONEYPOT_REASON = "HoneypotDetector: 허니팟(미끼) 파일 접근 차단"
+HONEYPOT_DEDUP_SEC = 2.0
 
 
 class StdoutParser:
@@ -175,9 +180,11 @@ class StdoutParser:
         self.stage1_reason = {}   # pid -> Stage1 탐지기
         self.scores = {}          # pid -> (dyn, stat, score)
         self.level = {}           # pid -> 마지막으로 보낸 상태
+        self.honeypot_seen = {}   # (pid, op, path) -> 마지막 전송 시각 (같은 접근 반복 표시 방지)
 
     def _ev(self, pid, level, result, reason, action="ESCALATE"):
-        self.level[pid] = level
+        if level != "SUSPICIOUS":  # 허니팟 표시 행이 MEDIUM/HIGH 추적을 덮어쓰지 않도록
+            self.level[pid] = level
         return {"time": now_str(), "level": level, "pid": pid, "process": process_name(pid),
                 "target": "", "action": action, "result": result, "reason": reason,
                 "source": "stdout"}
@@ -190,9 +197,25 @@ class StdoutParser:
         return ", ".join(p for p in parts if p)
 
     def feed(self, line: str):
+        m = RE_HONEYPOT.search(line)
+        if m:
+            pid, op, path, new_path = int(m.group(1)), m.group(2), m.group(3), m.group(4)
+            key = (pid, op, path)
+            now = time.time()
+            if now - self.honeypot_seen.get(key, 0) < HONEYPOT_DEDUP_SEC:
+                return None
+            self.honeypot_seen[key] = now
+            ev = self._ev(pid, "SUSPICIOUS", "BLOCKED", HONEYPOT_REASON, action=op.upper())
+            ev["target"] = f"{path} → {new_path}" if new_path else path
+            return ev
         m = RE_SUSPECT.search(line)
         if m:
-            self.stage1_reason[int(m.group(1))] = m.group(2)
+            pid, reason = int(m.group(1)), m.group(2)
+            self.stage1_reason[pid] = reason
+            # 허니팟 안 create/mkdir 처럼 차단 없이 관찰만 되는 접근도 Stage1 탐지는 보이게 한다.
+            if reason == "HoneypotDetector":
+                return self._ev(pid, "SUSPICIOUS", "SUSPICIOUS",
+                                "HoneypotDetector: 허니팟 접근 탐지 → Stage2 평가 요청", action="DETECT")
             return None
         m = RE_SCORE.search(line)
         if m:

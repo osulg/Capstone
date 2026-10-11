@@ -80,7 +80,7 @@ python dashboard/agent.py --stdout-log ~/guardfs_stdout.log
 | 소스 | 내용 | 대시보드 표시 |
 |---|---|---|
 | `~/filesecurity.log` | `log_medium_event` / `log_high_event` 블록 | WRITE BUFFERED, DELETE BLOCKED, DROP BUFFER_DROPPED, UNLINK STAGED ... |
-| `--stdout-log` | `[STAGE2]`, `[WATCH]`, `[REEVAL]`, `[TRIGGER HIGH]`, `[TRUST]` 줄 | `ESCALATE → MEDIUM/HIGH` 행. 탐지 사유에 Stage1 탐지기 + dyn/stat/score + HIGH 사유 표시, `SIGSTOP`, `RETURN → LOW` |
+| `--stdout-log` | `[STAGE2]`, `[WATCH]`, `[REEVAL]`, `[TRIGGER HIGH]`, `[TRUST]`, `[HONEYPOT]` 줄 | `ESCALATE → MEDIUM/HIGH` 행. 탐지 사유에 Stage1 탐지기 + dyn/stat/score + HIGH 사유 표시, `SIGSTOP`, `RETURN → LOW` |
 
 - `PYTHONUNBUFFERED=1`이 없으면 파이프에서 stdout이 버퍼링돼 이벤트가 늦게 들어온다.
 - `--stdout-log`를 생략하면 정책 결과(BUFFERED/BLOCKED 등)만 표시되고 격상 행은 나오지 않는다.
@@ -106,6 +106,13 @@ rm -f /tmp/guardfs_state_*
 
 강제 상태는 ML을 거치지 않으므로 `ESCALATE` 행(격상 이유)은 나오지 않는다.
 격상 이유까지 보려면 실제 탐지 시나리오(예: `scripts/run_sample.sh`)를 돌린다.
+
+## 허니팟 접근 표시
+
+GuardFS가 허니팟 접근을 차단하면 출력하는 `[HONEYPOT] pid=… op=… blocked path=…` 줄을 에이전트가 읽어
+`SUSPICIOUS / OPEN·UNLINK·RENAME… / BLOCKED` 행으로 표시한다(`--stdout-log` 필요).
+허니팟 안 create/mkdir 처럼 차단 없이 관찰되는 접근은 Stage1 `HoneypotDetector` 탐지(`DETECT`) 행으로 표시한다.
+같은 PID·동작·경로는 2초 안에 한 번만 표시한다. 이벤트 표의 **허니팟** 필터로 모아 볼 수 있다.
 
 ## 파일 상태 탭
 
