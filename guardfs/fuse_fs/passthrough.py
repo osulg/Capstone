@@ -1653,9 +1653,13 @@ class Passthrough(pyfuse3.Operations):
                     )
                 )
             if fields.update_uid or fields.update_gid:
-                self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="chown", path=path))
+                self._emit(
+                    FsEvent(ts_ns=time.time_ns(), pid=pid, op="chown", path=path)
+                )
             if fields.update_atime or fields.update_mtime:
-                self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="utime", path=path))
+                self._emit(
+                    FsEvent(ts_ns=time.time_ns(), pid=pid, op="utime", path=path)
+                )
             return
 
         target_path = entry["staging_path"] if entry is not None else path
@@ -1956,7 +1960,32 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
-            source_stat = os.lstat(old_path)
+            staging_source = None
+
+            try:
+                source_stat = os.lstat(old_path)
+            except FileNotFoundError:
+                # underlay에 없는 신규 staging 파일인지 확인
+                for inode in list(self._staging_inodes):
+                    if self._inode_path.get(inode) != old_path:
+                        continue
+
+                    # 소유 PID, pending 상태, 보관 fd 유효성을 검사한다.
+                    entry = self._pending_staging(inode, ctx)
+                    if entry is None:
+                        continue
+
+                    if entry["pid"] != pid:
+                        continue
+
+                    staging_source = entry
+                    break
+
+                if staging_source is None:
+                    raise pyfuse3.FUSEError(errno.ENOENT)
+
+                source_stat = os.fstat(staging_source["held_fd"])
+
             source_is_dir = stat_mod.S_ISDIR(source_stat.st_mode)
 
             try:
@@ -1964,23 +1993,58 @@ class Passthrough(pyfuse3.Operations):
             except FileNotFoundError:
                 destination_stat = None
 
-            # 같은 경로 또는 같은 inode의 hard link는 rename의 no-op이다.
-            # 내부 경로와 지연 작업도 이동시키지 않음
-            if destination_stat is not None and (
-                source_stat.st_dev,
-                source_stat.st_ino,
-            ) == (destination_stat.st_dev, destination_stat.st_ino):
-                self._emit(ev)
-                return
+            if staging_source is not None:
+                # staging rename에서는 특수 rename 플래그를 지원하지 않는다.
+                if flags:
+                    raise pyfuse3.FUSEError(errno.EINVAL)
 
-            # 경로 기반 커밋이 기존 목적지의 데이터를 새 파일에 적용하지
-            # 않도록 열린 핸들이나 지연 작업이 있는 목적지는 보호
-            if self._has_pending_destination(new_path):
-                raise pyfuse3.FUSEError(errno.EBUSY)
+                # 자기 자신으로 rename하는 경우는 성공으로 처리한다.
+                if old_path == new_path:
+                    self._emit(ev)
+                    return
 
-            os.rename(old_path, new_path)
+                # os.rename을 실행하지 않으므로 목적지 부모를 직접 검사한다.
+                parent_stat = os.lstat(os.path.dirname(new_path))
+                if not stat_mod.S_ISDIR(parent_stat.st_mode):
+                    raise pyfuse3.FUSEError(errno.ENOTDIR)
+
+                # 다른 pending 파일의 논리적 이름과 충돌하지 않도록 한다.
+                pending_destination = any(
+                    self._inode_path.get(inode) == new_path
+                    and entry["state"] == "pending"
+                    for inode, entry in self._staging_inodes.items()
+                )
+
+                # 기존 파일 교체는 commit 시점의 별도 보호 처리가 필요하다.
+                if (
+                    destination_stat is not None
+                    or pending_destination
+                    or self._has_pending_destination(new_path)
+                ):
+                    raise pyfuse3.FUSEError(errno.EBUSY)
+
+                # 실제 staging 파일은 이동하지 않는다.
+                # 아래의 기존 매핑 갱신 코드에서 논리적 경로만 변경한다.
+
+            else:
+                # 기존 underlay 파일의 rename 처리는 유지한다.
+                if destination_stat is not None and (
+                    source_stat.st_dev,
+                    source_stat.st_ino,
+                ) == (
+                    destination_stat.st_dev,
+                    destination_stat.st_ino,
+                ):
+                    self._emit(ev)
+                    return
+
+                if self._has_pending_destination(new_path):
+                    raise pyfuse3.FUSEError(errno.EBUSY)
+
+                os.rename(old_path, new_path)
+
         except OSError as e:
-            raise pyfuse3.FUSEError(e.errno)
+            raise pyfuse3.FUSEError(e.errno) from e
 
         old_prefix = old_path + os.sep
         new_prefix = new_path + os.sep
