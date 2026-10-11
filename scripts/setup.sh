@@ -19,14 +19,25 @@ UNDERLAY_DIR="$RUNTIME_DIR/underlay"
 LOG_DIR="$RUNTIME_DIR/logs"
 QUARANTINE_DIR="$RUNTIME_DIR/quarantine"
 
+# 최소 지원 버전 (pyproject.toml의 requires-python과 동일하게 유지)
+PYTHON_BIN="python3.12"
+
 echo "[1/6] 시스템 패키지 확인"
 
 sudo apt update
 
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    echo "$PYTHON_BIN 을 찾을 수 없습니다. deadsnakes PPA를 추가합니다"
+    echo "(Ubuntu 20.04/22.04는 기본 저장소에 3.12가 없음)."
+    sudo apt install -y software-properties-common
+    sudo add-apt-repository -y ppa:deadsnakes/ppa
+    sudo apt update
+fi
+
 sudo apt install -y \
-    python3 \
-    python3-pip \
-    python3-venv \
+    "$PYTHON_BIN" \
+    "$PYTHON_BIN-venv" \
+    "$PYTHON_BIN-dev" \
     fuse3 \
     libfuse3-dev \
     pkg-config
@@ -34,8 +45,8 @@ sudo apt install -y \
 echo "[2/6] Python 가상환경 생성"
 
 if [ ! -d "$VENV_DIR" ]; then
-    python3 -m venv "$VENV_DIR"
-    echo "가상환경 생성 완료: $VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
+    echo "가상환경 생성 완료: $VENV_DIR ($("$PYTHON_BIN" --version))"
 else
     echo "가상환경이 이미 존재합니다."
 fi
