@@ -159,59 +159,6 @@ def _reconstruct_final_content(
     return bytes(data)
 
 
-def pending_file_view(ops, pid, fd, off=0, size=0):
-    """같은 파일의 대기 write/truncate를 반영한 크기와 읽기 결과"""
-
-    if off < 0 or size < 0:
-        raise OSError(errno.EINVAL, "잘못된 read 범위")
-
-    source_fd = ops._staging_origin_fd.get(fd, fd)
-
-    if source_fd is None:
-        source_fd = fd
-
-    st = os.fstat(source_fd)
-    identity = (st.st_dev, st.st_ino)
-    held_fd = ops._buffer_fds.get(pid, {}).get(identity)
-
-    changes = [
-        (position, buf)
-        for pending_fd, position, buf, _path in ops._write_buffer.get(pid, [])
-        if held_fd is not None and pending_fd == held_fd
-    ]
-
-    logical_size = st.st_size
-
-    for position, buf in changes:
-        if buf is None:
-            logical_size = position
-        elif buf:
-            logical_size = max(logical_size, position + len(buf))
-
-    length = min(size, max(0, logical_size - off))
-    data = bytearray(length)
-
-    if length:
-        original = os.pread(source_fd, length, off)
-        data[: len(original)] = original
-
-    # truncate로 제거된 바이트가 이후 확장에서 되살아나지 않게 설정
-    for position, buf in changes:
-        if buf is None:
-            start = max(0, position - off)
-            if start < length:
-                data[start:] = b"\x00" * (length - start)
-
-        elif buf:
-            start = max(off, position)
-            end = min(off + length, position + len(buf))
-
-            if start < end:
-                data[start - off : end - off] = buf[start - position : end - position]
-
-    return logical_size, bytes(data)
-
-
 def _phase_delay_ms(elapsed_sec: float, trusted: bool) -> int:
     for phase_end, untrusted_ms, trusted_ms in MEDIUM_DELAY_PHASES:
         if elapsed_sec < phase_end:
@@ -636,40 +583,16 @@ def _restore_unlink(pid: int, ops) -> None:
         ops._unlink_recovery[pid].extend(reversed(retained))
 
 
-def _reconstruct_pending_content(path, changes):
-    """write와 truncate를 순서대로 적용한 구조 검증용 내용."""
-
-    try:
-        with open(path, "rb") as f:
-            data = bytearray(f.read())
-    except FileNotFoundError:
-        data = bytearray()
-
-    for off, buf in changes:
-        if buf is None:
-            if off < len(data):
-                del data[off:]
-            elif off > len(data):
-                data.extend(b"\x00" * (off - len(data)))
-        elif buf:
-            end = off + len(buf)
-
-            if end > len(data):
-                data.extend(b"\x00" * (end - len(data)))
-
-            data[off:end] = buf
-
-    return bytes(data)
-
-
 async def commit_buffers(pid: int, ops) -> None:
     buffers = ops._write_buffer.pop(pid, [])
+
     ops._write_buffer_bytes.pop(pid, None)
     ops._pid_trusted.pop(pid, None)
     ops._medium_entered_at.pop(pid, None)
     ops._trunc_paths.pop(pid, None)
 
     by_file = {}
+
     for fd, off, buf, path in buffers:
         entry = by_file.setdefault(fd, {"path": path, "changes": []})
         entry["path"] = path
@@ -681,9 +604,11 @@ async def commit_buffers(pid: int, ops) -> None:
     identities = {
         held_fd: identity for identity, held_fd in ops._buffer_fds.get(pid, {}).items()
     }
+
     applied = set()
     rejected = False
     failed = False
+
     try:
         # 모든 대상의 검증이 끝나기 전에는 원본에 적용하지 않는다.
         for fd, entry in by_file.items():
@@ -713,6 +638,7 @@ async def commit_buffers(pid: int, ops) -> None:
 
         for fd, entry in by_file.items():
             path, changes = entry["path"], entry["changes"]
+
             try:
                 for off, buf in changes:
                     if buf is None:
@@ -723,7 +649,9 @@ async def commit_buffers(pid: int, ops) -> None:
                     _publish_new_file(path, fd, pid, ops)
                 else:
                     _rebind_staging_handles(ops, pid, identities[fd], fd)
+
                 applied.add(fd)
+
                 print(
                     f"[COMMIT] pid={pid} path={path} → 파일 반영 완료 ({len(changes)}개 작업)"
                 )

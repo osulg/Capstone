@@ -54,13 +54,6 @@ from guardfs.stage2.stage2_worker import stage2_worker
 from guardfs.stage2.states import ProcState
 
 
-def _full_path(root: str, path: str) -> str:
-    if path.startswith("/"):
-        path = path[1:]
-
-    return os.path.join(root, path)
-
-
 def _resolve_trust_target(pid: int) -> str:
     """
     신뢰 판단 대상 경로를 계산한다.
@@ -643,20 +636,6 @@ class Passthrough(pyfuse3.Operations):
                 return True
 
         return False
-
-    def _find_open_fd_for_path(self, path: str) -> int | None:
-        """열린 fd 검색 helper"""
-
-        for fh, (_pid, fh_path, _flags) in self._fh_info.items():
-            if fh_path != path:
-                continue
-
-            fd = self._fd_map.get(fh)
-
-            if fd is not None:
-                return fd
-
-        return None
 
     def _move_pending_paths(
         self,

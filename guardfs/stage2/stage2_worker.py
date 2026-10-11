@@ -2,7 +2,6 @@
 import json
 import os
 import warnings
-from typing import Optional, Tuple
 
 import joblib
 import pandas as pd
@@ -88,14 +87,7 @@ def load_models():
     return dyn, dyn_cols, stat
 
 
-def get_exe_path(pid: int) -> str:
-    try:
-        return os.readlink(f"/proc/{pid}/exe")
-    except Exception:
-        return ""
-
-
-def predict_dynamic(model, cols, features: dict) -> Optional[float]:
+def predict_dynamic(model, cols, features: dict) -> float | None:
     if model is None:
         print("[ML] 동적 예측 불가: 모델이 로드되지 않음")
         return None
@@ -145,27 +137,6 @@ def predict_static(analyzer, pid: int, exe_path: str = "") -> float:
         return 0.5
 
 
-def fuse_score(dyn_model, dyn_cols, stat_model, stat_cache, ops, pid, features):
-    """
-    (dyn, stat, 가중합 score)를 계산한다. 정적 점수는 프로세스가 살아 있을 때만
-    캐싱하고, 죽었으면 캐시를 쓴다(초기 판정/재평가와 동일한 규약).
-    """
-    dyn_score = predict_dynamic(dyn_model, dyn_cols, features)
-    stat_score = predict_static(stat_model, pid, ops._pid_exe.get(pid, ""))
-
-    if stat_score != 0.5:
-        stat_cache[pid] = stat_score
-    else:
-        stat_score = stat_cache.get(pid, 0.5)
-
-    if dyn_score is None:
-        return None, stat_score, None
-
-    score = DYNAMIC_MODEL_WEIGHT * dyn_score + STATIC_MODEL_WEIGHT * stat_score
-
-    return dyn_score, stat_score, score
-
-
 async def stage2_worker(recv_chan, ops) -> None:
     """신규 PID 평가와 주기적 재평가를 별도 태스크로 실행한다."""
     dyn_model, dyn_cols, stat_model = load_models()
@@ -184,7 +155,7 @@ async def stage2_worker(recv_chan, ops) -> None:
 
     async def score_pid(
         pid: int, features: dict
-    ) -> Tuple[Optional[float], float, Optional[float]]:
+    ) -> tuple[float | None, float, float | None]:
         dyn_score = predict_dynamic(dyn_model, dyn_cols, features)
 
         stat_score = await trio.to_thread.run_sync(

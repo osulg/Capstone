@@ -69,60 +69,6 @@ def _dpkg_query_owner(exe_path: str) -> str | None:
         return None
 
 
-def _usr_merge_alternative(path: str) -> str | None:
-    pairs = (
-        ("/usr/bin/", "/bin/"),
-        ("/usr/sbin/", "/sbin/"),
-    )
-
-    for first, second in pairs:
-        if path.startswith(first):
-            return second + path[len(first) :]
-
-        if path.startswith(second):
-            return first + path[len(second) :]
-
-    return None
-
-
-def _verification_paths(path: str) -> set[str]:
-    """원래 경로와 기존 usr-merge 폴백 경로를 비교 대상으로 사용"""
-    paths = {os.path.normpath(path)}
-
-    alternative = _usr_merge_alternative(path)
-    if alternative is not None:
-        paths.add(os.path.normpath(alternative))
-
-    return paths | {os.path.realpath(candidate) for candidate in paths}
-
-
-def _verification_report_path(line: str) -> str | None:
-    """dpkg rpm 형식의 상태·선택적 conffile 표시·경로를 분리"""
-
-    parts = line.strip().split(maxsplit=1)
-
-    if len(parts) != 2:
-        return None
-
-    status, remainder = parts
-
-    if status != "missing" and len(status) != 9:
-        return None
-
-    # 설정 파일은 경로 앞에 c 표시가 포함될 수 있음
-    marked = remainder.split(maxsplit=1)
-    if marked[0] == "c":
-        if len(marked) != 2:
-            return None
-
-        remainder = marked[1]
-
-    if not os.path.isabs(remainder):
-        return None
-
-    return remainder
-
-
 def _check_package_sync(exe_path: str) -> bool:
     """
     dpkg 패키지 소속 여부 + 체크섬 무결성 검증 (블로킹, 서브프로세스 사용).
