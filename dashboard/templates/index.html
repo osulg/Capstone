@@ -259,9 +259,74 @@
   }
   .composer button:disabled { background: #93c5fd; cursor: not-allowed; }
 
+  /* ── 파일 상태 뷰 ── */
+  .view[hidden] { display: none !important; }
+  .files-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .files-head h2 { font-size: 1.05rem; font-weight: 700; }
+  .files-head p { font-size: 0.72rem; color: #64748b; margin-top: 4px; }
+  .files-tools { display: flex; align-items: center; gap: 8px; font-size: 0.7rem; color: #64748b; flex-wrap: wrap; }
+  .files-tools .chip { background: #fff; border: 1px solid #e2e8f0; border-radius: 999px; padding: 4px 10px; font-weight: 600; white-space: nowrap; }
+  .files-tools .chip b { color: #1e293b; }
+  .skeleton-note {
+    font-size: 0.66rem; font-weight: 700; color: #7c3aed; background: #ede9fe;
+    border: 1px dashed #c4b5fd; border-radius: 999px; padding: 4px 10px; white-space: nowrap;
+  }
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  .folder { background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.07); overflow: hidden; }
+  .folder-head { padding: 14px 18px; border-bottom: 1px solid #edf2f7; display: flex; align-items: center; gap: 12px; }
+  .folder-icon { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
+  .folder.protected .folder-icon { background: #dcfce7; }
+  .folder.unprotected .folder-icon { background: #fee2e2; }
+  .folder-title { min-width: 0; flex: 1; }
+  .folder-title h3 { font-size: 0.86rem; font-weight: 700; }
+  .folder-title code { display: block; font-family: 'JetBrains Mono', monospace; font-size: 0.64rem; color: #64748b; margin-top: 2px; overflow-wrap: anywhere; }
+  .folder-sum { display: flex; gap: 6px; flex-shrink: 0; }
+  .sum { font-size: 0.66rem; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+  .sum.ok { color: #15803d; background: #dcfce7; }
+  .sum.bad { color: #dc2626; background: #fee2e2; }
+  .file-list { list-style: none; }
+  .file-row {
+    display: grid; grid-template-columns: minmax(0, 1.4fr) auto minmax(90px, 1fr) auto;
+    align-items: center; gap: 12px; padding: 10px 18px; border-bottom: 1px solid #f1f5f9;
+    cursor: pointer; font-size: 0.74rem;
+  }
+  .file-row:hover { background: #f8fafc; }
+  .file-row.selected { background: #eff6ff; box-shadow: inset 3px 0 0 #3b82f6; }
+  .file-row.enc { background: #fff1f2; }
+  .file-row.enc.selected { background: #ffe4e6; }
+  .fname { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; overflow-wrap: anywhere; }
+  .fname .renamed { display: block; color: #dc2626; font-size: 0.62rem; margin-top: 2px; }
+  .fstate { font-size: 0.64rem; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+  .fstate.ok { color: #15803d; background: #dcfce7; }
+  .fstate.enc { color: #dc2626; background: #fee2e2; }
+  .entbar { position: relative; height: 6px; background: #e2e8f0; border-radius: 999px; }
+  .entbar span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: #22c55e; }
+  .entbar.hi span { background: #ef4444; }
+  .entbar::after { content: ''; position: absolute; top: -3px; bottom: -3px; left: 87.5%; width: 2px; background: #94a3b8; }
+  .entval { font-size: 0.62rem; color: #64748b; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .fmeta { font-size: 0.64rem; color: #94a3b8; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .preview { border-top: 1px solid #e2e8f0; background: #f8fafc; padding: 12px 18px 16px; }
+  .preview-head { display: flex; justify-content: space-between; align-items: center; font-size: 0.66rem; color: #64748b; margin-bottom: 8px; gap: 8px; }
+  .preview-head b { color: #1e293b; font-family: 'JetBrains Mono', monospace; overflow-wrap: anywhere; }
+  .preview pre {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.66rem; line-height: 1.55;
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px;
+    white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow: auto; color: #334155;
+  }
+  .preview pre.hex { color: #b91c1c; background: #fff7f7; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; font-size: 0.66rem; color: #64748b; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
+
   /* ── 반응형 ── */
+  @media (max-width: 600px) {
+    .folder-head { flex-wrap: wrap; }
+    .file-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; padding: 10px 14px; }
+    .file-row > div:nth-child(3) { grid-column: 1 / 2; }
+    .fmeta { text-align: right; }
+  }
   @media (max-width: 1180px) {
     .stats { grid-template-columns: repeat(2, 1fr); }
+    .compare { grid-template-columns: 1fr; }
   }
   @media (max-width: 960px) {
     body { height: auto; min-height: 100vh; }
@@ -299,6 +364,9 @@
     <button class="rail-tab active" id="tab-events" title="보안 이벤트 로그">
       <span class="rail-icon">📋</span>이벤트
     </button>
+    <button class="rail-tab" id="tab-files" title="파일 상태 (보호 vs 비보호 비교)">
+      <span class="rail-icon">📁</span>파일 상태
+    </button>
     <button class="rail-tab ai" id="tab-ai" title="AI 보안 분석관 열기/닫기" aria-expanded="false" aria-controls="ai-pane">
       <span class="rail-icon">🤖</span>AI 분석관
       <span class="rail-dot" id="ai-dot"></span>
@@ -307,6 +375,7 @@
 
   <!-- ── 대시보드 ── -->
   <main class="dashboard-pane">
+   <div class="view" id="view-events">
     <div class="stats">
       <div class="card card-total">
         <div class="card-icon">📋</div>
@@ -354,6 +423,56 @@
         </table>
       </div>
     </section>
+   </div>
+
+   <!-- ── 파일 상태 (뼈대: 목업 데이터) ── -->
+   <div class="view" id="view-files" hidden>
+    <div class="files-head">
+      <div>
+        <h2>파일 상태</h2>
+        <p>VM 안의 폴더를 읽기 전용으로 보여줍니다. 같은 공격을 받은 두 폴더를 비교하세요.</p>
+      </div>
+      <div class="files-tools">
+        <span class="skeleton-note">미리보기 · 목업 데이터</span>
+        <span class="chip">암호화 판정 엔트로피 ≥ <b>7.0</b></span>
+        <span class="chip" id="files-updated">2초마다 갱신</span>
+      </div>
+    </div>
+
+    <div class="compare">
+      <section class="folder protected">
+        <div class="folder-head">
+          <div class="folder-icon">🛡️</div>
+          <div class="folder-title">
+            <h3>보호 폴더 (GuardFS)</h3>
+            <code>~/guardfs_runtime/underlay/attack_target</code>
+          </div>
+          <div class="folder-sum" id="sum-protected"></div>
+        </div>
+        <ul class="file-list" id="list-protected"></ul>
+        <div class="preview" id="preview-protected"></div>
+      </section>
+
+      <section class="folder unprotected">
+        <div class="folder-head">
+          <div class="folder-icon">⚠️</div>
+          <div class="folder-title">
+            <h3>보호 없는 폴더</h3>
+            <code>~/guardfs_demo/unprotected/attack_target</code>
+          </div>
+          <div class="folder-sum" id="sum-unprotected"></div>
+        </div>
+        <ul class="file-list" id="list-unprotected"></ul>
+        <div class="preview" id="preview-unprotected"></div>
+      </section>
+    </div>
+
+    <div class="legend">
+      <span><i style="background:#22c55e"></i>정상 (엔트로피 &lt; 7.0)</span>
+      <span><i style="background:#ef4444"></i>암호화 의심 (엔트로피 ≥ 7.0)</span>
+      <span><i style="background:#94a3b8"></i>막대의 세로선 = 판정 기준 7.0 (최대 8.0)</span>
+    </div>
+   </div>
   </main>
 
   <!-- ── AI 분석관 ── -->
@@ -482,7 +601,16 @@
   const aiOpen = () => $('layout').classList.contains('ai-open');
   $('tab-ai').addEventListener('click', () => setAiOpen(!aiOpen()));
   $('ai-close').addEventListener('click', () => setAiOpen(false));
-  $('tab-events').addEventListener('click', () => $('table-anchor').scrollIntoView({ behavior: 'smooth' }));
+  // ── 메인 뷰 전환 (이벤트 로그 / 파일 상태) ──
+  function showView(name) {
+    $('view-events').hidden = name !== 'events';
+    $('view-files').hidden = name !== 'files';
+    $('tab-events').classList.toggle('active', name === 'events');
+    $('tab-files').classList.toggle('active', name === 'files');
+    if (name === 'files') renderFiles();
+  }
+  $('tab-events').addEventListener('click', () => showView('events'));
+  $('tab-files').addEventListener('click', () => showView('files'));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && aiOpen()) setAiOpen(false); });
 
   $('event-body').addEventListener('click', (ev) => {
@@ -599,6 +727,64 @@
   });
   const autosize = () => { const t = $('input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px'; };
   $('input').addEventListener('input', autosize);
+
+  // ── 파일 상태 (뼈대) ──
+  // TODO: 서버 /api/files 연동. 지금은 화면 확인용 목업 데이터.
+  const MOCK_FILES = {
+    protected: [
+      { name: 'report_q3.docx', size: 18432, mtime: '13:33:41', entropy: 4.31, preview: 'Q3 분기 보고서\n1. 매출 현황: 전년 대비 12% 증가\n2. 주요 고객사 계약 갱신 완료\n3. 다음 분기 목표 ...' },
+      { name: 'customers.csv', size: 6120, mtime: '13:33:41', entropy: 4.86, preview: 'id,name,email,phone\n1001,김민수,minsu@example.com,010-1234-5678\n1002,이서연,seoyeon@example.com,010-2345-6789' },
+      { name: 'meeting_notes.txt', size: 2048, mtime: '13:33:41', entropy: 4.12, preview: '[회의록] 10월 11일\n- 참석: 개발팀 4명\n- 안건: 전시회 시연 준비\n- 결정: 시나리오 3개 확정' },
+      { name: 'budget_2026.xlsx', size: 24576, mtime: '13:33:41', entropy: 5.02, preview: '2026 예산안\n인건비 | 운영비 | 장비비\n4,200 | 1,150 | 860' },
+      { name: 'photo_team.jpg', size: 512000, mtime: '13:33:41', entropy: 6.21, preview: 'JFIF 이미지 (미리보기 생략)' },
+    ],
+    unprotected: [
+      { name: 'report_q3.docx', renamed: 'report_q3.docx.locked', size: 18448, mtime: '13:33:52', entropy: 7.98 },
+      { name: 'customers.csv', renamed: 'customers.csv.locked', size: 6128, mtime: '13:33:52', entropy: 7.97 },
+      { name: 'meeting_notes.txt', renamed: 'meeting_notes.txt.locked', size: 2064, mtime: '13:33:53', entropy: 7.91 },
+      { name: 'budget_2026.xlsx', renamed: 'budget_2026.xlsx.locked', size: 24592, mtime: '13:33:53', entropy: 7.99 },
+      { name: 'photo_team.jpg', size: 512000, mtime: '13:33:41', entropy: 6.21, preview: 'JFIF 이미지 (미리보기 생략)' },
+    ],
+  };
+  const ENC_THRESHOLD = 7.0;
+  const selectedFile = { protected: 0, unprotected: 0 };
+
+  function fakeHex(seed, n = 96) {
+    let x = seed * 2654435761 % 4294967296, out = [];
+    for (let i = 0; i < n; i++) { x = (x * 1103515245 + 12345) % 2147483648; out.push((x >> 16 & 255).toString(16).padStart(2, '0')); }
+    return out.join(' ').replace(/((?:\S+ ){16})/g, '$1\n');
+  }
+  const fmtSize = (b) => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : b >= 1024 ? (b / 1024).toFixed(1) + ' KB' : b + ' B';
+
+  function renderFolder(key) {
+    const files = MOCK_FILES[key];
+    const enc = files.filter((f) => f.entropy >= ENC_THRESHOLD).length;
+    $('sum-' + key).innerHTML =
+      `<span class="sum ok">정상 ${files.length - enc}</span>` + (enc ? `<span class="sum bad">암호화 ${enc}</span>` : '');
+    $('list-' + key).innerHTML = files.map((f, i) => {
+      const hi = f.entropy >= ENC_THRESHOLD;
+      return `<li class="file-row${hi ? ' enc' : ''}${i === selectedFile[key] ? ' selected' : ''}" data-key="${key}" data-i="${i}">
+        <div class="fname">${esc(f.name)}${f.renamed ? `<span class="renamed">→ ${esc(f.renamed)}</span>` : ''}</div>
+        <span class="fstate ${hi ? 'enc' : 'ok'}">${hi ? '🔴 암호화 의심' : '✅ 정상'}</span>
+        <div><div class="entbar${hi ? ' hi' : ''}"><span style="width:${(f.entropy / 8 * 100).toFixed(1)}%"></span></div>
+             <div class="entval">엔트로피 ${f.entropy.toFixed(2)}</div></div>
+        <div class="fmeta">${fmtSize(f.size)}<br>${esc(f.mtime)}</div>
+      </li>`;
+    }).join('');
+    const f = files[selectedFile[key]];
+    const hi = f.entropy >= ENC_THRESHOLD;
+    $('preview-' + key).innerHTML = `
+      <div class="preview-head"><span>미리보기 · <b>${esc(f.renamed || f.name)}</b></span><span>앞부분 ${hi ? '96 바이트 (hex)' : '텍스트'}</span></div>
+      <pre class="${hi ? 'hex' : ''}">${esc(hi ? fakeHex(f.size) : f.preview)}</pre>`;
+  }
+  function renderFiles() { renderFolder('protected'); renderFolder('unprotected'); }
+
+  $('view-files').addEventListener('click', (ev) => {
+    const row = ev.target.closest('.file-row');
+    if (!row) return;
+    selectedFile[row.dataset.key] = Number(row.dataset.i);
+    renderFolder(row.dataset.key);
+  });
 
   refreshHealth();
   poll();
