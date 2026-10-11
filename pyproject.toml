@@ -1,13 +1,25 @@
 [tool.ruff]
 line-length = 88
+target-version = "py312"
 
 [tool.ruff.lint]
 select = [
-    "E",  # pycodestyle errors
-    "F",  # Pyflakes
-    "W",  # pycodestyle warnings
-    "I",  # import 정렬
+    "E4",   # import 관련 오류
+    "E7",   # 문장 및 구문 관련 오류
+    "E9",   # 심각한 문법 오류
+    "F",    # Pyflakes: 미사용 변수, 미정의 이름 등
+    "W",    # pycodestyle 경고
+    "I",    # isort: import 정렬
+    "UP",   # pyupgrade: Python 문법 현대화
+    "B",    # flake8-bugbear: 잠재적인 버그 탐지
 ]
+
+ignore = [
+    "E501", # 줄 길이는 Ruff Formatter에서 관리
+]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
 
 [tool.ruff.format]
 quote-style = "double"
