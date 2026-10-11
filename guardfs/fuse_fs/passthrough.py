@@ -325,6 +325,15 @@ class Passthrough(pyfuse3.Operations):
         # OS staging fd → 원래 underlay fd (신규 create는 None).
         self._staging_origin_fd: dict[int, int | None] = {}
         self._unlink_identity: dict[str, tuple[int, int]] = {}
+
+        # MEDIUM 중 rmdir을 실제로 지우지 않고 스테이징으로 옮겨둔 목록 (unlink와 동일한 패턴).
+        # directory는 hardlink가 불가능하므로 복원은 rename으로 처리한다.
+        self._rmdir_staged: dict[int, list] = defaultdict(list)
+        self._rmdir_identity: dict[str, tuple[int, int]] = {}
+
+        # MEDIUM 중 보류된 chmod/chown/utime 변경. pid -> [(path, {field: value}), ...]
+        self._pending_metadata: dict[int, list] = defaultdict(list)
+
         self._buffer_new_files: dict[int, dict[int, str]] = defaultdict(dict)
         self._staging_recovery: dict[int, list] = defaultdict(list)
 
@@ -1129,16 +1138,7 @@ class Passthrough(pyfuse3.Operations):
         path = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
 
-        override = self._get_forced_state(pid)
-
-        if override is not None:
-            await self.set_proc_state(pid, override)
-            state = override
-        else:
-            state = await self.get_proc_state(pid)
-
-            if state == ProcState.SUSPICIOUS:
-                state = self._resolve_suspicious_state(pid)
+        state = await self._resolve_effective_state(pid)
 
         if state == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_mkdir_high
@@ -1152,7 +1152,12 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
-            os.mkdir(path, mode)
+            if state == ProcState.MEDIUM:
+                from guardfs.stage2.policy.medium import handle_mkdir_medium
+
+                await handle_mkdir_medium(path, mode, pid, self)
+            else:
+                os.mkdir(path, mode)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
@@ -1182,16 +1187,7 @@ class Passthrough(pyfuse3.Operations):
             )
             raise pyfuse3.FUSEError(errno.EACCES)
 
-        override = self._get_forced_state(pid)
-
-        if override is not None:
-            await self.set_proc_state(pid, override)
-            state = override
-        else:
-            state = await self.get_proc_state(pid)
-
-            if state == ProcState.SUSPICIOUS:
-                state = self._resolve_suspicious_state(pid)
+        state = await self._resolve_effective_state(pid)
 
         if state == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_rmdir_high
@@ -1205,7 +1201,12 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
-            os.rmdir(path)
+            if state == ProcState.MEDIUM:
+                from guardfs.stage2.policy.medium import handle_rmdir_medium
+
+                await handle_rmdir_medium(path, pid, self)
+            else:
+                os.rmdir(path)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
@@ -1627,8 +1628,9 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         pid = ctx.pid if ctx is not None else -1
+        state = await self._resolve_effective_state(pid)
 
-        if await self.get_proc_state(pid) == ProcState.HIGH:
+        if state == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_setattr_high
 
             if fields.update_mode:
@@ -1639,9 +1641,31 @@ class Passthrough(pyfuse3.Operations):
                 await handle_setattr_high(path, "CHOWN", pid, self)
             if fields.update_atime or fields.update_mtime:
                 await handle_setattr_high(path, "UTIME", pid, self)
-            return
+            raise pyfuse3.FUSEError(errno.EACCES)
 
         entry = self._pending_staging(inode, ctx)
+
+        if entry is None and state == ProcState.MEDIUM:
+            from guardfs.stage2.policy.medium import handle_setattr_medium
+
+            await handle_setattr_medium(path, pid, fields, attr, self)
+
+            if fields.update_mode:
+                self._emit(
+                    FsEvent(
+                        ts_ns=time.time_ns(),
+                        pid=pid,
+                        op="chmod",
+                        path=path,
+                        flags=stat_mod.S_IMODE(attr.st_mode),
+                    )
+                )
+            if fields.update_uid or fields.update_gid:
+                self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="chown", path=path))
+            if fields.update_atime or fields.update_mtime:
+                self._emit(FsEvent(ts_ns=time.time_ns(), pid=pid, op="utime", path=path))
+            return
+
         target_path = entry["staging_path"] if entry is not None else path
 
         try:

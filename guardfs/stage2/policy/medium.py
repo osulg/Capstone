@@ -220,6 +220,208 @@ def _phase_delay_ms(elapsed_sec: float, trusted: bool) -> int:
     return MEDIUM_DELAY_PHASES[-1][2 if trusted else 1]
 
 
+async def handle_mkdir_medium(path: str, mode: int, pid: int, ops) -> None:
+    """
+    MEDIUM 중 mkdir. 디렉터리 자체는 내용이 없어 복구 대상(원본 데이터)이
+    아니므로 생성은 실시간으로 진행하되, write와 동일한 경과시간 기반 지연을
+    적용해 대량/자동화된 디렉터리 생성을 늦춘다 (하위 파일에 대한 실제
+    보호는 handle_write_medium/handle_unlink_medium이 담당).
+    """
+
+    if pid not in ops._medium_entered_at:
+        ops._medium_entered_at[pid] = trio.current_time()
+
+    trusted = ops.is_trusted_process(pid)
+    elapsed = trio.current_time() - ops._medium_entered_at[pid]
+    delay_sec = _phase_delay_ms(elapsed, trusted) / 1000.0
+
+    await trio.sleep(delay_sec)
+
+    os.mkdir(path, mode)
+
+    print(f"[MEDIUM] pid={pid} path={path} mkdir → 지연 적용 후 생성 (trusted={trusted})")
+    log_medium_event(
+        pid, path, "MKDIR", "ALLOWED", f"지연 후 생성(trusted={trusted})"
+    )
+
+
+async def handle_rmdir_medium(path: str, pid: int, ops) -> None:
+    """
+    MEDIUM 중 rmdir은 실제로 지우지 않고 스테이징으로 옮긴다 (unlink와 동일한
+    패턴 — 규칙4). directory는 hardlink를 만들 수 없으므로 restore는
+    _restore_unlink와 달리 rename으로 처리한다 (_restore_rmdir).
+    """
+
+    staging_path = os.path.join(
+        ops._staging_dir,
+        f"rmdir_{pid}_{time.time_ns()}_{os.path.basename(path)}",
+    )
+
+    try:
+        os.rename(path, staging_path)
+    except FileNotFoundError:
+        # 이미 없는 디렉터리 — 조용히 무시
+        return
+
+    st = os.lstat(staging_path)
+    ops._rmdir_identity[staging_path] = (st.st_dev, st.st_ino)
+    ops._rmdir_staged[pid].append((path, staging_path))
+
+    print(f"[MEDIUM] pid={pid} path={path} rmdir 요청 → 스테이징 이동 (원본 보존)")
+    log_medium_event(
+        pid, path, "RMDIR", "STAGED", "삭제 요청을 스테이징으로 유도, 원본 보존"
+    )
+
+
+def _finalize_rmdir(pid: int, ops) -> None:
+    """LOW 복귀: 삭제를 확정하되 실패한 이력은 보존한다."""
+    remaining = []
+    for orig_path, staging_path in ops._rmdir_staged.pop(pid, []):
+        try:
+            st = os.lstat(staging_path)
+            expected = ops._rmdir_identity.get(staging_path)
+            if expected != (st.st_dev, st.st_ino):
+                raise OSError(errno.ESTALE, "삭제 staging 디렉터리 정체성 불일치")
+            os.rmdir(staging_path)
+            ops._rmdir_identity.pop(staging_path, None)
+            print(f"[COMMIT] pid={pid} path={orig_path} → 디렉터리 삭제 확정 (LOW 판정)")
+            log_medium_event(
+                pid, orig_path, "RMDIR", "CONFIRMED", "정상 판정 후 삭제 확정"
+            )
+        except FileNotFoundError:
+            ops._rmdir_identity.pop(staging_path, None)
+        except OSError as e:
+            remaining.append((orig_path, staging_path))
+            log_medium_event(pid, orig_path, "RMDIR", "FINALIZE_FAILED", str(e))
+    if remaining:
+        ops._rmdir_staged[pid].extend(remaining)
+
+
+def _restore_rmdir(pid: int, ops) -> None:
+    """
+    목적지를 덮어쓰지 않고 디렉터리를 복원한다. directory는 _restore_unlink처럼
+    hardlink로 비파괴적 복원을 할 수 없으므로, 목적지 존재 여부를 먼저 확인한
+    뒤 rename으로 복원한다.
+    """
+
+    entries = ops._rmdir_staged.pop(pid, [])
+    retained = []
+
+    for orig_path, staging_path in reversed(entries):
+        try:
+            st = os.lstat(staging_path)
+            expected = ops._rmdir_identity.get(staging_path)
+
+            if expected != (st.st_dev, st.st_ino):
+                raise OSError(errno.ESTALE, "복원 staging 디렉터리 정체성 불일치")
+
+            if os.path.lexists(orig_path):
+                raise FileExistsError(errno.EEXIST, "목적지에 새 항목 존재", orig_path)
+
+            os.rename(staging_path, orig_path)
+        except FileExistsError:
+            retained.append((orig_path, staging_path))
+
+            print(
+                f"[RESTORE CONFLICT] pid={pid} path={orig_path} "
+                f"→ 기존 항목 유지, 원본 보존={staging_path}"
+            )
+            log_medium_event(
+                pid,
+                orig_path,
+                "RMDIR",
+                "RESTORE_CONFLICT",
+                f"충돌 원본 보존: {staging_path}",
+            )
+            continue
+        except OSError as e:
+            retained.append((orig_path, staging_path))
+
+            log_medium_event(
+                pid,
+                orig_path,
+                "RMDIR",
+                "RESTORE_FAILED",
+                f"{e}; 원본 보존={staging_path}",
+            )
+            continue
+
+        ops._rmdir_identity.pop(staging_path, None)
+        print(f"[DROP] pid={pid} path={orig_path} → 삭제 취소, 디렉터리 복원")
+        log_medium_event(
+            pid, orig_path, "RMDIR", "RESTORED", "목적지를 덮어쓰지 않고 복원"
+        )
+
+    if retained:
+        ops._rmdir_staged[pid].extend(retained)
+
+
+async def handle_setattr_medium(path: str, pid: int, fields, attr, ops) -> None:
+    """
+    MEDIUM 중 chmod/chown/utime. 검증 전 PID가 대상의 권한/타임스탬프를
+    바꾸지 못하도록 실제 적용을 보류하고, commit 시점(_apply_pending_metadata)에
+    반영하거나 drop 시점에 폐기한다.
+    """
+
+    pending: dict = {}
+    actions = []
+
+    if fields.update_mode:
+        pending["mode"] = stat.S_IMODE(attr.st_mode)
+        actions.append(f"CHMOD(mode={pending['mode']:o})")
+    if fields.update_uid:
+        pending["uid"] = attr.st_uid
+        actions.append("CHOWN(uid)")
+    if fields.update_gid:
+        pending["gid"] = attr.st_gid
+        actions.append("CHOWN(gid)")
+    if fields.update_atime:
+        pending["atime_ns"] = attr.st_atime_ns
+        actions.append("UTIME(atime)")
+    if fields.update_mtime:
+        pending["mtime_ns"] = attr.st_mtime_ns
+        actions.append("UTIME(mtime)")
+
+    ops._pending_metadata[pid].append((path, pending))
+
+    action_str = ",".join(actions)
+    print(f"[MEDIUM] pid={pid} path={path} {action_str} → 지연 작업 보관")
+    log_medium_event(pid, path, "SETATTR", "BUFFERED", action_str)
+
+
+def _apply_pending_metadata(pid: int, ops) -> None:
+    """LOW 복귀: 보류된 chmod/chown/utime을 실제로 반영한다."""
+    for path, pending in ops._pending_metadata.pop(pid, []):
+        try:
+            if "mode" in pending:
+                os.chmod(path, pending["mode"])
+
+            if "uid" in pending or "gid" in pending:
+                os.chown(
+                    path,
+                    pending.get("uid", -1),
+                    pending.get("gid", -1),
+                    follow_symlinks=False,
+                )
+
+            if "atime_ns" in pending or "mtime_ns" in pending:
+                st = os.lstat(path)
+                os.utime(
+                    path,
+                    ns=(
+                        pending.get("atime_ns", st.st_atime_ns),
+                        pending.get("mtime_ns", st.st_mtime_ns),
+                    ),
+                    follow_symlinks=False,
+                )
+
+            log_medium_event(
+                pid, path, "SETATTR", "CONFIRMED", "정상 판정 후 메타데이터 반영"
+            )
+        except OSError as e:
+            log_medium_event(pid, path, "SETATTR", "APPLY_FAILED", str(e))
+
+
 def _retain_buffer_fd(pid: int, fd: int, ops) -> int:
     """핸들 종료와 경로 재사용에 영향받지 않는 commit 대상을 보관한다."""
     origins = ops._staging_origin_fd
@@ -748,6 +950,8 @@ async def commit_buffers(pid: int, ops) -> None:
 
         if not failed:
             _finalize_unlink(pid, ops)
+            _finalize_rmdir(pid, ops)
+            _apply_pending_metadata(pid, ops)
             log_medium_event(
                 pid,
                 "",
@@ -846,6 +1050,8 @@ async def drop_buffers(pid: int, ops) -> None:
                 log_medium_event(pid, staging_path, "DROP", "CLEANUP_FAILED", str(e))
 
         _restore_unlink(pid, ops)
+        _restore_rmdir(pid, ops)
+        ops._pending_metadata.pop(pid, None)
 
         print(f"[DROP] pid={pid} 버퍼 {len(dropped)}개 드롭 → 원본 보존")
         log_medium_event(
