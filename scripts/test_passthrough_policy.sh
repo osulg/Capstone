@@ -225,8 +225,33 @@ def test_medium_commit():
     class FakeOps:
         def __init__(self):
             self._write_buffer = defaultdict(list)
-            self._write_count = defaultdict(int)
+            self._write_buffer_bytes = defaultdict(int)
+            self._global_buffer_bytes = 0
+            self._medium_entered_at = {}
+            self._pid_trusted = {}
+            self._trunc_paths = defaultdict(set)
+
+            self._buffer_fds = defaultdict(dict)
+            self._buffer_new_files = defaultdict(dict)
+
             self._staging_pid = defaultdict(list)
+            self._staging_fh = {}
+            self._staging_origin_fd = {}
+            self._staging_recovery = defaultdict(list)
+            self._fd_map = {}
+            self._fh_info = {}
+
+            self._unlink_staged = defaultdict(list)
+            self._unlink_identity = {}
+            self._unlink_recovery = defaultdict(list)
+
+            self._rmdir_staged = defaultdict(list)
+            self._rmdir_identity = {}
+            self._pending_metadata = defaultdict(list)
+
+        def is_trusted_process(self, pid):
+            # commit/drop을 검증하므로 실제 PID 조회 없이 버퍼링한다.
+            return False
 
         async def trigger_high(self, pid, reason=""):
             raise RuntimeError(f"unexpected HIGH: {reason}")
@@ -261,8 +286,33 @@ def test_medium_drop():
     class FakeOps:
         def __init__(self):
             self._write_buffer = defaultdict(list)
-            self._write_count = defaultdict(int)
+            self._write_buffer_bytes = defaultdict(int)
+            self._global_buffer_bytes = 0
+            self._medium_entered_at = {}
+            self._pid_trusted = {}
+            self._trunc_paths = defaultdict(set)
+
+            self._buffer_fds = defaultdict(dict)
+            self._buffer_new_files = defaultdict(dict)
+
             self._staging_pid = defaultdict(list)
+            self._staging_fh = {}
+            self._staging_origin_fd = {}
+            self._staging_recovery = defaultdict(list)
+            self._fd_map = {}
+            self._fh_info = {}
+
+            self._unlink_staged = defaultdict(list)
+            self._unlink_identity = {}
+            self._unlink_recovery = defaultdict(list)
+
+            self._rmdir_staged = defaultdict(list)
+            self._rmdir_identity = {}
+            self._pending_metadata = defaultdict(list)
+
+        def is_trusted_process(self, pid):
+            # commit/drop을 검증하므로 실제 PID 조회 없이 버퍼링한다.
+            return False
 
         async def trigger_high(self, pid, reason=""):
             raise RuntimeError(f"unexpected HIGH: {reason}")
