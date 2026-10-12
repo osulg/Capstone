@@ -634,6 +634,15 @@ class Passthrough(pyfuse3.Operations):
             ):
                 return True
 
+        # 복구할 원래 경로를 rename이 덮어쓰지 않도록 보호한다.
+        for recovery in (self._unlink_recovery, self._staging_recovery):
+            for entries in recovery.values():
+                if any(
+                    self._path_is_within(orig_path, path)
+                    for orig_path, _staging_path in entries
+                ):
+                    return True
+
         # 목적지의 기존 핸들이 다른 파일을 가리키는 상태가 되는 것을
         # 현재 경로 기반 구현에서는 안전하게 처리하지 못함.
         for _pid, fh_path, _flags in self._fh_info.values():
