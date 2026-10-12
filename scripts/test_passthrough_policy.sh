@@ -19,7 +19,7 @@ usage() {
     echo
     echo "   1  MEDIUM small write buffering"
     echo "   2  MEDIUM new-file staging"
-    echo "   3  MEDIUM large write"
+    echo "   3  MEDIUM large O_TRUNC write buffering"
     echo "   4  MEDIUM -> LOW buffer commit"
     echo "   5  MEDIUM -> HIGH buffer drop"
     echo "   6  HIGH write blocking"
@@ -198,12 +198,15 @@ def test_medium_large_write():
     state_path = force_state("MEDIUM")
 
     try:
-        with mount_path.open("r+b", buffering=0) as handle:
+        with mount_path.open("w+b", buffering=0) as handle:
             written = handle.write(payload)
+            handle.seek(0)
+            pending = handle.read()
 
         actual = underlay_path.read_bytes()
         check("Large write acknowledged", written == len(payload), "full length", f"written={written}")
-        check("Large write applied", actual == payload, "underlay updated", f"size={len(actual)}")
+        check("Large O_TRUNC write buffered", actual == original, "original preserved", f"size={len(actual)}")
+        check("Large pending content", pending == payload, "writer sees pending data", f"size={len(pending)}")
     finally:
         state_path.unlink(missing_ok=True)
 
