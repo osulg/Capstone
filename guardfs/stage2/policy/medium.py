@@ -19,6 +19,7 @@ from guardfs.common.config import (
 )
 from guardfs.common.paths import FILESECURITY_LOG_PATH
 from guardfs.stage1.entropy import shannon_entropy
+from guardfs.stage1.trust import is_trusted_pid
 
 
 def log_medium_event(
@@ -186,10 +187,10 @@ async def handle_mkdir_medium(path: str, mode: int, pid: int, ops) -> None:
 
     os.mkdir(path, mode)
 
-    print(f"[MEDIUM] pid={pid} path={path} mkdir → 지연 적용 후 생성 (trusted={trusted})")
-    log_medium_event(
-        pid, path, "MKDIR", "ALLOWED", f"지연 후 생성(trusted={trusted})"
+    print(
+        f"[MEDIUM] pid={pid} path={path} mkdir → 지연 적용 후 생성 (trusted={trusted})"
     )
+    log_medium_event(pid, path, "MKDIR", "ALLOWED", f"지연 후 생성(trusted={trusted})")
 
 
 async def handle_rmdir_medium(path: str, pid: int, ops) -> None:
@@ -231,7 +232,9 @@ def _finalize_rmdir(pid: int, ops) -> None:
                 raise OSError(errno.ESTALE, "삭제 staging 디렉터리 정체성 불일치")
             os.rmdir(staging_path)
             ops._rmdir_identity.pop(staging_path, None)
-            print(f"[COMMIT] pid={pid} path={orig_path} → 디렉터리 삭제 확정 (LOW 판정)")
+            print(
+                f"[COMMIT] pid={pid} path={orig_path} → 디렉터리 삭제 확정 (LOW 판정)"
+            )
             log_medium_event(
                 pid, orig_path, "RMDIR", "CONFIRMED", "정상 판정 후 삭제 확정"
             )
@@ -499,7 +502,11 @@ async def handle_write_medium(
         on_disk_size = 0
 
     file_size = max(on_disk_size, off + len(buf))
-    trusted = ops.is_trusted_process(pid)
+
+    # 기존 경로 검사와 강한 신뢰 검사를 모두 통과해야
+    # 신뢰 프로세스의 크기 기반 버퍼링 예외를 적용 가능
+    trusted = ops.is_trusted_process(pid) and await is_trusted_pid(pid)
+
     group_name = classify_extension(path)
     group = EXTENSION_GROUPS[group_name]
 
@@ -705,9 +712,7 @@ def _unlink_pending_new_file(path: str, pid: int, ops) -> bool:
         ops._write_buffer_bytes[pid] = max(
             0, ops._write_buffer_bytes.get(pid, 0) - removed_bytes
         )
-        ops._global_buffer_bytes = max(
-            0, ops._global_buffer_bytes - removed_bytes
-        )
+        ops._global_buffer_bytes = max(0, ops._global_buffer_bytes - removed_bytes)
         ops._buffer_new_files[pid].pop(held_fd, None)
         ops._buffer_fds[pid].pop(identity, None)
         ops._trunc_paths.get(pid, set()).discard(path)
