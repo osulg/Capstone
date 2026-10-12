@@ -3,7 +3,7 @@ import multiprocessing
 import os
 import time
 
-TARGET = os.path.expanduser("~/test_mount")
+TARGET = os.path.expanduser(os.environ.get("MOUNT", "~/guardfs_runtime/mount"))
 def set_state(pid: int, state: str) -> None:
     with open(f"/tmp/guardfs_state_{pid}", "w") as f:
         f.write(state)
@@ -28,7 +28,7 @@ def medium_worker():
     print(f"[MED  WORKER] pid={pid} 시작 → 버퍼링 후 헤더 검증, 커밋")
     with open(f"{TARGET}/medium_file.txt", "w") as f:
         f.write("hello from MEDIUM " * 100)
-    print(f"[MED  WORKER] pid={pid} write 완료 → 1초 후 커밋 예정, MEDIUM 유지")
+    print(f"[MED  WORKER] pid={pid} write 완료 → 강제 MEDIUM 동안 staging 유지")
     time.sleep(13)
     print(f"[MED  WORKER] pid={pid} 종료")
 
@@ -67,15 +67,22 @@ if __name__ == "__main__":
     # HIGH는 SIGSTOP으로 멈추므로 타임아웃 후 강제 종료
     p_high.join(timeout=5)
     if p_high.is_alive():
-        p_high.terminate()
+        p_high.kill()
+        p_high.join(timeout=5)
         print("[HIGH WORKER] SIGSTOP 상태 → 강제 종료")
 
     p_med.join()
 
+    for worker in (p_low, p_med, p_high):
+        try:
+            os.unlink(f"/tmp/guardfs_state_{worker.pid}")
+        except FileNotFoundError:
+            pass
+
     print()
     print("=" * 50)
-    print("결과 확인: ls ~/test_underlay/")
+    print("결과 확인: ls ~/guardfs_runtime/underlay/")
     print("  low_file.txt    → 있어야 함 (즉시 저장)")
-    print("  medium_file.txt → 있어야 함 (1초 후 커밋)")
+    print("  medium_file.txt → 강제 MEDIUM 동안 underlay 미생성 (staging)")
     print("  high_file.txt   → 없어야 함 (차단)")
     print("=" * 50)
