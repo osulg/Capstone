@@ -1,11 +1,11 @@
 """
-CCCV EDR 대시보드 - RAG(Retrieval-Augmented Generation) 모듈
+HoldFS EDR 대시보드 - RAG(Retrieval-Augmented Generation) 모듈
 
 LLM에 넘길 근거(context)를 두 갈래로 검색한다.
 
 1. 이벤트 검색: 질문에 언급된 PID / 파일명을 기준으로 관련 이벤트를 찾고,
    PID 단위 요약(격상 경위, 동작/결과 통계, 대상 파일)을 만든다.
-2. 지식 검색: GuardFS 정책 / 격상 사유 / MITRE ATT&CK / 랜섬웨어 패밀리
+2. 지식 검색: HoldFS 정책 / 격상 사유 / MITRE ATT&CK / 랜섬웨어 패밀리
    지식 문서 중 질문과 이벤트에 가장 관련 있는 문서를 키워드 점수로 고른다.
 
 외부 의존성 없이 동작하도록 벡터 DB 대신 키워드 기반 검색을 사용한다.
@@ -109,7 +109,7 @@ KNOWLEDGE_BASE = [
         "keywords": ["t1485", "삭제", "delete", "unlink", "destruction", "파괴", "staged", "truncate"],
         "text": (
             "T1485: 데이터를 삭제·덮어써 복구 불가능하게 만드는 기법. 랜섬웨어는 암호화본을 만든 뒤 원본을 "
-            "unlink 하거나 truncate 하는 경우가 많다. GuardFS의 DELETE BLOCKED, UNLINK STAGED, "
+            "unlink 하거나 truncate 하는 경우가 많다. HoldFS의 DELETE BLOCKED, UNLINK STAGED, "
             "TRUNCATE BLOCKED 이벤트가 이에 해당한다."
         ),
     },

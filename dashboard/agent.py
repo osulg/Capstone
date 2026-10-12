@@ -1,14 +1,14 @@
 """
-CCCV EDR 에이전트
+HoldFS EDR 에이전트
 
-GuardFS가 남기는 로그를 tail 하면서 MEDIUM / HIGH 이벤트를 JSON으로 변환해
-대시보드 서버(POST /api/events)로 전송한다. GuardFS 코드는 수정하지 않는다.
+HoldFS가 남기는 로그를 tail 하면서 MEDIUM / HIGH 이벤트를 JSON으로 변환해
+대시보드 서버(POST /api/events)로 전송한다. HoldFS 코드는 수정하지 않는다.
 
 수집 소스
 1. ~/filesecurity.log (기본)
    medium.py / high.py 의 log_medium_event / log_high_event 가 쓰는
    [MEDIUM] / [HIGH] 블록 → 정책 수행 결과 (BUFFERED, BLOCKED, DROP ...)
-2. GuardFS 표준출력 로그 (선택, --stdout-log)
+2. HoldFS 표준출력 로그 (선택, --stdout-log)
    [STAGE2] / [WATCH] / [REEVAL] / [TRIGGER HIGH] / [TRUST] 줄 → 상태 격상 이벤트와
    그 이유(ML 점수, Stage1 탐지기, magic mismatch 등)
 
@@ -156,7 +156,7 @@ class SecurityLogParser:
 
 
 # --------------------------------------------------------------------------- #
-# GuardFS stdout 파서 (상태 격상과 이유)
+# HoldFS stdout 파서 (상태 격상과 이유)
 # --------------------------------------------------------------------------- #
 
 RE_SUSPECT = re.compile(r"\[STATE\] pid=(\d+) LOW -> SUSPICIOUS reason=(\S*)")
@@ -293,12 +293,12 @@ def run_demo(sender: Sender, delay: float) -> None:
 # --------------------------------------------------------------------------- #
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="CCCV EDR agent (GuardFS log → dashboard)")
+    ap = argparse.ArgumentParser(description="HoldFS EDR agent (HoldFS log → dashboard)")
     ap.add_argument("--server", default="http://127.0.0.1:5000")
     ap.add_argument("--security-log", default="~/filesecurity.log",
-                    help="GuardFS MEDIUM/HIGH 정책 로그 (기본: ~/filesecurity.log)")
+                    help="HoldFS MEDIUM/HIGH 정책 로그 (기본: ~/filesecurity.log)")
     ap.add_argument("--stdout-log", default=None,
-                    help="GuardFS 표준출력을 tee로 저장한 파일 (격상 이유 수집용)")
+                    help="HoldFS 표준출력을 tee로 저장한 파일 (격상 이유 수집용)")
     ap.add_argument("--from-start", action="store_true",
                     help="로그 파일을 처음부터 읽어 기존 이벤트도 전송")
     ap.add_argument("--interval", type=float, default=0.5)

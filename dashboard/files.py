@@ -1,7 +1,7 @@
 """
 파일 상태 탭용 폴더 스캐너 (읽기 전용)
 
-보호 폴더(GuardFS underlay)와 보호 없는 비교 폴더의 파일을 읽어
+보호 폴더(HoldFS underlay)와 보호 없는 비교 폴더의 파일을 읽어
 엔트로피로 정상 / 암호화 의심을 판정한다.
 
 안전 규칙
@@ -17,7 +17,7 @@ import os
 import sys
 from collections import Counter
 
-# GuardFS와 같은 엔트로피 기준을 쓴다 (guardfs/common/config.py).
+# HoldFS와 같은 엔트로피 기준을 쓴다 (guardfs/common/config.py).
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 try:
     from guardfs.common.config import ENTROPY_THRESHOLD
@@ -29,7 +29,7 @@ MIN_SAMPLE_BYTES = 64      # 이보다 작으면 엔트로피 판정이 무의�
 PREVIEW_BYTES = 512
 HEX_PREVIEW_BYTES = 96
 MAX_FILES = 300
-# 보호 폴더 최상위의 honeypot/ 은 GuardFS 미끼 파일 (guardfs/common/paths.get_honeypot_dir).
+# 보호 폴더 최상위의 honeypot/ 은 HoldFS 미끼 파일 (guardfs/common/paths.get_honeypot_dir).
 # 목록에는 '미끼 파일'로 따로 표시하고, 정상/암호화 판정 대상에서는 뺀다.
 HONEYPOT_DIR = "honeypot"
 RANSOM_EXTS = {".locked", ".enc", ".encrypted", ".crypt", ".crypted", ".lock", ".ransom"}
@@ -37,7 +37,7 @@ RANSOM_EXTS = {".locked", ".enc", ".encrypted", ".crypt", ".crypted", ".lock", "
 FOLDERS = [
     {
         "key": "protected",
-        "label": "보호 폴더 (GuardFS)",
+        "label": "보호 폴더 (HoldFS)",
         "path": os.path.expanduser(os.environ.get("DASH_PROTECTED_DIR", "~/guardfs_runtime/underlay")),
     },
     {

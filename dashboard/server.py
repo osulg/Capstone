@@ -1,7 +1,7 @@
 """
-CCCV EDR Dashboard 서버
+HoldFS EDR Dashboard 서버
 
-- 에이전트(agent.py)가 GuardFS 정책 수행 결과를 JSON으로 POST /api/events 에 전송
+- 에이전트(agent.py)가 HoldFS 정책 수행 결과를 JSON으로 POST /api/events 에 전송
 - 보안팀 대시보드(/)가 2초마다 이벤트를 폴링해 실시간 표시
 - AI 보안 분석관(POST /api/chat)이 이벤트 로그 + 지식 베이스를 RAG로 검색해 LLM에 질의
 
@@ -43,9 +43,9 @@ _llm_client = None
 if OpenAI is not None and os.environ.get("OPENAI_API_KEY"):
     _llm_client = OpenAI()
 
-SYSTEM_PROMPT = """당신은 엔드포인트 보안 분석 전문가입니다. CCCV EDR 시스템의 보안 이벤트 로그를 분석하여 보안팀에게 인사이트를 제공합니다.
+SYSTEM_PROMPT = """당신은 엔드포인트 보안 분석 전문가입니다. HoldFS EDR 시스템의 보안 이벤트 로그를 분석하여 보안팀에게 인사이트를 제공합니다.
 
-CCCV 시스템 개요:
+HoldFS 시스템 개요:
 - FUSE 기반 실시간 파일 보호 정책 엔진
 - Stage1: 엔트로피 탐지 / 삭제 빈도 / 허니팟 접근 → score ≥ 1이면 ML 평가
 - Stage2: 동적 RF + 정적 RF 앙상블 (가중치 0.5/0.5)
@@ -67,7 +67,7 @@ MITRE ATT&CK 주요 매핑:
 
 한국어로 답변하되, 기술 용어는 영어 병기를 사용하세요. 답변은 명확하고 간결하게 작성하세요."""
 
-RAG_INSTRUCTION = """아래는 질문과 관련해 검색된 CCCV EDR 이벤트 로그와 참고 지식입니다.
+RAG_INSTRUCTION = """아래는 질문과 관련해 검색된 HoldFS EDR 이벤트 로그와 참고 지식입니다.
 반드시 이 근거에 있는 시각, PID, 파일 경로, 점수, 격상 사유를 인용해서 답하세요.
 근거에 없는 사실은 추측이라고 명시하세요. 마크다운(### 소제목, **굵게**, 번호 목록)으로 작성하세요.
 
@@ -246,7 +246,7 @@ def chat():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="CCCV EDR Dashboard server")
+    parser = argparse.ArgumentParser(description="HoldFS EDR Dashboard server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
     args = parser.parse_args()

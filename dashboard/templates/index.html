@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CCCV EDR Dashboard</title>
+<title>HoldFS EDR Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Ctext x='16' y='21' font-size='13' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'%3ECC%3C/text%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -359,7 +359,7 @@
 <header>
   <div class="logo">
     <div class="logo-icon">CC</div>
-    <h1>CCCV EDR<span>Endpoint Detection &amp; Response</span></h1>
+    <h1>HoldFS EDR<span>Endpoint Detection &amp; Response</span></h1>
   </div>
   <div class="header-right">
     <div class="live-dot" id="live">실시간 모니터링</div>
@@ -453,7 +453,7 @@
         <div class="folder-head">
           <div class="folder-icon">🛡️</div>
           <div class="folder-title">
-            <h3>보호 폴더 (GuardFS)</h3>
+            <h3>보호 폴더 (HoldFS)</h3>
             <code id="path-protected">-</code>
           </div>
           <div class="folder-sum" id="sum-protected"></div>
@@ -496,15 +496,9 @@
         <button class="ai-close" id="ai-close" title="닫기" aria-label="AI 분석관 닫기">✕</button>
       </div>
     </div>
-    <div class="quick">
-      <button data-q="현재 이벤트 로그를 기반으로 위협 분석을 해줘. 어떤 프로세스가 언제, 왜 MEDIUM/HIGH로 격상됐는지 공격 진행 경위를 정리해줘.">🔍 위협 분석</button>
-      <button data-q="탐지된 행위를 MITRE ATT&CK 기법에 매핑하고 각 기법의 근거 이벤트를 알려줘.">📊 ATT&amp;CK 매핑</button>
-      <button data-q="지금 상황에서 보안팀이 즉시 취해야 할 대응 방안과 추가 모니터링 권고사항을 알려줘.">🛡️ 대응 방안</button>
-      <button data-q="관찰된 행위 패턴과 가장 유사한 랜섬웨어 패밀리를 분석해줘.">🧬 패밀리 분석</button>
-    </div>
     <div class="chat" id="chat">
       <div class="intro">
-        <b>⚡ CCCV AI 보안 분석관</b>
+        <b>⚡ HoldFS AI 보안 분석관</b>
         현재 수신된 EDR 이벤트를 기반으로 침입 시나리오를 분석합니다.<br>
         위협 분석, MITRE ATT&amp;CK 매핑, 대응 방안을 물어보세요.
         표의 PID를 클릭하면 해당 프로세스를 바로 분석합니다.<br>
@@ -741,7 +735,7 @@
   // ── 파일 상태 (/api/files, 읽기 전용) ──
   const FILE_POLL_MS = 2000;
   const files = { data: null, selected: {}, preview: {}, previewKey: {} };
-  // 비어 있을 때 안내할 시뮬레이터 실행 경로 (보호 폴더는 마운트를 거쳐야 GuardFS가 개입한다)
+  // 비어 있을 때 안내할 시뮬레이터 실행 경로 (보호 폴더는 마운트를 거쳐야 HoldFS가 개입한다)
   const SIM_TARGET = {
     protected: '~/guardfs_runtime/mount/sim_target',
     unprotected: '~/guardfs_demo/unprotected/sim_target',
