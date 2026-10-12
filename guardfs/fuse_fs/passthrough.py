@@ -514,10 +514,20 @@ class Passthrough(pyfuse3.Operations):
         *,
         preserve_high: bool = False,
         register_medium: bool = False,
+        respect_forced: bool = False,
+        expected_forced: ProcState | None = None,
     ) -> bool:
         """PID의 GuardFS 상태를 변경하고 상태 변경 성공 여부를 반환한다."""
 
         async with self._pid_lock:
+            if (
+                expected_forced is not None
+                and self._get_forced_state(pid) != expected_forced
+            ):
+                return False
+            if respect_forced and self._get_forced_state(pid) is not None:
+                return False
+
             prev = self._proc_state.get(pid, ProcState.LOW)  # 이전 상태 저장
 
             if preserve_high and prev == ProcState.HIGH:
@@ -536,10 +546,23 @@ class Passthrough(pyfuse3.Operations):
 
             return True
 
-    async def trigger_high(self, pid: int, reason: str = "") -> None:
+    async def trigger_high(
+        self,
+        pid: int,
+        reason: str = "",
+        *,
+        respect_forced: bool = False,
+        expected_forced: ProcState | None = None,
+    ) -> None:
+        changed = await self.set_proc_state(
+            pid,
+            ProcState.HIGH,
+            respect_forced=respect_forced,
+            expected_forced=expected_forced,
+        )
+        if not changed:
+            return
         print(f"[TRIGGER HIGH] pid={pid} reason={reason}")
-
-        await self.set_proc_state(pid, ProcState.HIGH)
         from guardfs.stage2.policy.high import handle_high_enter
 
         await handle_high_enter(pid, self, reason)
@@ -569,7 +592,22 @@ class Passthrough(pyfuse3.Operations):
         override = self._get_forced_state(pid)
 
         if override is not None:
-            await self.set_proc_state(pid, override)
+            if override == ProcState.HIGH:
+                # 강제 HIGH도 정상 HIGH 진입과 동일하게 pending을 폐기한다.
+                await self.trigger_high(
+                    pid, reason="forced_state", expected_forced=override
+                )
+                state = await self.get_proc_state(pid)
+                if state != ProcState.HIGH:
+                    # 잠금 대기 중 override가 바뀌어 적용하지 못한 경우
+                    # 최신 override 및 신뢰 정책을 다시 해석한다.
+                    return await self._resolve_effective_state(pid)
+                return state
+            await self.set_proc_state(
+                pid,
+                override,
+                register_medium=(override == ProcState.MEDIUM),
+            )
             return override
 
         state = await self.get_proc_state(pid)

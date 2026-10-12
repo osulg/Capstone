@@ -322,32 +322,48 @@ test_open_handle_rename() {
 
     python_output="$(python3 - <<'PY' 2>/tmp/guardfs-test-error
 import os
+from pathlib import Path
+
+from guardfs.common.paths import get_forced_state_path
 
 old_path = os.environ["GUARDFS_TEST_OLD"]
 new_path = os.environ["GUARDFS_TEST_NEW"]
+state_path = Path(get_forced_state_path(os.getpid()))
 
-with open(old_path, "w+b") as handle:
-    handle.write(b"before rename\n")
-    handle.flush()
-    inode_before = os.fstat(handle.fileno()).st_ino
-    os.rename(old_path, new_path)
-    handle.seek(0)
-    before = handle.read()
-    handle.seek(0, os.SEEK_END)
-    handle.write(b"after rename\n")
-    handle.flush()
-    inode_after = os.fstat(handle.fileno()).st_ino
-    handle.seek(0)
-    final = handle.read()
+# 시스템 신뢰 판정과 무관하게 이번 테스트의 Python PID만 LOW로 고정한다.
+# 기존 override는 덮어쓰지 않는다.
+with state_path.open("x", encoding="utf-8") as state_file:
+    state_file.write("LOW")
 
-if before != b"before rename\n":
-    raise RuntimeError(f"unexpected pre-append content: {before!r}")
-if final != b"before rename\nafter rename\n":
-    raise RuntimeError(f"unexpected final content: {final!r}")
-if inode_before != inode_after:
-    raise RuntimeError(f"inode changed: {inode_before} -> {inode_after}")
+try:
+    with open(old_path, "w+b") as handle:
+        handle.write(b"before rename\n")
+        handle.flush()
+        inode_before = os.fstat(handle.fileno()).st_ino
+        os.rename(old_path, new_path)
+        handle.seek(0)
+        before = handle.read()
+        handle.seek(0, os.SEEK_END)
+        handle.write(b"after rename\n")
+        handle.flush()
+        inode_after = os.fstat(handle.fileno()).st_ino
+        handle.seek(0)
+        final = handle.read()
 
-print(f"inode={inode_before} content_ok")
+    if before != b"before rename\n":
+        raise RuntimeError(f"unexpected pre-append content: {before!r}")
+    if final != b"before rename\nafter rename\n":
+        raise RuntimeError(f"unexpected final content: {final!r}")
+    if inode_before != inode_after:
+        raise RuntimeError(f"inode changed: {inode_before} -> {inode_after}")
+
+    reopened = Path(new_path).read_bytes()
+    if reopened != final:
+        raise RuntimeError(f"unexpected reopened content: {reopened!r}")
+
+    print(f"inode={inode_before} content_ok forced_LOW")
+finally:
+    state_path.unlink(missing_ok=True)
 PY
 )"
     local python_rc=$?

@@ -209,6 +209,23 @@ async def stage2_worker(recv_chan, ops) -> None:
             f"[ML] pid={pid} 동적 분석 실패 → ML 판정·타임아웃 커밋 보류, 재평가 예정"
         )
 
+    async def defer_forced_state(pid: int) -> bool:
+        """강제 상태 중 자동 판정을 보류하고 해제 후 재평가 대상을 보존한다."""
+        async with medium_lock:
+            forced = ops._get_forced_state(pid)
+            if forced is None:
+                return False
+            if forced == ProcState.MEDIUM:
+                medium_pids.setdefault(pid, trio.current_time())
+            elif pid not in medium_pids:
+                watch_pids.setdefault(pid, trio.current_time())
+        if forced == ProcState.HIGH:
+            await ops.trigger_high(
+                pid, reason="forced_state", expected_forced=ProcState.HIGH
+            )
+            await discard_if_high(pid)
+        return True
+
     async def intake_loop(nursery: trio.Nursery) -> None:
         async with recv_chan:
             while True:
@@ -223,12 +240,18 @@ async def stage2_worker(recv_chan, ops) -> None:
                 # 큐 대기 중 추가된 행동까지 반영한 최신 피처 사용
                 features = ops._pid_features.get(pid) or item.get("features") or {}
 
+                if await defer_forced_state(pid):
+                    continue
+
                 if await discard_if_high(pid):
                     continue
 
                 dyn_score, stat_score, score = await score_pid(pid, features)
 
                 # 정적 점수를 계산하는 동안 HIGH가 될 수 있음
+                if await defer_forced_state(pid):
+                    continue
+
                 if await discard_if_high(pid):
                     print(f"[STAGE2] pid={pid} 이미 HIGH → 평가 결과 적용 생략")
                     continue
@@ -254,12 +277,13 @@ async def stage2_worker(recv_chan, ops) -> None:
                         if score >= STAGE2_HIGH_THRESHOLD
                         else f"dyn_only={dyn_score:.3f}"
                     )
-                    await ops.trigger_high(pid, reason=reason)
+                    await ops.trigger_high(pid, reason=reason, respect_forced=True)
                 elif score >= STAGE2_MEDIUM_THRESHOLD:
                     changed = await ops.set_proc_state(
                         pid,
                         ProcState.MEDIUM,
                         preserve_high=True,
+                        respect_forced=True,
                         register_medium=True,
                     )
 
@@ -311,6 +335,9 @@ async def stage2_worker(recv_chan, ops) -> None:
 
             # SUSPICIOUS 관찰 창: 최신 피처로 재채점해 올라가면 승격, 끝까지 낮으면 LOW 복귀
             for pid in list(watch_pids):
+                if await defer_forced_state(pid):
+                    continue
+
                 if await discard_if_high(pid):
                     continue
 
@@ -323,6 +350,9 @@ async def stage2_worker(recv_chan, ops) -> None:
 
                 features = ops._pid_features.get(pid, {})
                 dyn_score, stat_score, score = await score_pid(pid, features)
+
+                if await defer_forced_state(pid):
+                    continue
 
                 if await discard_if_high(pid):
                     continue
@@ -351,17 +381,14 @@ async def stage2_worker(recv_chan, ops) -> None:
                         if score >= STAGE2_HIGH_THRESHOLD
                         else f"watch_dyn_only={dyn_score:.3f}"
                     )
-                    watch_pids.pop(pid, None)
-
-                    await ops.trigger_high(pid, reason=reason)
+                    await ops.trigger_high(pid, reason=reason, respect_forced=True)
 
                 elif score >= STAGE2_MEDIUM_THRESHOLD:
-                    watch_pids.pop(pid, None)
-
                     changed = await ops.set_proc_state(
                         pid,
                         ProcState.MEDIUM,
                         preserve_high=True,
+                        respect_forced=True,
                         register_medium=True,
                     )
 
@@ -369,20 +396,22 @@ async def stage2_worker(recv_chan, ops) -> None:
                         await discard_if_high(pid)
                         continue
 
+                    watch_pids.pop(pid, None)
                     print(f"[WATCH] pid={pid} → MEDIUM (score={score:.3f})")
 
                 elif elapsed > STAGE2_WATCH_TIMEOUT_SEC:
-                    watch_pids.pop(pid, None)
-
                     changed = await ops.set_proc_state(
                         pid,
                         ProcState.LOW,
                         preserve_high=True,
+                        respect_forced=True,
                     )
 
                     if not changed:
                         await discard_if_high(pid)
                         continue
+
+                    watch_pids.pop(pid, None)
 
                     # SUSPICIOUS 관찰 중 선제 보호로 버퍼링된 내용을 확정한다.
                     await commit_buffers(pid, ops)
@@ -402,6 +431,9 @@ async def stage2_worker(recv_chan, ops) -> None:
                 )
 
             for pid in sorted_pids:
+                if await defer_forced_state(pid):
+                    continue
+
                 if await discard_if_high(pid):
                     continue
 
@@ -413,6 +445,9 @@ async def stage2_worker(recv_chan, ops) -> None:
 
                 features = ops._pid_features.get(pid, {})
                 dyn_score, stat_score, score = await score_pid(pid, features)
+
+                if await defer_forced_state(pid):
+                    continue
 
                 if await discard_if_high(pid):
                     continue
@@ -449,7 +484,7 @@ async def stage2_worker(recv_chan, ops) -> None:
                         f"dyn={dyn_score:.3f} → HIGH 격상 ({reason})"
                     )
 
-                    await ops.trigger_high(pid, reason=reason)
+                    await ops.trigger_high(pid, reason=reason, respect_forced=True)
                     await discard_if_high(pid)
                     continue
 
@@ -458,6 +493,7 @@ async def stage2_worker(recv_chan, ops) -> None:
                         pid,
                         ProcState.LOW,
                         preserve_high=True,
+                        respect_forced=True,
                     )
 
                     if not changed:
@@ -475,7 +511,7 @@ async def stage2_worker(recv_chan, ops) -> None:
                 if need_high:
                     print(f"[REEVAL] pid={pid} 구조 깨짐 → 버퍼 드롭 + HIGH 격상")
 
-                    await ops.trigger_high(pid, reason="magic_mismatch_reeval")
+                    await ops.trigger_high(pid, reason="magic_mismatch_reeval", respect_forced=True)
                     await discard_if_high(pid)
                     continue
 

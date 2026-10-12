@@ -170,8 +170,6 @@ def test_medium_new_file_staging():
     name = f"policy_medium_create_{stamp}.txt"
     mount_path = mount / name
     underlay_path = underlay / name
-    staging_dir = Path("/tmp/guardfs_staging")
-    before = set(staging_dir.glob("fh_*")) if staging_dir.exists() else set()
     state_path = force_state("MEDIUM")
 
     try:
@@ -179,21 +177,13 @@ def test_medium_new_file_staging():
             written = handle.write(b"STAGED-DATA\n")
             absent_while_open = not underlay_path.exists()
 
-        deadline = time.monotonic() + 2.0
-
-        while time.monotonic() < deadline:
-            after = set(staging_dir.glob("fh_*")) if staging_dir.exists() else set()
-
-            if after == before:
-                break
-
-            time.sleep(0.05)
-
-        after = set(staging_dir.glob("fh_*")) if staging_dir.exists() else set()
+        # release는 판정 전 데이터를 폐기하지 않는다. 같은 PID로 다시
+        # 열어 pending write가 보존되어 있는지 확인한다.
+        after_close = mount_path.read_bytes()
         check("Staged create acknowledged", written == 12, "full length", f"written={written}")
         check("Underlay absent while open", absent_while_open, "not created", "created too early")
         check("Underlay absent after close", not underlay_path.exists(), "not created", "unexpected target exists")
-        check("Staging release cleanup", after == before, "no new staging file", f"new={after - before}")
+        check("Staging data preserved after close", after_close == b"STAGED-DATA\n", "pending content readable", f"content={after_close!r}")
     finally:
         state_path.unlink(missing_ok=True)
 
@@ -585,7 +575,7 @@ fi
 
 if [ "$TEST_NO" = "4" ] || [ "$TEST_NO" = "5" ]; then
     echo "NOTE: this test directly verifies commit/drop policy functions."
-    echo "      Forced MEDIUM state alone does not register Stage2 reevaluation."
+    echo "      Forced MEDIUM remains pending until the override is removed."
 fi
 echo "============================================================"
 
