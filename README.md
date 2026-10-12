@@ -1,3 +1,110 @@
+# HoldFS — FUSE 기반 파일 공격형 악성코드 대응 정책 엔진
+
+FUSE 기반 랜섬웨어(파일 공격형 악성코드) 대응 파일 시스템.
+
+파일 I/O를 가로채 프로세스별 위험도를 실시간으로 평가하고,
+**LOW → MEDIUM → HIGH** 3단계 정책으로 판정 전 원본을 보존하고 악성 행위를 차단한다.
+이 브랜치는 그 위에 **보안팀용 EDR 대시보드(실시간 이벤트 + AI 분석관)** 와 검증 도구를 더한다.
+
+> 본 시스템은 사용자 공간에서 "판정 전 원본 보존" 정책과 ML 판정 파이프라인의 효과를 검증하기 위한 PoC이다.
+
+---
+
+## 이 브랜치(`feature/edr-dashboard`)에서 바뀐 것
+
+### 1. HoldFS EDR 대시보드 (`dashboard/`)
+
+HoldFS가 남기는 로그를 에이전트가 읽어 JSON으로 서버에 보내고, 웹 화면에서 실시간으로 보여준다.
+HoldFS 탐지·정책 코드(`guardfs/`)는 대시보드 때문에 바뀌지 않는다.
+
+```text
+HoldFS ──(~/filesecurity.log, stdout)──▶ agent.py ──JSON──▶ server.py ──▶ 브라우저
+                                                             └─ /api/chat: 이벤트·지식 검색(RAG) → LLM
+```
+
+화면은 왼쪽 탭으로 나뉜다.
+
+| 탭 | 내용 |
+|---|---|
+| **이벤트** | MEDIUM/HIGH 격상, 버퍼링·차단·SIGSTOP, LOW 복귀를 실시간 표로 표시. 격상 사유(Stage1 탐지기, ML dyn/stat/score, HIGH 사유)와 대상 파일 전체 경로 포함. 필터: HIGH / MEDIUM / 격상 이력 / 허니팟 |
+| **파일 상태** | 보호 폴더(HoldFS underlay)와 보호 없는 비교 폴더를 나란히 표시. 파일 앞부분 엔트로피로 정상 / 암호화 의심 판정, 미리보기(텍스트·hex), 허니팟 파일은 🍯 미끼 파일로 구분. 읽기 전용 |
+| **AI 보안 분석관** | 질문에 언급된 PID의 이벤트와 지식 문서(정책, 격상 사유, MITRE ATT&CK, 패밀리 특성)를 검색(RAG)해 LLM에 전달. OpenAI 호환 API(Gemini / Groq / OpenAI) 지원, 키가 없으면 규칙 기반 로컬 분석. 표의 PID를 클릭해 바로 분석 |
+
+- **허니팟 이벤트**: HoldFS의 `[HONEYPOT] … blocked` 차단과 Stage1 `HoneypotDetector` 탐지를 이벤트로 표시.
+- **`run_all.sh`**: 서버 + HoldFS + 에이전트를 한 번에 실행. 이전 실행분·끊어진 마운트 정리, LLM API 키 비공개 입력, Ctrl+C로 전체 종료.
+
+자세한 사용법: [`dashboard/README.md`](dashboard/README.md)
+
+### 2. 검증 도구
+
+| 파일 | 용도 |
+|---|---|
+| `experiments/simulators/sim_honeypot_mix.py` | 자기가 만든 테스트 파일을 난수로 덮어쓰면서 허니팟 미끼 파일 접근을 시도하는 혼합 시뮬레이터. 실제 암호화·키·랜섬노트 없음 |
+
+> `main`/`develop`의 MEDIUM 정책 강화와 버그 수정(이벤트 로거 bytes 직렬화, Stage2 HIGH→LOW 강등)은
+> 이 브랜치의 베이스에 이미 포함되어 있다.
+
+---
+
+## 빠른 실행
+
+```bash
+cd ~/Capstone
+./scripts/setup.sh                                   # 최초 1회 (venv, FUSE 등)
+source venv/bin/activate
+pip install -r dashboard/requirements.txt            # flask, openai
+
+bash dashboard/run_all.sh                            # 터미널 1: 서버 + HoldFS + 에이전트
+# 브라우저: http://127.0.0.1:5000  (다른 포트: DASH_PORT=5050 bash dashboard/run_all.sh)
+```
+
+다른 터미널에서 테스트:
+
+```bash
+# 보호 폴더 (반드시 HoldFS 마운트 경로로 실행)
+python3 experiments/simulators/sim_highentropy.py ~/guardfs_runtime/mount/sim_target --keep
+# 보호 없는 비교 폴더 → 대시보드 '파일 상태' 탭에서 나란히 확인
+python3 experiments/simulators/sim_highentropy.py ~/guardfs_demo/unprotected/sim_target --keep
+# 허니팟 동작 검증
+bash scripts/stage1/test_honeypot_behavior.sh
+```
+
+- 런타임 경로: mount `~/guardfs_runtime/mount`, underlay `~/guardfs_runtime/underlay`
+  (디렉터리·모듈 이름은 아직 `guardfs`를 쓴다. 제품명 HoldFS는 화면 표기에 적용한 단계다.)
+- HIGH로 판정된 프로세스는 SIGSTOP 상태로 남는다. `kill -9 <PID>`로 정리한다.
+- `scripts/run_sample.sh` / `collect_one.sh`는 **수집 모드(`--collect-only`)** 라 탐지·정책이 꺼져 있다. 탐지 시연에는 쓰지 않는다.
+
+---
+
+## 검증 결과
+
+| 시나리오 | HoldFS 반응 | 원본 |
+|---|---|---|
+| `sim_highentropy.py` — 홈 경로(비신뢰) 실행 | 선제 MEDIUM → 첫 덮어쓰기에서 `high_entropy` 로 즉시 HIGH → write 차단 + SIGSTOP | 피해 0개 |
+| `sim_highentropy.py` — `/usr/local/bin` + `/usr/bin/python3`(신뢰) 실행 | LOW로 시작 → Stage1 `EntropyDetector` → `.locked` rename은 Stage1 사전 검사(`ExtChangeDetector`)로 차단 → 관찰 창 재채점에서 **ML 판정 `watch_dyn_only=0.535`로 HIGH** | 첫 파일 1개 변조 (판정 전 LOW write 반영) |
+| `test_honeypot_behavior.sh` | 허니팟 읽기·쓰기·삭제·rename 차단, 정상 파일 오탐 없음 | **25/25 PASS** |
+| Infection Monkey 랜섬웨어 시뮬레이션 (비트 반전, 엔트로피 변화 없음) | 선제 MEDIUM으로 `.txt` 쓰기 버퍼링 → `.docx` 헤더 손상으로 `magic number 불일치` → HIGH, 버퍼 드롭, rename 차단, SIGSTOP | 내용 보존 (버퍼 드롭) |
+| `workload_guardfs.sh` (정상 업무) | MEDIUM/HIGH 격상 없이 완료 | — |
+
+---
+
+## 알려진 문제 / 한계
+
+- **MEDIUM 구간의 이름 변경**: rename은 HIGH 상태에서만 차단되고, MEDIUM 동안에는 반영된다.
+  그래서 HIGH 격상 전 MEDIUM 구간에서 바뀐 파일명(예: Infection Monkey의 `.m0nk3y`)은 반영될 수 있다.
+  **파일 내용은 버퍼 드롭으로 보존**되지만 이름은 바뀔 수 있다. (`.m0nk3y`는 확장자 사전 차단 목록에 없음)
+- **신뢰 경로 목록 불일치**: `guardfs/stage1/trust.py`(`is_trusted_pid`, dpkg 검증 포함)와
+  `guardfs/common/config.py`(`is_trusted_process`, 경로만)의 신뢰 경로가 다르다. 같은 프로세스를 다르게 판정할 수 있다.
+- **신뢰 프로세스의 첫 write**: 신뢰 프로세스는 SUSPICIOUS여도 LOW로 취급되어, ML이 HIGH를 판정하기 전의 write가 디스크에 반영된다.
+- **프로세스를 나눠 쓰는 공격**: 파일마다 새 프로세스로 처리하는 방식(시스템 도구 악용 등)은 PID 단위 행동 탐지가 약해질 수 있다.
+- **PoC 범위**: FUSE의 사용자-커널 전환 오버헤드, root 권한 공격자의 마운트 해제·하부 저장소 직접 접근은 범위 밖이다. 향후 eBPF 또는 커널 미니필터 계층으로 이식해 성능과 보안성을 확보하는 것이 발전 방향이다.
+- **대시보드**: 이벤트는 서버 메모리에만 저장된다(서버 재시작 시 사라짐). 인증 기능이 없으므로 신뢰할 수 있는 네트워크에서만 사용한다.
+
+---
+
+<details>
+<summary>이전 README (MEDIUM 정책 강화 내역, 버그 수정, 아키텍처, 정책 설명)</summary>
+
 # 엔드포인트 위협 대응을 위한 FUSE 기반 실시간 파일 보호 정책 엔진
 
 FUSE 기반 랜섬웨어 탐지 파일시스템
@@ -459,3 +566,5 @@ LOW ──(Stage1 score ≥ 1)──▶ SUSPICIOUS ──(ML score ≥ 0.3)─�
 - `E_sum` / `D_sum` 누적 임계치 기반 Stage1 score 세분화
 - 대용량 파일(≥ 1 MB) 스트리밍 버퍼 지원
 - 단위 테스트 확장 (stage2_worker 모킹)
+
+</details>
