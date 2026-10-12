@@ -1379,7 +1379,6 @@ class Passthrough(pyfuse3.Operations):
             self._staging_fh[fh] = staging_path
             self._staging_pid[pid].append(staging_path)
             self._staging_origin_fd[fd] = origin_fd
-            self._trunc_paths[pid].add(path)
             try:
                 self._defer_truncate(pid, path, 0, fd)
             except OSError as e:
@@ -1393,6 +1392,10 @@ class Passthrough(pyfuse3.Operations):
                 os.close(origin_fd)
                 os.unlink(staging_path)
                 raise pyfuse3.FUSEError(e.errno) from e
+
+            # 지연 작업 보관이 성공한 경로만 기록한다. 실패한 open이
+            # rename 목적지를 막거나 기존 pending 기록을 지우지 않도록 한다.
+            self._trunc_paths[pid].add(path)
 
             self._emit(
                 FsEvent(
