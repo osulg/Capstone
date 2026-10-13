@@ -51,6 +51,8 @@ fi
 source "$VENV_DIR/bin/activate"
 
 echo "[OK] Python virtual environment activated"
+echo "[INFO] Python version : $(python3 --version)"
+echo "[INFO] Python path    : $(which python3)"
 
 # ----------------------------------------
 # 6. 런타임 디렉터리 확인
@@ -94,7 +96,7 @@ echo "========================================"
 echo ""
 
 # 추가 인자는 그대로 전달 (예: --collect-only --run-id <ID>)
-python3 guardfs/fuse_fs/passthrough.py \
+"$VENV_DIR/bin/python3" guardfs/fuse_fs/passthrough.py \
     "$MOUNT_DIR" \
     "$UNDERLAY_DIR" \
     "$@"

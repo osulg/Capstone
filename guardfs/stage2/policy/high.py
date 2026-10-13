@@ -4,9 +4,10 @@ import time
 
 from guardfs.common.paths import FILESECURITY_LOG_PATH
 
+
 def get_process_name(pid: int) -> str:
     try:
-        with open(f"/proc/{pid}/comm", "r", encoding="utf-8") as f:
+        with open(f"/proc/{pid}/comm", encoding="utf-8") as f:
             return f.read().strip()
     except Exception:
         return "unknown"
@@ -191,9 +192,7 @@ async def handle_high_enter(pid: int, ops, reason: str = "") -> None:
     ops._high_reason[pid] = reason or "High-risk process detected"
     ops._queued_stage2.discard(pid)
 
-    print(
-        f"[HIGH] pid={pid} 진입 정리 완료 (reason={ops._high_reason[pid]})"
-    )
+    print(f"[HIGH] pid={pid} 진입 정리 완료 (reason={ops._high_reason[pid]})")
 
 
 async def handle_open_trunc_high(
@@ -219,10 +218,7 @@ async def handle_open_trunc_high(
 
     suspend_process_once(pid, ops)
 
-    print(
-        f"[HIGH] pid={pid} path={path} "
-        f"open(O_TRUNC) 차단 flags={flags}"
-    )
+    print(f"[HIGH] pid={pid} path={path} open(O_TRUNC) 차단 flags={flags}")
 
 
 async def handle_mkdir_high(
@@ -273,3 +269,23 @@ async def handle_rmdir_high(
     suspend_process_once(pid, ops)
 
     print(f"[HIGH] pid={pid} path={path} rmdir 차단")
+
+
+async def handle_create_high(
+    path: str,
+    pid: int,
+    ops,
+) -> None:
+    process = get_process_name(pid)
+    reason = ops._high_reason.get(pid, "High-risk process detected")
+
+    log_high_event(
+        pid=pid,
+        process=process,
+        path=path,
+        action="CREATE",
+        result="BLOCKED",
+        reason=reason,
+    )
+
+    suspend_process_once(pid, ops)

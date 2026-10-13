@@ -32,7 +32,7 @@ def _read_stat_after_comm(pid: int):
 def _get_exe_path(pid: int):
     try:
         return os.path.realpath(f"/proc/{pid}/exe")
-    except FileNotFoundError, PermissionError:
+    except (FileNotFoundError, PermissionError):
         return None
 
 
@@ -42,7 +42,7 @@ def _get_parent_pid(pid: int):
         return None
     try:
         return int(fields[1])  # ppid
-    except IndexError, ValueError:
+    except (IndexError, ValueError):
         return None
 
 
@@ -52,7 +52,7 @@ def _get_start_time(pid: int):
         return None
     try:
         return int(fields[19])  # starttime (clock ticks)
-    except IndexError, ValueError:
+    except (IndexError, ValueError):
         return None
 
 
@@ -65,62 +65,8 @@ def _dpkg_query_owner(exe_path: str) -> str | None:
         if owner.returncode != 0 or not owner.stdout.strip():
             return None
         return owner.stdout.split(":")[0].strip().split(",")[0].strip()
-    except subprocess.TimeoutExpired, FileNotFoundError, Exception:
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         return None
-
-
-def _usr_merge_alternative(path: str) -> str | None:
-    pairs = (
-        ("/usr/bin/", "/bin/"),
-        ("/usr/sbin/", "/sbin/"),
-    )
-
-    for first, second in pairs:
-        if path.startswith(first):
-            return second + path[len(first) :]
-
-        if path.startswith(second):
-            return first + path[len(second) :]
-
-    return None
-
-
-def _verification_paths(path: str) -> set[str]:
-    """원래 경로와 기존 usr-merge 폴백 경로를 비교 대상으로 사용"""
-    paths = {os.path.normpath(path)}
-
-    alternative = _usr_merge_alternative(path)
-    if alternative is not None:
-        paths.add(os.path.normpath(alternative))
-
-    return paths | {os.path.realpath(candidate) for candidate in paths}
-
-
-def _verification_report_path(line: str) -> str | None:
-    """dpkg rpm 형식의 상태·선택적 conffile 표시·경로를 분리"""
-
-    parts = line.strip().split(maxsplit=1)
-
-    if len(parts) != 2:
-        return None
-
-    status, remainder = parts
-
-    if status != "missing" and len(status) != 9:
-        return None
-
-    # 설정 파일은 경로 앞에 c 표시가 포함될 수 있음
-    marked = remainder.split(maxsplit=1)
-    if marked[0] == "c":
-        if len(marked) != 2:
-            return None
-
-        remainder = marked[1]
-
-    if not os.path.isabs(remainder):
-        return None
-
-    return remainder
 
 
 def _check_package_sync(exe_path: str) -> bool:
@@ -197,7 +143,7 @@ def _check_package_sync(exe_path: str) -> bool:
                 return False  # 같은 파일의 원래/대체 경로 이상 보고
 
         return True
-    except OSError, subprocess.SubprocessError:
+    except (OSError, subprocess.SubprocessError):
         return False
 
 

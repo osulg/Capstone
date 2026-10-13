@@ -19,6 +19,7 @@ from guardfs.common.config import (
 )
 from guardfs.common.paths import FILESECURITY_LOG_PATH
 from guardfs.stage1.entropy import shannon_entropy
+from guardfs.stage1.trust import is_trusted_pid
 
 
 def log_medium_event(
@@ -159,65 +160,216 @@ def _reconstruct_final_content(
     return bytes(data)
 
 
-def pending_file_view(ops, pid, fd, off=0, size=0):
-    """같은 파일의 대기 write/truncate를 반영한 크기와 읽기 결과"""
-
-    if off < 0 or size < 0:
-        raise OSError(errno.EINVAL, "잘못된 read 범위")
-
-    source_fd = ops._staging_origin_fd.get(fd, fd)
-
-    if source_fd is None:
-        source_fd = fd
-
-    st = os.fstat(source_fd)
-    identity = (st.st_dev, st.st_ino)
-    held_fd = ops._buffer_fds.get(pid, {}).get(identity)
-
-    changes = [
-        (position, buf)
-        for pending_fd, position, buf, _path in ops._write_buffer.get(pid, [])
-        if held_fd is not None and pending_fd == held_fd
-    ]
-
-    logical_size = st.st_size
-
-    for position, buf in changes:
-        if buf is None:
-            logical_size = position
-        elif buf:
-            logical_size = max(logical_size, position + len(buf))
-
-    length = min(size, max(0, logical_size - off))
-    data = bytearray(length)
-
-    if length:
-        original = os.pread(source_fd, length, off)
-        data[: len(original)] = original
-
-    # truncate로 제거된 바이트가 이후 확장에서 되살아나지 않게 설정
-    for position, buf in changes:
-        if buf is None:
-            start = max(0, position - off)
-            if start < length:
-                data[start:] = b"\x00" * (length - start)
-
-        elif buf:
-            start = max(off, position)
-            end = min(off + length, position + len(buf))
-
-            if start < end:
-                data[start - off : end - off] = buf[start - position : end - position]
-
-    return logical_size, bytes(data)
-
-
 def _phase_delay_ms(elapsed_sec: float, trusted: bool) -> int:
     for phase_end, untrusted_ms, trusted_ms in MEDIUM_DELAY_PHASES:
         if elapsed_sec < phase_end:
             return trusted_ms if trusted else untrusted_ms
 
     return MEDIUM_DELAY_PHASES[-1][2 if trusted else 1]
+
+
+async def handle_mkdir_medium(path: str, mode: int, pid: int, ops) -> None:
+    """
+    MEDIUM 중 mkdir. 디렉터리 자체는 내용이 없어 복구 대상(원본 데이터)이
+    아니므로 생성은 실시간으로 진행하되, write와 동일한 경과시간 기반 지연을
+    적용해 대량/자동화된 디렉터리 생성을 늦춘다 (하위 파일에 대한 실제
+    보호는 handle_write_medium/handle_unlink_medium이 담당).
+    """
+
+    if pid not in ops._medium_entered_at:
+        ops._medium_entered_at[pid] = trio.current_time()
+
+    trusted = ops.is_trusted_process(pid)
+    elapsed = trio.current_time() - ops._medium_entered_at[pid]
+    delay_sec = _phase_delay_ms(elapsed, trusted) / 1000.0
+
+    await trio.sleep(delay_sec)
+
+    os.mkdir(path, mode)
+
+    print(
+        f"[MEDIUM] pid={pid} path={path} mkdir → 지연 적용 후 생성 (trusted={trusted})"
+    )
+    log_medium_event(pid, path, "MKDIR", "ALLOWED", f"지연 후 생성(trusted={trusted})")
+
+
+async def handle_rmdir_medium(path: str, pid: int, ops) -> None:
+    """
+    MEDIUM 중 rmdir은 실제로 지우지 않고 스테이징으로 옮긴다 (unlink와 동일한
+    패턴 — 규칙4). directory는 hardlink를 만들 수 없으므로 restore는
+    _restore_unlink와 달리 rename으로 처리한다 (_restore_rmdir).
+    """
+
+    staging_path = os.path.join(
+        ops._staging_dir,
+        f"rmdir_{pid}_{time.time_ns()}_{os.path.basename(path)}",
+    )
+
+    try:
+        os.rename(path, staging_path)
+    except FileNotFoundError:
+        # 이미 없는 디렉터리 — 조용히 무시
+        return
+
+    st = os.lstat(staging_path)
+    ops._rmdir_identity[staging_path] = (st.st_dev, st.st_ino)
+    ops._rmdir_staged[pid].append((path, staging_path))
+
+    print(f"[MEDIUM] pid={pid} path={path} rmdir 요청 → 스테이징 이동 (원본 보존)")
+    log_medium_event(
+        pid, path, "RMDIR", "STAGED", "삭제 요청을 스테이징으로 유도, 원본 보존"
+    )
+
+
+def _finalize_rmdir(pid: int, ops) -> None:
+    """LOW 복귀: 삭제를 확정하되 실패한 이력은 보존한다."""
+    remaining = []
+    for orig_path, staging_path in ops._rmdir_staged.pop(pid, []):
+        try:
+            st = os.lstat(staging_path)
+            expected = ops._rmdir_identity.get(staging_path)
+            if expected != (st.st_dev, st.st_ino):
+                raise OSError(errno.ESTALE, "삭제 staging 디렉터리 정체성 불일치")
+            os.rmdir(staging_path)
+            ops._rmdir_identity.pop(staging_path, None)
+            print(
+                f"[COMMIT] pid={pid} path={orig_path} → 디렉터리 삭제 확정 (LOW 판정)"
+            )
+            log_medium_event(
+                pid, orig_path, "RMDIR", "CONFIRMED", "정상 판정 후 삭제 확정"
+            )
+        except FileNotFoundError:
+            ops._rmdir_identity.pop(staging_path, None)
+        except OSError as e:
+            remaining.append((orig_path, staging_path))
+            log_medium_event(pid, orig_path, "RMDIR", "FINALIZE_FAILED", str(e))
+    if remaining:
+        ops._rmdir_staged[pid].extend(remaining)
+
+
+def _restore_rmdir(pid: int, ops) -> None:
+    """
+    목적지를 덮어쓰지 않고 디렉터리를 복원한다. directory는 _restore_unlink처럼
+    hardlink로 비파괴적 복원을 할 수 없으므로, 목적지 존재 여부를 먼저 확인한
+    뒤 rename으로 복원한다.
+    """
+
+    entries = ops._rmdir_staged.pop(pid, [])
+    retained = []
+
+    for orig_path, staging_path in reversed(entries):
+        try:
+            st = os.lstat(staging_path)
+            expected = ops._rmdir_identity.get(staging_path)
+
+            if expected != (st.st_dev, st.st_ino):
+                raise OSError(errno.ESTALE, "복원 staging 디렉터리 정체성 불일치")
+
+            if os.path.lexists(orig_path):
+                raise FileExistsError(errno.EEXIST, "목적지에 새 항목 존재", orig_path)
+
+            os.rename(staging_path, orig_path)
+        except FileExistsError:
+            retained.append((orig_path, staging_path))
+
+            print(
+                f"[RESTORE CONFLICT] pid={pid} path={orig_path} "
+                f"→ 기존 항목 유지, 원본 보존={staging_path}"
+            )
+            log_medium_event(
+                pid,
+                orig_path,
+                "RMDIR",
+                "RESTORE_CONFLICT",
+                f"충돌 원본 보존: {staging_path}",
+            )
+            continue
+        except OSError as e:
+            retained.append((orig_path, staging_path))
+
+            log_medium_event(
+                pid,
+                orig_path,
+                "RMDIR",
+                "RESTORE_FAILED",
+                f"{e}; 원본 보존={staging_path}",
+            )
+            continue
+
+        ops._rmdir_identity.pop(staging_path, None)
+        print(f"[DROP] pid={pid} path={orig_path} → 삭제 취소, 디렉터리 복원")
+        log_medium_event(
+            pid, orig_path, "RMDIR", "RESTORED", "목적지를 덮어쓰지 않고 복원"
+        )
+
+    if retained:
+        ops._rmdir_staged[pid].extend(retained)
+
+
+async def handle_setattr_medium(path: str, pid: int, fields, attr, ops) -> None:
+    """
+    MEDIUM 중 chmod/chown/utime. 검증 전 PID가 대상의 권한/타임스탬프를
+    바꾸지 못하도록 실제 적용을 보류하고, commit 시점(_apply_pending_metadata)에
+    반영하거나 drop 시점에 폐기한다.
+    """
+
+    pending: dict = {}
+    actions = []
+
+    if fields.update_mode:
+        pending["mode"] = stat.S_IMODE(attr.st_mode)
+        actions.append(f"CHMOD(mode={pending['mode']:o})")
+    if fields.update_uid:
+        pending["uid"] = attr.st_uid
+        actions.append("CHOWN(uid)")
+    if fields.update_gid:
+        pending["gid"] = attr.st_gid
+        actions.append("CHOWN(gid)")
+    if fields.update_atime:
+        pending["atime_ns"] = attr.st_atime_ns
+        actions.append("UTIME(atime)")
+    if fields.update_mtime:
+        pending["mtime_ns"] = attr.st_mtime_ns
+        actions.append("UTIME(mtime)")
+
+    ops._pending_metadata[pid].append((path, pending))
+
+    action_str = ",".join(actions)
+    print(f"[MEDIUM] pid={pid} path={path} {action_str} → 지연 작업 보관")
+    log_medium_event(pid, path, "SETATTR", "BUFFERED", action_str)
+
+
+def _apply_pending_metadata(pid: int, ops) -> None:
+    """LOW 복귀: 보류된 chmod/chown/utime을 실제로 반영한다."""
+    for path, pending in ops._pending_metadata.pop(pid, []):
+        try:
+            if "mode" in pending:
+                os.chmod(path, pending["mode"])
+
+            if "uid" in pending or "gid" in pending:
+                os.chown(
+                    path,
+                    pending.get("uid", -1),
+                    pending.get("gid", -1),
+                    follow_symlinks=False,
+                )
+
+            if "atime_ns" in pending or "mtime_ns" in pending:
+                st = os.lstat(path)
+                os.utime(
+                    path,
+                    ns=(
+                        pending.get("atime_ns", st.st_atime_ns),
+                        pending.get("mtime_ns", st.st_mtime_ns),
+                    ),
+                    follow_symlinks=False,
+                )
+
+            log_medium_event(
+                pid, path, "SETATTR", "CONFIRMED", "정상 판정 후 메타데이터 반영"
+            )
+        except OSError as e:
+            log_medium_event(pid, path, "SETATTR", "APPLY_FAILED", str(e))
 
 
 def _retain_buffer_fd(pid: int, fd: int, ops) -> int:
@@ -350,7 +502,11 @@ async def handle_write_medium(
         on_disk_size = 0
 
     file_size = max(on_disk_size, off + len(buf))
-    trusted = ops.is_trusted_process(pid)
+
+    # 기존 경로 검사와 강한 신뢰 검사를 모두 통과해야
+    # 신뢰 프로세스의 크기 기반 버퍼링 예외를 적용 가능
+    trusted = ops.is_trusted_process(pid) and await is_trusted_pid(pid)
+
     group_name = classify_extension(path)
     group = EXTENSION_GROUPS[group_name]
 
@@ -499,12 +655,101 @@ async def handle_write_medium(
 
 
 # ========== 규칙 4: unlink 단계적 차단 ========== #
+def _unlink_pending_new_file(path: str, pid: int, ops) -> bool:
+    """닫힌 pending 신규 파일을 삭제하고 publish 예약을 취소한다."""
+
+    for inode in list(ops._staging_inodes):
+        if ops._inode_path.get(inode) != path:
+            continue
+
+        ops._refresh_staging_inode(inode)
+        entry = ops._staging_inodes.get(inode)
+        if entry is None or entry["state"] != "pending":
+            continue
+
+        if entry["pid"] != pid:
+            raise OSError(errno.ENOENT, "다른 PID의 staging 파일", path)
+
+        identity = entry["source_identity"]
+        held_fd = entry["held_fd"]
+        staging_path = entry["staging_path"]
+
+        # 열린 핸들의 unlink 이후 동작은 별도 지원이 필요하다.
+        for fh, fd in ops._fd_map.items():
+            if ops._fh_inode.get(fh) == inode:
+                raise OSError(errno.EBUSY, "열린 staging 파일", path)
+            st = os.fstat(fd)
+            if (st.st_dev, st.st_ino) == identity:
+                raise OSError(errno.EBUSY, "열린 staging 파일", path)
+
+        if (
+            held_fd is None
+            or ops._buffer_fds.get(pid, {}).get(identity) != held_fd
+            or ops._buffer_new_files.get(pid, {}).get(held_fd) != staging_path
+        ):
+            raise OSError(errno.ESTALE, "staging 소유 정보 불일치", path)
+
+        try:
+            st = os.lstat(staging_path)
+        except FileNotFoundError:
+            pass  # 물리적 파일이 없어도 남은 예약은 취소한다.
+        else:
+            if (st.st_dev, st.st_ino) != identity:
+                raise OSError(errno.ESTALE, "staging 파일 정체성 불일치", path)
+            os.unlink(staging_path)
+
+        remaining = []
+        removed_bytes = 0
+        for item in ops._write_buffer.get(pid, []):
+            fd, off, buf, buffer_path = item
+            if fd == held_fd:
+                if buf is not None:
+                    removed_bytes += len(buf)
+            else:
+                remaining.append(item)
+
+        ops._write_buffer[pid] = remaining
+        ops._write_buffer_bytes[pid] = max(
+            0, ops._write_buffer_bytes.get(pid, 0) - removed_bytes
+        )
+        ops._global_buffer_bytes = max(0, ops._global_buffer_bytes - removed_bytes)
+        ops._buffer_new_files[pid].pop(held_fd, None)
+        ops._buffer_fds[pid].pop(identity, None)
+        ops._trunc_paths.get(pid, set()).discard(path)
+        ops._pending_metadata[pid] = [
+            (target_path, metadata)
+            for target_path, metadata in ops._pending_metadata.get(pid, [])
+            if target_path != path
+        ]
+        ops._staging_pid[pid] = [
+            saved_path
+            for saved_path in ops._staging_pid.get(pid, [])
+            if saved_path != staging_path
+        ]
+        ops._staging_inodes.pop(inode, None)
+        ops._inode_path.pop(inode, None)
+        os.close(held_fd)
+        return True
+
+    return False
+
+
 async def handle_unlink_medium(path: str, pid: int, ops) -> None:
     """
     MEDIUM 중 unlink는 실제로 지우지 않고 스테이징으로 옮긴다.
     - 호출자에게는 삭제가 성공한 것처럼 보이게 한다 (경로에서 사라짐).
     - LOW로 판정나면 실제로 삭제를 확정하고, HIGH로 격상되면 원래 자리로 복원한다.
     """
+
+    if _unlink_pending_new_file(path, pid, ops):
+        log_medium_event(
+            pid,
+            path,
+            "UNLINK",
+            "REMOVED_PENDING",
+            "신규 staging 파일 삭제 및 commit 예약 취소",
+        )
+        return
 
     staging_path = os.path.join(
         ops._staging_dir,
@@ -513,13 +758,9 @@ async def handle_unlink_medium(path: str, pid: int, ops) -> None:
 
     try:
         os.rename(path, staging_path)
-    except FileNotFoundError:
-        # 이미 없는 파일 — 조용히 무시
-        return
-    except OSError as e:
-        print(f"[MEDIUM] pid={pid} path={path} unlink 스테이징 실패: {e} → 삭제 차단")
-
-        return
+    except OSError:
+        # 삭제 실패를 성공으로 처리하지 않고 호출 측에 전달한다.
+        raise
 
     st = os.lstat(staging_path)
     ops._unlink_identity[staging_path] = (st.st_dev, st.st_ino)
@@ -636,40 +877,16 @@ def _restore_unlink(pid: int, ops) -> None:
         ops._unlink_recovery[pid].extend(reversed(retained))
 
 
-def _reconstruct_pending_content(path, changes):
-    """write와 truncate를 순서대로 적용한 구조 검증용 내용."""
-
-    try:
-        with open(path, "rb") as f:
-            data = bytearray(f.read())
-    except FileNotFoundError:
-        data = bytearray()
-
-    for off, buf in changes:
-        if buf is None:
-            if off < len(data):
-                del data[off:]
-            elif off > len(data):
-                data.extend(b"\x00" * (off - len(data)))
-        elif buf:
-            end = off + len(buf)
-
-            if end > len(data):
-                data.extend(b"\x00" * (end - len(data)))
-
-            data[off:end] = buf
-
-    return bytes(data)
-
-
 async def commit_buffers(pid: int, ops) -> None:
     buffers = ops._write_buffer.pop(pid, [])
+
     ops._write_buffer_bytes.pop(pid, None)
     ops._pid_trusted.pop(pid, None)
     ops._medium_entered_at.pop(pid, None)
     ops._trunc_paths.pop(pid, None)
 
     by_file = {}
+
     for fd, off, buf, path in buffers:
         entry = by_file.setdefault(fd, {"path": path, "changes": []})
         entry["path"] = path
@@ -681,9 +898,11 @@ async def commit_buffers(pid: int, ops) -> None:
     identities = {
         held_fd: identity for identity, held_fd in ops._buffer_fds.get(pid, {}).items()
     }
+
     applied = set()
     rejected = False
     failed = False
+
     try:
         # 모든 대상의 검증이 끝나기 전에는 원본에 적용하지 않는다.
         for fd, entry in by_file.items():
@@ -713,6 +932,7 @@ async def commit_buffers(pid: int, ops) -> None:
 
         for fd, entry in by_file.items():
             path, changes = entry["path"], entry["changes"]
+
             try:
                 for off, buf in changes:
                     if buf is None:
@@ -723,7 +943,9 @@ async def commit_buffers(pid: int, ops) -> None:
                     _publish_new_file(path, fd, pid, ops)
                 else:
                     _rebind_staging_handles(ops, pid, identities[fd], fd)
+
                 applied.add(fd)
+
                 print(
                     f"[COMMIT] pid={pid} path={path} → 파일 반영 완료 ({len(changes)}개 작업)"
                 )
@@ -748,6 +970,8 @@ async def commit_buffers(pid: int, ops) -> None:
 
         if not failed:
             _finalize_unlink(pid, ops)
+            _finalize_rmdir(pid, ops)
+            _apply_pending_metadata(pid, ops)
             log_medium_event(
                 pid,
                 "",
@@ -846,6 +1070,8 @@ async def drop_buffers(pid: int, ops) -> None:
                 log_medium_event(pid, staging_path, "DROP", "CLEANUP_FAILED", str(e))
 
         _restore_unlink(pid, ops)
+        _restore_rmdir(pid, ops)
+        ops._pending_metadata.pop(pid, None)
 
         print(f"[DROP] pid={pid} 버퍼 {len(dropped)}개 드롭 → 원본 보존")
         log_medium_event(

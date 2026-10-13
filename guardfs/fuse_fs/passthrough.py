@@ -54,13 +54,6 @@ from guardfs.stage2.stage2_worker import stage2_worker
 from guardfs.stage2.states import ProcState
 
 
-def _full_path(root: str, path: str) -> str:
-    if path.startswith("/"):
-        path = path[1:]
-
-    return os.path.join(root, path)
-
-
 def _resolve_trust_target(pid: int) -> str:
     """
     신뢰 판단 대상 경로를 계산한다.
@@ -325,6 +318,15 @@ class Passthrough(pyfuse3.Operations):
         # OS staging fd → 원래 underlay fd (신규 create는 None).
         self._staging_origin_fd: dict[int, int | None] = {}
         self._unlink_identity: dict[str, tuple[int, int]] = {}
+
+        # MEDIUM 중 rmdir을 실제로 지우지 않고 스테이징으로 옮겨둔 목록 (unlink와 동일한 패턴).
+        # directory는 hardlink가 불가능하므로 복원은 rename으로 처리한다.
+        self._rmdir_staged: dict[int, list] = defaultdict(list)
+        self._rmdir_identity: dict[str, tuple[int, int]] = {}
+
+        # MEDIUM 중 보류된 chmod/chown/utime 변경. pid -> [(path, {field: value}), ...]
+        self._pending_metadata: dict[int, list] = defaultdict(list)
+
         self._buffer_new_files: dict[int, dict[int, str]] = defaultdict(dict)
         self._staging_recovery: dict[int, list] = defaultdict(list)
 
@@ -512,10 +514,20 @@ class Passthrough(pyfuse3.Operations):
         *,
         preserve_high: bool = False,
         register_medium: bool = False,
+        respect_forced: bool = False,
+        expected_forced: ProcState | None = None,
     ) -> bool:
         """PID의 GuardFS 상태를 변경하고 상태 변경 성공 여부를 반환한다."""
 
         async with self._pid_lock:
+            if (
+                expected_forced is not None
+                and self._get_forced_state(pid) != expected_forced
+            ):
+                return False
+            if respect_forced and self._get_forced_state(pid) is not None:
+                return False
+
             prev = self._proc_state.get(pid, ProcState.LOW)  # 이전 상태 저장
 
             if preserve_high and prev == ProcState.HIGH:
@@ -534,10 +546,23 @@ class Passthrough(pyfuse3.Operations):
 
             return True
 
-    async def trigger_high(self, pid: int, reason: str = "") -> None:
+    async def trigger_high(
+        self,
+        pid: int,
+        reason: str = "",
+        *,
+        respect_forced: bool = False,
+        expected_forced: ProcState | None = None,
+    ) -> None:
+        changed = await self.set_proc_state(
+            pid,
+            ProcState.HIGH,
+            respect_forced=respect_forced,
+            expected_forced=expected_forced,
+        )
+        if not changed:
+            return
         print(f"[TRIGGER HIGH] pid={pid} reason={reason}")
-
-        await self.set_proc_state(pid, ProcState.HIGH)
         from guardfs.stage2.policy.high import handle_high_enter
 
         await handle_high_enter(pid, self, reason)
@@ -567,7 +592,22 @@ class Passthrough(pyfuse3.Operations):
         override = self._get_forced_state(pid)
 
         if override is not None:
-            await self.set_proc_state(pid, override)
+            if override == ProcState.HIGH:
+                # 강제 HIGH도 정상 HIGH 진입과 동일하게 pending을 폐기한다.
+                await self.trigger_high(
+                    pid, reason="forced_state", expected_forced=override
+                )
+                state = await self.get_proc_state(pid)
+                if state != ProcState.HIGH:
+                    # 잠금 대기 중 override가 바뀌어 적용하지 못한 경우
+                    # 최신 override 및 신뢰 정책을 다시 해석한다.
+                    return await self._resolve_effective_state(pid)
+                return state
+            await self.set_proc_state(
+                pid,
+                override,
+                register_medium=(override == ProcState.MEDIUM),
+            )
             return override
 
         state = await self.get_proc_state(pid)
@@ -632,6 +672,15 @@ class Passthrough(pyfuse3.Operations):
             ):
                 return True
 
+        # 복구할 원래 경로를 rename이 덮어쓰지 않도록 보호한다.
+        for recovery in (self._unlink_recovery, self._staging_recovery):
+            for entries in recovery.values():
+                if any(
+                    self._path_is_within(orig_path, path)
+                    for orig_path, _staging_path in entries
+                ):
+                    return True
+
         # 목적지의 기존 핸들이 다른 파일을 가리키는 상태가 되는 것을
         # 현재 경로 기반 구현에서는 안전하게 처리하지 못함.
         for _pid, fh_path, _flags in self._fh_info.values():
@@ -643,20 +692,6 @@ class Passthrough(pyfuse3.Operations):
                 return True
 
         return False
-
-    def _find_open_fd_for_path(self, path: str) -> int | None:
-        """열린 fd 검색 helper"""
-
-        for fh, (_pid, fh_path, _flags) in self._fh_info.items():
-            if fh_path != path:
-                continue
-
-            fd = self._fd_map.get(fh)
-
-            if fd is not None:
-                return fd
-
-        return None
 
     def _move_pending_paths(
         self,
@@ -1019,8 +1054,21 @@ class Passthrough(pyfuse3.Operations):
 
         state = await self._resolve_effective_state(pid)
 
+        if state == ProcState.HIGH:
+            from guardfs.stage2.policy.high import handle_create_high
+
+            await handle_create_high(
+                path=path,
+                pid=pid,
+                ops=self,
+            )
+            raise pyfuse3.FUSEError(errno.EACCES)
+
         if state in (ProcState.MEDIUM, ProcState.HIGH):
-            staging_path = os.path.join(self._staging_dir, f"fh_{self._next_fh}")
+            staging_path = os.path.join(
+                self._staging_dir,
+                f"fh_{self._next_fh}",
+            )
 
             try:
                 fd = os.open(staging_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC, mode)
@@ -1129,16 +1177,7 @@ class Passthrough(pyfuse3.Operations):
         path = self._resolve_path(parent_inode, name)
         pid = ctx.pid if ctx is not None else -1
 
-        override = self._get_forced_state(pid)
-
-        if override is not None:
-            await self.set_proc_state(pid, override)
-            state = override
-        else:
-            state = await self.get_proc_state(pid)
-
-            if state == ProcState.SUSPICIOUS:
-                state = self._resolve_suspicious_state(pid)
+        state = await self._resolve_effective_state(pid)
 
         if state == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_mkdir_high
@@ -1152,7 +1191,12 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
-            os.mkdir(path, mode)
+            if state == ProcState.MEDIUM:
+                from guardfs.stage2.policy.medium import handle_mkdir_medium
+
+                await handle_mkdir_medium(path, mode, pid, self)
+            else:
+                os.mkdir(path, mode)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
@@ -1182,16 +1226,7 @@ class Passthrough(pyfuse3.Operations):
             )
             raise pyfuse3.FUSEError(errno.EACCES)
 
-        override = self._get_forced_state(pid)
-
-        if override is not None:
-            await self.set_proc_state(pid, override)
-            state = override
-        else:
-            state = await self.get_proc_state(pid)
-
-            if state == ProcState.SUSPICIOUS:
-                state = self._resolve_suspicious_state(pid)
+        state = await self._resolve_effective_state(pid)
 
         if state == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_rmdir_high
@@ -1205,7 +1240,12 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
-            os.rmdir(path)
+            if state == ProcState.MEDIUM:
+                from guardfs.stage2.policy.medium import handle_rmdir_medium
+
+                await handle_rmdir_medium(path, pid, self)
+            else:
+                os.rmdir(path)
         except OSError as e:
             raise pyfuse3.FUSEError(e.errno)
 
@@ -1386,7 +1426,6 @@ class Passthrough(pyfuse3.Operations):
             self._staging_fh[fh] = staging_path
             self._staging_pid[pid].append(staging_path)
             self._staging_origin_fd[fd] = origin_fd
-            self._trunc_paths[pid].add(path)
             try:
                 self._defer_truncate(pid, path, 0, fd)
             except OSError as e:
@@ -1400,6 +1439,10 @@ class Passthrough(pyfuse3.Operations):
                 os.close(origin_fd)
                 os.unlink(staging_path)
                 raise pyfuse3.FUSEError(e.errno) from e
+
+            # 지연 작업 보관이 성공한 경로만 기록한다. 실패한 open이
+            # rename 목적지를 막거나 기존 pending 기록을 지우지 않도록 한다.
+            self._trunc_paths[pid].add(path)
 
             self._emit(
                 FsEvent(
@@ -1627,8 +1670,9 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         pid = ctx.pid if ctx is not None else -1
+        state = await self._resolve_effective_state(pid)
 
-        if await self.get_proc_state(pid) == ProcState.HIGH:
+        if state == ProcState.HIGH:
             from guardfs.stage2.policy.high import handle_setattr_high
 
             if fields.update_mode:
@@ -1639,9 +1683,35 @@ class Passthrough(pyfuse3.Operations):
                 await handle_setattr_high(path, "CHOWN", pid, self)
             if fields.update_atime or fields.update_mtime:
                 await handle_setattr_high(path, "UTIME", pid, self)
-            return
+            raise pyfuse3.FUSEError(errno.EACCES)
 
         entry = self._pending_staging(inode, ctx)
+
+        if entry is None and state == ProcState.MEDIUM:
+            from guardfs.stage2.policy.medium import handle_setattr_medium
+
+            await handle_setattr_medium(path, pid, fields, attr, self)
+
+            if fields.update_mode:
+                self._emit(
+                    FsEvent(
+                        ts_ns=time.time_ns(),
+                        pid=pid,
+                        op="chmod",
+                        path=path,
+                        flags=stat_mod.S_IMODE(attr.st_mode),
+                    )
+                )
+            if fields.update_uid or fields.update_gid:
+                self._emit(
+                    FsEvent(ts_ns=time.time_ns(), pid=pid, op="chown", path=path)
+                )
+            if fields.update_atime or fields.update_mtime:
+                self._emit(
+                    FsEvent(ts_ns=time.time_ns(), pid=pid, op="utime", path=path)
+                )
+            return
+
         target_path = entry["staging_path"] if entry is not None else path
 
         try:
@@ -1861,7 +1931,11 @@ class Passthrough(pyfuse3.Operations):
         if state == ProcState.MEDIUM:
             from guardfs.stage2.policy.medium import handle_unlink_medium
 
-            await handle_unlink_medium(path, pid, self)
+            try:
+                await handle_unlink_medium(path, pid, self)
+            except OSError as e:
+                raise pyfuse3.FUSEError(e.errno) from e
+
             self._emit(
                 FsEvent(
                     ts_ns=time.time_ns(),
@@ -1940,7 +2014,32 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         try:
-            source_stat = os.lstat(old_path)
+            staging_source = None
+
+            try:
+                source_stat = os.lstat(old_path)
+            except FileNotFoundError:
+                # underlay에 없는 신규 staging 파일인지 확인
+                for inode in list(self._staging_inodes):
+                    if self._inode_path.get(inode) != old_path:
+                        continue
+
+                    # 소유 PID, pending 상태, 보관 fd 유효성을 검사한다.
+                    entry = self._pending_staging(inode, ctx)
+                    if entry is None:
+                        continue
+
+                    if entry["pid"] != pid:
+                        continue
+
+                    staging_source = entry
+                    break
+
+                if staging_source is None:
+                    raise pyfuse3.FUSEError(errno.ENOENT)
+
+                source_stat = os.fstat(staging_source["held_fd"])
+
             source_is_dir = stat_mod.S_ISDIR(source_stat.st_mode)
 
             try:
@@ -1948,23 +2047,58 @@ class Passthrough(pyfuse3.Operations):
             except FileNotFoundError:
                 destination_stat = None
 
-            # 같은 경로 또는 같은 inode의 hard link는 rename의 no-op이다.
-            # 내부 경로와 지연 작업도 이동시키지 않음
-            if destination_stat is not None and (
-                source_stat.st_dev,
-                source_stat.st_ino,
-            ) == (destination_stat.st_dev, destination_stat.st_ino):
-                self._emit(ev)
-                return
+            if staging_source is not None:
+                # staging rename에서는 특수 rename 플래그를 지원하지 않는다.
+                if flags:
+                    raise pyfuse3.FUSEError(errno.EINVAL)
 
-            # 경로 기반 커밋이 기존 목적지의 데이터를 새 파일에 적용하지
-            # 않도록 열린 핸들이나 지연 작업이 있는 목적지는 보호
-            if self._has_pending_destination(new_path):
-                raise pyfuse3.FUSEError(errno.EBUSY)
+                # 자기 자신으로 rename하는 경우는 성공으로 처리한다.
+                if old_path == new_path:
+                    self._emit(ev)
+                    return
 
-            os.rename(old_path, new_path)
+                # os.rename을 실행하지 않으므로 목적지 부모를 직접 검사한다.
+                parent_stat = os.lstat(os.path.dirname(new_path))
+                if not stat_mod.S_ISDIR(parent_stat.st_mode):
+                    raise pyfuse3.FUSEError(errno.ENOTDIR)
+
+                # 다른 pending 파일의 논리적 이름과 충돌하지 않도록 한다.
+                pending_destination = any(
+                    self._inode_path.get(inode) == new_path
+                    and entry["state"] == "pending"
+                    for inode, entry in self._staging_inodes.items()
+                )
+
+                # 기존 파일 교체는 commit 시점의 별도 보호 처리가 필요하다.
+                if (
+                    destination_stat is not None
+                    or pending_destination
+                    or self._has_pending_destination(new_path)
+                ):
+                    raise pyfuse3.FUSEError(errno.EBUSY)
+
+                # 실제 staging 파일은 이동하지 않는다.
+                # 아래의 기존 매핑 갱신 코드에서 논리적 경로만 변경한다.
+
+            else:
+                # 기존 underlay 파일의 rename 처리는 유지한다.
+                if destination_stat is not None and (
+                    source_stat.st_dev,
+                    source_stat.st_ino,
+                ) == (
+                    destination_stat.st_dev,
+                    destination_stat.st_ino,
+                ):
+                    self._emit(ev)
+                    return
+
+                if self._has_pending_destination(new_path):
+                    raise pyfuse3.FUSEError(errno.EBUSY)
+
+                os.rename(old_path, new_path)
+
         except OSError as e:
-            raise pyfuse3.FUSEError(e.errno)
+            raise pyfuse3.FUSEError(e.errno) from e
 
         old_prefix = old_path + os.sep
         new_prefix = new_path + os.sep
