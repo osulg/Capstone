@@ -1,0 +1,7 @@
+Type,PID,Instance_No,Instance_ID,Started_By,Exit_Seen,PPID,Root_TGID,Relation,Label,Event_Count,Exec_Chain,Start_ns,End_ns
+benign_shell_fileops_001,2204,1,2204:1,F,1,2174,,benign,0,1,./detect_dynamic/dataset_v2/benign_shell_fileops.sh,843185771615,843247465864
+benign_shell_fileops_001,2206,1,2206:1,F,1,2204,,benign,0,2,/usr/bin/cp,843202420264,843213036606
+benign_shell_fileops_001,2208,1,2208:1,F,1,2204,,benign,0,1,/usr/bin/cat,843221872726,843228902228
+benign_shell_fileops_001,2209,1,2209:1,F,1,2204,,benign,0,1,/usr/bin/cat,843230106026,843234031939
+benign_shell_fileops_001,2210,1,2210:1,F,1,2204,,benign,0,1,/usr/bin/rm,843234998575,843239254534
+benign_shell_fileops_001,2211,1,2211:1,F,1,2204,,benign,0,1,/usr/bin/rm,843240049703,843245535235

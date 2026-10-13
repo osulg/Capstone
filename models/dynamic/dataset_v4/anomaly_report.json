@@ -1,0 +1,29 @@
+{
+  "n_benign": 248,
+  "n_malware": 38,
+  "target_fpr": 0.05,
+  "models": {
+    "IsolationForest": {
+      "held_out_fpr_mean": 0.081,
+      "held_out_fpr_std": 0.0529,
+      "malware_recall_mean": 0.4158,
+      "malware_recall_std": 0.0609
+    },
+    "OneClassSVM": {
+      "held_out_fpr_mean": 0.3625,
+      "held_out_fpr_std": 0.2378,
+      "malware_recall_mean": 0.3526,
+      "malware_recall_std": 0.2042
+    },
+    "LOF": {
+      "held_out_fpr_mean": 0.1768,
+      "held_out_fpr_std": 0.1224,
+      "malware_recall_mean": 0.2947,
+      "malware_recall_std": 0.0962
+    }
+  },
+  "rule_baseline": {
+    "benign_fpr": 0.1774,
+    "malware_recall": 0.9211
+  }
+}

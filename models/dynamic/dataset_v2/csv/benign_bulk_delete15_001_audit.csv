@@ -1,0 +1,2 @@
+Type,PID,Instance_No,Instance_ID,Started_By,Exit_Seen,PPID,Root_TGID,Relation,Label,Event_Count,Exec_Chain,Start_ns,End_ns
+benign_bulk_delete15_001,2749,1,2749:1,F,1,2174,,benign,0,15,/usr/bin/rm,6398702175910,6398706634945

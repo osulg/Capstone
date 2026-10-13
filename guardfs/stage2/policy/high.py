@@ -4,9 +4,10 @@ import time
 
 from guardfs.common.paths import FILESECURITY_LOG_PATH
 
+
 def get_process_name(pid: int) -> str:
     try:
-        with open(f"/proc/{pid}/comm", "r", encoding="utf-8") as f:
+        with open(f"/proc/{pid}/comm", encoding="utf-8") as f:
             return f.read().strip()
     except Exception:
         return "unknown"
@@ -150,23 +151,48 @@ async def handle_truncate_high(
     print(f"[HIGH] pid={pid} path={path} truncate 차단")
 
 
+async def handle_setattr_high(
+    path: str,
+    action: str,
+    pid: int,
+    ops,
+) -> None:
+    process = get_process_name(pid)
+    reason = ops._high_reason.get(pid, "High-risk process detected")
+
+    log_high_event(
+        pid=pid,
+        process=process,
+        path=path,
+        action=action,
+        result="BLOCKED",
+        reason=reason,
+    )
+
+    suspend_process_once(pid, ops)
+
+    print(f"[HIGH] pid={pid} path={path} {action} 차단")
+
+
 async def handle_high_enter(pid: int, ops, reason: str = "") -> None:
     """
     HIGH 진입 시 정리 작업.
-    - MEDIUM 단계에서 보관 중이던 write buffer 폐기
-    - write_count 초기화
+    - MEDIUM 단계에서 보관 중이던 write buffer 폐기 (전역 버퍼 카운트 반영,
+      스테이징으로 옮겨뒀던 unlink 복원까지 medium.drop_buffers()가 전담)
     - HIGH 진입 사유 저장
     - 이미 Stage2 큐에 들어간 pid 해제
+
+    trigger_high()가 호출되는 경로가 여러 곳(write 중 즉시 격상, reeval 중
+    격상 등)이라 정리 로직을 여기 한 곳(medium.drop_buffers)으로 모아서
+    중복·누락 없이 항상 같은 방식으로 정리되게 한다.
     """
-    dropped = ops._write_buffer.pop(pid, [])
-    ops._write_count.pop(pid, None)
+    from guardfs.stage2.policy.medium import drop_buffers
+
+    await drop_buffers(pid, ops)
     ops._high_reason[pid] = reason or "High-risk process detected"
     ops._queued_stage2.discard(pid)
 
-    print(
-        f"[HIGH] pid={pid} 진입 정리 완료 "
-        f"(buffer {len(dropped)}개 드롭, write_count 초기화, reason={ops._high_reason[pid]})"
-    )
+    print(f"[HIGH] pid={pid} 진입 정리 완료 (reason={ops._high_reason[pid]})")
 
 
 async def handle_open_trunc_high(
@@ -192,10 +218,7 @@ async def handle_open_trunc_high(
 
     suspend_process_once(pid, ops)
 
-    print(
-        f"[HIGH] pid={pid} path={path} "
-        f"open(O_TRUNC) 차단 flags={flags}"
-    )
+    print(f"[HIGH] pid={pid} path={path} open(O_TRUNC) 차단 flags={flags}")
 
 
 async def handle_mkdir_high(
@@ -246,3 +269,23 @@ async def handle_rmdir_high(
     suspend_process_once(pid, ops)
 
     print(f"[HIGH] pid={pid} path={path} rmdir 차단")
+
+
+async def handle_create_high(
+    path: str,
+    pid: int,
+    ops,
+) -> None:
+    process = get_process_name(pid)
+    reason = ops._high_reason.get(pid, "High-risk process detected")
+
+    log_high_event(
+        pid=pid,
+        process=process,
+        path=path,
+        action="CREATE",
+        result="BLOCKED",
+        reason=reason,
+    )
+
+    suspend_process_once(pid, ops)

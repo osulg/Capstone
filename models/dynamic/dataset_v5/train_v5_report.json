@@ -1,0 +1,183 @@
+{
+  "n_benign": 3382,
+  "n_malware": 38,
+  "features": [
+    "duration_sec",
+    "total_events",
+    "write_per_sec",
+    "unlink_per_sec",
+    "rename_per_sec",
+    "create_per_sec",
+    "write_ratio",
+    "unlink_ratio",
+    "rename_ratio",
+    "read_ratio",
+    "high_entropy_write_count",
+    "high_entropy_write_ratio",
+    "mean_write_entropy",
+    "entropy_available",
+    "read_then_overwrite_ratio",
+    "ext_change_rename_ratio",
+    "distinct_ext_after_rename",
+    "unique_files_touched",
+    "unique_dirs_touched",
+    "files_per_dir",
+    "total_write_bytes",
+    "mean_write_bytes"
+  ],
+  "threshold_sweep": [
+    {
+      "thr": 0.3,
+      "fpr": 0.0,
+      "recall": 0.9736842105263158,
+      "fp": 0,
+      "tp": 37
+    },
+    {
+      "thr": 0.35,
+      "fpr": 0.0,
+      "recall": 0.9736842105263158,
+      "fp": 0,
+      "tp": 37
+    },
+    {
+      "thr": 0.4,
+      "fpr": 0.0,
+      "recall": 0.9736842105263158,
+      "fp": 0,
+      "tp": 37
+    },
+    {
+      "thr": 0.45,
+      "fpr": 0.0,
+      "recall": 0.9736842105263158,
+      "fp": 0,
+      "tp": 37
+    },
+    {
+      "thr": 0.5,
+      "fpr": 0.0,
+      "recall": 0.9736842105263158,
+      "fp": 0,
+      "tp": 37
+    },
+    {
+      "thr": 0.55,
+      "fpr": 0.0,
+      "recall": 0.9736842105263158,
+      "fp": 0,
+      "tp": 37
+    },
+    {
+      "thr": 0.6,
+      "fpr": 0.0,
+      "recall": 0.9736842105263158,
+      "fp": 0,
+      "tp": 37
+    },
+    {
+      "thr": 0.65,
+      "fpr": 0.0,
+      "recall": 0.9736842105263158,
+      "fp": 0,
+      "tp": 37
+    },
+    {
+      "thr": 0.7,
+      "fpr": 0.0,
+      "recall": 0.9736842105263158,
+      "fp": 0,
+      "tp": 37
+    },
+    {
+      "thr": 0.75,
+      "fpr": 0.0,
+      "recall": 0.9736842105263158,
+      "fp": 0,
+      "tp": 37
+    },
+    {
+      "thr": 0.8,
+      "fpr": 0.0,
+      "recall": 0.9736842105263158,
+      "fp": 0,
+      "tp": 37
+    },
+    {
+      "thr": 0.85,
+      "fpr": 0.0,
+      "recall": 0.8947368421052632,
+      "fp": 0,
+      "tp": 34
+    },
+    {
+      "thr": 0.9,
+      "fpr": 0.0,
+      "recall": 0.8421052631578947,
+      "fp": 0,
+      "tp": 32
+    },
+    {
+      "thr": 0.95,
+      "fpr": 0.0,
+      "recall": 0.631578947368421,
+      "fp": 0,
+      "tp": 24
+    }
+  ],
+  "dyn_only_fpr0_threshold": 0.3,
+  "recommended_threshold": 0.35,
+  "group_cv": {
+    "threshold": 0.3,
+    "recall": 0.868421052631579,
+    "fpr": 0.002365464222353637,
+    "fp": 8,
+    "fn": 5
+  },
+  "lofo": {
+    "avoslocker": {
+      "n": 5,
+      "detect": 1.0
+    },
+    "babuk": {
+      "n": 7,
+      "detect": 1.0
+    },
+    "braincipher": {
+      "n": 2,
+      "detect": 1.0
+    },
+    "buhti": {
+      "n": 1,
+      "detect": 1.0
+    },
+    "conti": {
+      "n": 4,
+      "detect": 1.0
+    },
+    "hellokitty": {
+      "n": 6,
+      "detect": 1.0
+    },
+    "incransom": {
+      "n": 4,
+      "detect": 1.0
+    },
+    "moneymessage": {
+      "n": 1,
+      "detect": 0.0
+    },
+    "monti": {
+      "n": 1,
+      "detect": 1.0
+    },
+    "ransomexx": {
+      "n": 2,
+      "detect": 1.0
+    },
+    "revil": {
+      "n": 5,
+      "detect": 1.0
+    }
+  }
+}

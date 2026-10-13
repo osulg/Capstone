@@ -1,0 +1,2 @@
+Type,PID,Instance_No,Instance_ID,Started_By,Exit_Seen,PPID,Root_TGID,Relation,Label,Event_Count,Exec_Chain,Start_ns,End_ns
+benign_bulk_copy_001,2269,1,2269:1,F,1,2174,,benign,0,40,/usr/bin/cp,1337711314762,1337720801885

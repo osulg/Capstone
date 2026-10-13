@@ -1,0 +1,8 @@
+{"ts_ns": 7060840683503, "tgid": 2174, "tid": 2174, "ppid": 2025, "comm": "bash", "action": "O", "file": "/home/os2023202043/guardfs_benign_delete4/", "exe": "UNKNOWN", "lineage_label": -1, "relation": "unknown", "root_tgid": null}
+{"ts_ns": 7060841133292, "tgid": 2802, "tid": 2802, "ppid": 2174, "comm": "bash", "action": "F", "file": "", "exe": "", "lineage_label": 0, "relation": "benign", "root_tgid": null}
+{"ts_ns": 7060842244279, "tgid": 2802, "tid": 2802, "ppid": 2174, "comm": "rm", "action": "X", "file": "/usr/bin/rm", "exe": "/usr/bin/rm", "lineage_label": 0, "relation": "benign", "root_tgid": null}
+{"ts_ns": 7060844604821, "tgid": 2802, "tid": 2802, "ppid": 2174, "comm": "rm", "action": "D", "file": "/home/os2023202043/guardfs_benign_delete4/temp_1.txt", "exe": "/usr/bin/rm", "lineage_label": 0, "relation": "benign", "root_tgid": null}
+{"ts_ns": 7060844740863, "tgid": 2802, "tid": 2802, "ppid": 2174, "comm": "rm", "action": "D", "file": "/home/os2023202043/guardfs_benign_delete4/temp_2.txt", "exe": "/usr/bin/rm", "lineage_label": 0, "relation": "benign", "root_tgid": null}
+{"ts_ns": 7060844783558, "tgid": 2802, "tid": 2802, "ppid": 2174, "comm": "rm", "action": "D", "file": "/home/os2023202043/guardfs_benign_delete4/temp_3.txt", "exe": "/usr/bin/rm", "lineage_label": 0, "relation": "benign", "root_tgid": null}
+{"ts_ns": 7060844819455, "tgid": 2802, "tid": 2802, "ppid": 2174, "comm": "rm", "action": "D", "file": "/home/os2023202043/guardfs_benign_delete4/temp_4.txt", "exe": "/usr/bin/rm", "lineage_label": 0, "relation": "benign", "root_tgid": null}
+{"ts_ns": 7060844991184, "tgid": 2802, "tid": 2802, "ppid": 2174, "comm": "rm", "action": "Z", "file": "", "exe": "/usr/bin/rm", "lineage_label": 0, "relation": "benign", "root_tgid": null}

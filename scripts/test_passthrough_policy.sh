@@ -19,7 +19,7 @@ usage() {
     echo
     echo "   1  MEDIUM small write buffering"
     echo "   2  MEDIUM new-file staging"
-    echo "   3  MEDIUM large write"
+    echo "   3  MEDIUM large O_TRUNC write buffering"
     echo "   4  MEDIUM -> LOW buffer commit"
     echo "   5  MEDIUM -> HIGH buffer drop"
     echo "   6  HIGH write blocking"
@@ -170,8 +170,6 @@ def test_medium_new_file_staging():
     name = f"policy_medium_create_{stamp}.txt"
     mount_path = mount / name
     underlay_path = underlay / name
-    staging_dir = Path("/tmp/guardfs_staging")
-    before = set(staging_dir.glob("fh_*")) if staging_dir.exists() else set()
     state_path = force_state("MEDIUM")
 
     try:
@@ -179,21 +177,13 @@ def test_medium_new_file_staging():
             written = handle.write(b"STAGED-DATA\n")
             absent_while_open = not underlay_path.exists()
 
-        deadline = time.monotonic() + 2.0
-
-        while time.monotonic() < deadline:
-            after = set(staging_dir.glob("fh_*")) if staging_dir.exists() else set()
-
-            if after == before:
-                break
-
-            time.sleep(0.05)
-
-        after = set(staging_dir.glob("fh_*")) if staging_dir.exists() else set()
+        # release는 판정 전 데이터를 폐기하지 않는다. 같은 PID로 다시
+        # 열어 pending write가 보존되어 있는지 확인한다.
+        after_close = mount_path.read_bytes()
         check("Staged create acknowledged", written == 12, "full length", f"written={written}")
         check("Underlay absent while open", absent_while_open, "not created", "created too early")
         check("Underlay absent after close", not underlay_path.exists(), "not created", "unexpected target exists")
-        check("Staging release cleanup", after == before, "no new staging file", f"new={after - before}")
+        check("Staging data preserved after close", after_close == b"STAGED-DATA\n", "pending content readable", f"content={after_close!r}")
     finally:
         state_path.unlink(missing_ok=True)
 
@@ -208,12 +198,15 @@ def test_medium_large_write():
     state_path = force_state("MEDIUM")
 
     try:
-        with mount_path.open("r+b", buffering=0) as handle:
+        with mount_path.open("w+b", buffering=0) as handle:
             written = handle.write(payload)
+            handle.seek(0)
+            pending = handle.read()
 
         actual = underlay_path.read_bytes()
         check("Large write acknowledged", written == len(payload), "full length", f"written={written}")
-        check("Large write applied", actual == payload, "underlay updated", f"size={len(actual)}")
+        check("Large O_TRUNC write buffered", actual == original, "original preserved", f"size={len(actual)}")
+        check("Large pending content", pending == payload, "writer sees pending data", f"size={len(pending)}")
     finally:
         state_path.unlink(missing_ok=True)
 
@@ -225,8 +218,33 @@ def test_medium_commit():
     class FakeOps:
         def __init__(self):
             self._write_buffer = defaultdict(list)
-            self._write_count = defaultdict(int)
+            self._write_buffer_bytes = defaultdict(int)
+            self._global_buffer_bytes = 0
+            self._medium_entered_at = {}
+            self._pid_trusted = {}
+            self._trunc_paths = defaultdict(set)
+
+            self._buffer_fds = defaultdict(dict)
+            self._buffer_new_files = defaultdict(dict)
+
             self._staging_pid = defaultdict(list)
+            self._staging_fh = {}
+            self._staging_origin_fd = {}
+            self._staging_recovery = defaultdict(list)
+            self._fd_map = {}
+            self._fh_info = {}
+
+            self._unlink_staged = defaultdict(list)
+            self._unlink_identity = {}
+            self._unlink_recovery = defaultdict(list)
+
+            self._rmdir_staged = defaultdict(list)
+            self._rmdir_identity = {}
+            self._pending_metadata = defaultdict(list)
+
+        def is_trusted_process(self, pid):
+            # commit/drop을 검증하므로 실제 PID 조회 없이 버퍼링한다.
+            return False
 
         async def trigger_high(self, pid, reason=""):
             raise RuntimeError(f"unexpected HIGH: {reason}")
@@ -261,8 +279,33 @@ def test_medium_drop():
     class FakeOps:
         def __init__(self):
             self._write_buffer = defaultdict(list)
-            self._write_count = defaultdict(int)
+            self._write_buffer_bytes = defaultdict(int)
+            self._global_buffer_bytes = 0
+            self._medium_entered_at = {}
+            self._pid_trusted = {}
+            self._trunc_paths = defaultdict(set)
+
+            self._buffer_fds = defaultdict(dict)
+            self._buffer_new_files = defaultdict(dict)
+
             self._staging_pid = defaultdict(list)
+            self._staging_fh = {}
+            self._staging_origin_fd = {}
+            self._staging_recovery = defaultdict(list)
+            self._fd_map = {}
+            self._fh_info = {}
+
+            self._unlink_staged = defaultdict(list)
+            self._unlink_identity = {}
+            self._unlink_recovery = defaultdict(list)
+
+            self._rmdir_staged = defaultdict(list)
+            self._rmdir_identity = {}
+            self._pending_metadata = defaultdict(list)
+
+        def is_trusted_process(self, pid):
+            # commit/drop을 검증하므로 실제 PID 조회 없이 버퍼링한다.
+            return False
 
         async def trigger_high(self, pid, reason=""):
             raise RuntimeError(f"unexpected HIGH: {reason}")
@@ -535,7 +578,7 @@ fi
 
 if [ "$TEST_NO" = "4" ] || [ "$TEST_NO" = "5" ]; then
     echo "NOTE: this test directly verifies commit/drop policy functions."
-    echo "      Forced MEDIUM state alone does not register Stage2 reevaluation."
+    echo "      Forced MEDIUM remains pending until the override is removed."
 fi
 echo "============================================================"
 
