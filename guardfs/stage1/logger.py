@@ -21,6 +21,7 @@ class EventLogger:
         # bytes는 JSON 직렬화가 불가능해 남겨두면 stats_collector가 TypeError로 종료된다.
         record.pop("sample_data", None)
         record.pop("original_data", None)
+
         self._f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def close(self) -> None:

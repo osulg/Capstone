@@ -615,8 +615,13 @@ if run_fuse_command 5 python3 - "$MOUNT_HONEYPOT_CREATE_FILE" \
     > "$HONEYPOT_CREATE_OUTPUT_FILE" 2>&1 <<'PY'
 import os
 import sys
+from pathlib import Path
+from guardfs.common.paths import get_forced_state_path
 
 path = sys.argv[1]
+state_path = Path(get_forced_state_path(os.getpid()))
+with state_path.open("x", encoding="utf-8") as state_file:
+    state_file.write("LOW")
 try:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 except OSError as exc:
@@ -625,6 +630,8 @@ except OSError as exc:
 else:
     os.close(fd)
     print("CREATE_SUCCESS")
+finally:
+    state_path.unlink(missing_ok=True)
 PY
 then
     HONEYPOT_CREATE_RC=0

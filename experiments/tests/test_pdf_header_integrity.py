@@ -2,13 +2,13 @@
 import os
 import time
 
-target = os.path.expanduser("~/test_mount")
+target = os.path.expanduser(os.environ.get("MOUNT", "~/guardfs_runtime/mount"))
 
 print(f"[TEST] PID: {os.getpid()}")
 
 # 정상 PDF 쓰기
 with open(f"{target}/test_normal.pdf", "wb") as f:
-    f.write(b"%PDF-1.4 normal content")  # 정상 헤더
+    f.write(b"%PDF-1.4\nnormal content\n%%EOF\n")  # 정상 헤더
 print("[TEST] 정상 PDF 작성")
 
 time.sleep(0.5)

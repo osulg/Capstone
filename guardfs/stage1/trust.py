@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import os
 import subprocess
+
 import trio
 
 TRUSTED_EXE_PREFIXES = ("/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", "/usr/lib/")
@@ -18,9 +20,10 @@ _pkg_cache: dict[tuple, bool] = {}
 def _read_stat_after_comm(pid: int):
     """/proc/<pid>/stat 에서 comm(괄호) 이후 필드들을 반환."""
     try:
-        with open(f"/proc/{pid}/stat", "r") as f:
+        with open(f"/proc/{pid}/stat") as f:
             content = f.read()
         after_comm = content.rsplit(")", 1)[1]
+
         return after_comm.split()
     except Exception:
         return None
@@ -57,8 +60,7 @@ def _dpkg_query_owner(exe_path: str) -> str | None:
     """dpkg -S로 해당 경로 소속 패키지명을 조회. 못 찾으면 None."""
     try:
         owner = subprocess.run(
-            ["dpkg", "-S", exe_path],
-            capture_output=True, text=True, timeout=2
+            ["dpkg", "-S", exe_path], capture_output=True, text=True, timeout=2
         )
         if owner.returncode != 0 or not owner.stdout.strip():
             return None
@@ -76,37 +78,72 @@ def _check_package_sync(exe_path: str) -> bool:
       등록된 경우가 많아(우분투의 usr-merge) 실패하면 대응 경로로 재시도한다.
     반드시 trio.to_thread.run_sync를 통해서만 호출할 것 (이벤트 루프 블로킹 방지).
     """
+
     try:
+        # 조회 성공 여부와 무관하게 검증 보고의 대체 경로도 준비한다.
+        alt_path = None
+        if exe_path.startswith("/usr/bin/"):
+            alt_path = "/bin/" + exe_path[len("/usr/bin/") :]
+        elif exe_path.startswith("/usr/sbin/"):
+            alt_path = "/sbin/" + exe_path[len("/usr/sbin/") :]
+        elif exe_path.startswith("/bin/"):
+            alt_path = "/usr/bin/" + exe_path[len("/bin/") :]
+        elif exe_path.startswith("/sbin/"):
+            alt_path = "/usr/sbin/" + exe_path[len("/sbin/") :]
+
         package = _dpkg_query_owner(exe_path)
 
-        if package is None:
-            # usr-merge 대응: /usr/bin -> /bin, /usr/sbin -> /sbin 등으로 재시도
-            alt_path = None
-            if exe_path.startswith("/usr/bin/"):
-                alt_path = "/bin/" + exe_path[len("/usr/bin/"):]
-            elif exe_path.startswith("/usr/sbin/"):
-                alt_path = "/sbin/" + exe_path[len("/usr/sbin/"):]
-            elif exe_path.startswith("/bin/"):
-                alt_path = "/usr/bin/" + exe_path[len("/bin/"):]
-            elif exe_path.startswith("/sbin/"):
-                alt_path = "/usr/sbin/" + exe_path[len("/sbin/"):]
-
-            if alt_path:
-                package = _dpkg_query_owner(alt_path)
+        if package is None and alt_path:
+            package = _dpkg_query_owner(alt_path)
 
         if package is None:
             return False  # 어떤 패키지에도 속하지 않음 → 서명/검증 불가로 간주
 
         verify = subprocess.run(
-            ["dpkg", "-V", package],
-            capture_output=True, text=True, timeout=5
+            ["dpkg", "-V", package], capture_output=True, text=True, timeout=5
         )
+
+        if verify.returncode != 0:
+            return False  # 검증 명령 실패는 신뢰로 처리하지 않는다.
+
+        candidates = {os.path.normpath(exe_path)}
+
+        if alt_path:
+            candidates.add(os.path.normpath(alt_path))
+        candidates.update(os.path.realpath(path) for path in tuple(candidates))
+
         for line in verify.stdout.splitlines():
-            if exe_path in line:
-                return False  # 이 파일이 변조/누락 목록에 있음
+            if not line.strip():
+                continue
+
+            parts = line.strip().split(maxsplit=1)
+
+            if len(parts) != 2:
+                return False  # 판별할 수 없는 보고는 비신뢰로 처리한다.
+
+            status, reported_path = parts
+
+            if status != "missing" and len(status) != 9:
+                return False
+
+            # 설정 파일 보고의 선택적 c 표시를 제외한다.
+            marked = reported_path.split(maxsplit=1)
+            if marked[0] == "c":
+                if len(marked) != 2:
+                    return False
+                reported_path = marked[1]
+
+            if not os.path.isabs(reported_path):
+                return False
+
+            if (
+                os.path.normpath(reported_path) in candidates
+                or os.path.realpath(reported_path) in candidates
+            ):
+                return False  # 같은 파일의 원래/대체 경로 이상 보고
 
         return True
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
@@ -157,7 +194,9 @@ async def is_trusted_pid(pid: int) -> bool:
             ppid = _get_parent_pid(pid)
             if ppid:
                 parent_exe = _get_exe_path(ppid)
-                if parent_exe and any(n in parent_exe.lower() for n in UNTRUSTED_PARENT_NAMES):
+                if parent_exe and any(
+                    n in parent_exe.lower() for n in UNTRUSTED_PARENT_NAMES
+                ):
                     trusted = False
 
     if cache_key:

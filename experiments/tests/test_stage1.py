@@ -6,7 +6,7 @@ passthrough.py가 실행 중인 상태에서 돌려야 함
 import os
 import time
 
-MOUNT = "mnt/"       # 마운트포인트 경로로 바꿔주세요
+MOUNT = os.path.expanduser(os.environ.get("MOUNT", "~/guardfs_runtime/mount"))       # 마운트포인트 경로로 바꿔주세요
 HONEYPOT_DIR = f"{MOUNT}/honeypot"
 
 def write_buf(path: str, buf: bytes):

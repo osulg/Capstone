@@ -2,7 +2,7 @@
 import os
 import time
 
-target = os.path.expanduser("~/test_mount")
+target = os.path.expanduser(os.environ.get("MOUNT", "~/guardfs_runtime/mount"))
 
 print(f"[TEST] PID: {os.getpid()}")
 print("[TEST] 파일 쓰기 시작...")

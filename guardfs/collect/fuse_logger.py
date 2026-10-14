@@ -14,7 +14,8 @@ eBPF 수집기와 공유하는 스키마로 한 줄에 이벤트 하나를 JSONL
     new_path : RENAME 대상 경로
     size     : READ / WRITE / TRUNCATE 바이트 수
     offset   : READ / WRITE 오프셋
-    entropy  : WRITE 버퍼 앞 ENTROPY_HEADER_SIZE 바이트의 Shannon 엔트로피
+    entropy  : 공통 EntropyDetector가 계산한 누적 블록 엔트로피.
+               평가할 표본이 없으면 None이며, 짧은 파일은 RELEASE에서 평가될 수 있음.
     in_target: 수집 대상(마운트) 안의 경로인지. FUSE는 항상 true
 """
 
@@ -42,9 +43,7 @@ def read_proc_identity(tid: int):
     try:
         with open(f"/proc/{tid}/status", encoding="utf-8", errors="replace") as f:
             fields = dict(
-                line.rstrip("\n").split(":\t", 1)
-                for line in f
-                if ":\t" in line
+                line.rstrip("\n").split(":\t", 1) for line in f if ":\t" in line
             )
         return int(fields["Tgid"]), int(fields["PPid"]), fields["Name"]
     except (OSError, KeyError, ValueError):
@@ -106,7 +105,7 @@ class FuseCollectLogger:
         if path == self._root:
             return "/"
         if path.startswith(self._root + os.sep):
-            return path[len(self._root):]
+            return path[len(self._root) :]
         return path
 
     def write(self, ev) -> None:
