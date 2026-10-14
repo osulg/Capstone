@@ -16,7 +16,9 @@ class EventLogger:
     def write(self, ev) -> None:
         record = asdict(ev)
 
-        # 탐지용 바이트 표본은 제외하고 계산된 엔트로피 수치만 기록
+        # 탐지용 원본 데이터는 JSON 로그에 기록하지 않음
+        # (sample_data: write 샘플, original_data: Entropy Delta용 write 이전 원본 샘플)
+        # bytes는 JSON 직렬화가 불가능해 남겨두면 stats_collector가 TypeError로 종료된다.
         record.pop("sample_data", None)
         record.pop("original_data", None)
 

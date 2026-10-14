@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HoldFS EDR Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Ctext x='16' y='21' font-size='13' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'%3ECC%3C/text%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #f0f2f5;
+    color: #1a202c;
+    font-family: 'Inter', 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Segoe UI', sans-serif;
+    height: 100vh;
+    display: flex; flex-direction: column;
+  }
+  button { font-family: inherit; }
+
+  /* ── 헤더 ── */
+  header {
+    background: #ffffff;
+    padding: 0 32px;
+    height: 60px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid #e2e8f0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    position: sticky; top: 0; z-index: 100; flex-shrink: 0;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo-icon {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 0.85rem;
+  }
+  .logo h1 { font-size: 1rem; font-weight: 700; color: #1a202c; }
+  .logo span { font-size: 0.75rem; color: #64748b; font-weight: 400; margin-left: 6px; }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .live-dot { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: #16a34a; font-weight: 500; }
+  .live-dot::before {
+    content: ''; width: 8px; height: 8px; border-radius: 50%;
+    background: #16a34a; animation: pulse 1.8s infinite;
+  }
+  .live-dot.offline { color: #dc2626; }
+  .live-dot.offline::before { background: #dc2626; animation: none; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.5; transform: scale(1.3); }
+  }
+  #last-update { font-size: 0.72rem; color: #94a3b8; }
+
+  /* ── 메인 레이아웃 ── */
+  .main-layout {
+    display: flex; flex: 1; overflow: hidden;
+    min-height: 0;
+  }
+
+  /* ── 좌측 탭 레일 ── */
+  .side-rail {
+    width: 72px; flex-shrink: 0;
+    background: #fff; border-right: 1px solid #e2e8f0;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 16px 0;
+  }
+  .rail-tab {
+    position: relative;
+    width: 58px; padding: 10px 0 8px; border: none; border-radius: 10px;
+    background: transparent; color: #64748b; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    font-size: 0.62rem; font-weight: 600; line-height: 1.2;
+  }
+  .rail-tab .rail-icon {
+    width: 34px; height: 34px; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center; font-size: 1.05rem;
+    background: #f1f5f9; transition: background .15s;
+  }
+  .rail-tab:hover { color: #334155; }
+  .rail-tab:hover .rail-icon { background: #e2e8f0; }
+  .rail-tab.active { color: #1d4ed8; }
+  .rail-tab.active .rail-icon { background: #dbeafe; }
+  .rail-tab.ai.active { color: #6d28d9; }
+  .rail-tab.ai.active .rail-icon { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
+  .rail-tab.ai.active::before {
+    content: ''; position: absolute; left: -7px; top: 14px; bottom: 14px;
+    width: 3px; border-radius: 0 3px 3px 0; background: #7c3aed;
+  }
+  .rail-dot {
+    position: absolute; top: 6px; right: 10px; width: 8px; height: 8px; border-radius: 50%;
+    background: #ef4444; border: 2px solid #fff; display: none;
+  }
+  .rail-dot.show { display: block; }
+
+  /* ── 왼쪽: 대시보드 ── */
+  .dashboard-pane {
+    flex: 1; overflow-y: auto;
+    padding: 24px 24px 24px 32px;
+    min-width: 0;
+  }
+
+  /* ── 통계 카드 ── */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+  .card {
+    background: #fff; border-radius: 12px;
+    padding: 18px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+    border: 1px solid #e2e8f0;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .card-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.3rem; flex-shrink: 0; }
+  .card-total  .card-icon { background: #eff6ff; }
+  .card-high   .card-icon { background: #fef2f2; }
+  .card-medium .card-icon { background: #fffbeb; }
+  .card-low    .card-icon { background: #f0fdf4; }
+  .card-body .num { font-size: 1.7rem; font-weight: 700; line-height: 1; }
+  .card-body .lbl { font-size: 0.72rem; color: #64748b; margin-top: 4px; font-weight: 500; }
+  .card-total  .num { color: #3b82f6; }
+  .card-high   .num { color: #ef4444; }
+  .card-medium .num { color: #f59e0b; }
+  .card-low    .num { color: #22c55e; }
+
+  /* ── 테이블 섹션 ── */
+  .section { background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.07); overflow: hidden; }
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 16px 20px; border-bottom: 1px solid #edf2f7; flex-wrap: wrap;
+  }
+  .section-head h2 { font-size: 0.9rem; font-weight: 700; }
+  .section-head h2 { white-space: nowrap; }
+  .section-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .filter-btn, #event-count { white-space: nowrap; }
+  .filter-btn {
+    border: 1px solid #e2e8f0; background: #fff; color: #64748b;
+    font-size: 0.7rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .filter-btn.active { background: #1e293b; color: #fff; border-color: #1e293b; }
+  #event-count { font-size: 0.72rem; color: #94a3b8; margin-left: 4px; }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+  thead th {
+    text-align: left; font-weight: 600; color: #64748b; font-size: 0.7rem;
+    padding: 10px 12px; background: #f8fafc; border-bottom: 1px solid #edf2f7; white-space: nowrap;
+  }
+  tbody td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; white-space: nowrap; vertical-align: middle; }
+  tbody tr.lv-HIGH   { background: #fff1f2; }
+  tbody tr.lv-MEDIUM { background: #fffbeb; }
+  tbody tr.lv-LOW    { background: #f0fdf4; }
+  tbody tr.lv-SUSPICIOUS { background: #f5f3ff; }
+  tbody tr:hover { filter: brightness(0.98); }
+  tbody tr.new { animation: flash 1.6s ease-out; }
+  @keyframes flash { from { box-shadow: inset 4px 0 0 #3b82f6; background: #dbeafe; } }
+  td.time { color: #64748b; font-variant-numeric: tabular-nums; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 0.66rem; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+  }
+  .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .badge-HIGH   { color: #dc2626; background: #fee2e2; }
+  .badge-MEDIUM { color: #b45309; background: #fef3c7; }
+  .badge-LOW    { color: #15803d; background: #dcfce7; }
+  .badge-SUSPICIOUS { color: #7c3aed; background: #ede9fe; }
+  .pid-link { color: #3b82f6; cursor: pointer; font-variant-numeric: tabular-nums; }
+  .pid-link:hover { text-decoration: underline; }
+  td.proc { font-weight: 600; }
+  td.target {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: #2563eb;
+    white-space: normal; overflow-wrap: anywhere; min-width: 200px; line-height: 1.45;
+  }
+  .action {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.64rem; font-weight: 600;
+    background: #f1f5f9; color: #334155; padding: 2px 7px; border-radius: 4px;
+  }
+  td.result { font-weight: 700; font-size: 0.7rem; }
+  .res-BLOCKED, .res-HIGH, .res-ESCALATED_TO_HIGH, .res-SUSPENDED, .res-FAILED { color: #dc2626; }
+  .res-BUFFERED, .res-MEDIUM, .res-STAGED { color: #d97706; }
+  .res-SUCCESS, .res-CONFIRMED, .res-RESTORED, .res-LOW { color: #16a34a; }
+  .res-BUFFER_DROPPED { color: #334155; font-weight: 500; }
+  .res-SUSPICIOUS { color: #7c3aed; }
+  td.reason { color: #94a3b8; font-size: 0.7rem; white-space: normal; word-break: break-word; min-width: 180px; max-width: 340px; line-height: 1.45; }
+  .empty { text-align: center; color: #94a3b8; padding: 48px 0; font-size: 0.8rem; white-space: normal; }
+  .empty code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.72rem; color: #334155; }
+
+  /* ── 오른쪽: AI 분석관 ── */
+  .ai-pane {
+    width: 400px; flex-shrink: 0;
+    background: #fff; border-left: 1px solid #e2e8f0;
+    display: none; flex-direction: column; min-height: 0;
+  }
+  .main-layout.ai-open .ai-pane { display: flex; animation: slideIn .18s ease-out; }
+  @keyframes slideIn { from { opacity: 0; transform: translateX(16px); } }
+  .ai-head-right { display: flex; align-items: center; gap: 10px; }
+  .ai-close {
+    width: 26px; height: 26px; border: none; border-radius: 7px; cursor: pointer;
+    background: #f1f5f9; color: #64748b; font-size: 0.9rem; line-height: 1;
+  }
+  .ai-close:hover { background: #e2e8f0; color: #1e293b; }
+  .ai-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 12px; }
+  .ai-title { display: flex; align-items: center; gap: 10px; }
+  .ai-icon {
+    width: 34px; height: 34px; border-radius: 9px;
+    background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+    display: flex; align-items: center; justify-content: center; font-size: 1.05rem;
+  }
+  .ai-title h3 { font-size: 0.86rem; font-weight: 700; }
+  .ai-title small { display: block; font-size: 0.66rem; color: #94a3b8; margin-top: 1px; }
+  #ai-status { font-size: 0.7rem; font-weight: 600; color: #16a34a; }
+  #ai-status.local { color: #d97706; }
+  #ai-status.busy { color: #7c3aed; }
+  .quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 18px 12px; border-bottom: 1px solid #f1f5f9; }
+  .quick button {
+    border: 1px solid #e2e8f0; background: #f8fafc; color: #334155;
+    font-size: 0.68rem; font-weight: 600; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .quick button:hover { background: #eef2ff; border-color: #c7d2fe; color: #4338ca; }
+  .quick button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .chat { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .intro {
+    background: #ede9fe; border: 1px solid #c4b5fd; border-radius: 12px;
+    padding: 14px; font-size: 0.74rem; color: #4c1d95; line-height: 1.6;
+  }
+  .intro b { display: block; font-size: 0.78rem; margin-bottom: 4px; }
+  .msg { display: flex; gap: 8px; align-items: flex-start; }
+  .msg.user { flex-direction: row-reverse; }
+  .avatar {
+    width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.64rem; font-weight: 700;
+  }
+  .msg.ai .avatar { background: #7c3aed; color: #fff; }
+  .msg.user .avatar { background: #dbeafe; color: #2563eb; }
+  .bubble { font-size: 0.74rem; line-height: 1.65; border-radius: 10px; padding: 10px 12px; max-width: 86%; word-break: break-word; }
+  .msg.user .bubble { background: #3b82f6; color: #fff; border-top-right-radius: 3px; white-space: pre-wrap; }
+  .msg.ai .bubble { background: #f8fafc; border: 1px solid #e2e8f0; color: #334155; border-top-left-radius: 3px; }
+  .bubble h3, .bubble h4 { font-size: 0.78rem; font-weight: 700; color: #1e293b; margin: 10px 0 4px; }
+  .bubble h3:first-child, .bubble h4:first-child { margin-top: 0; }
+  .bubble p { margin: 4px 0; }
+  .bubble ol, .bubble ul { margin: 4px 0 4px 18px; }
+  .bubble li { margin: 2px 0; }
+  .bubble code { font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; background: #e2e8f0; padding: 1px 4px; border-radius: 3px; }
+  .bubble pre { background: #1e293b; color: #e2e8f0; padding: 8px; border-radius: 6px; overflow-x: auto; margin: 6px 0; }
+  .bubble pre code { background: none; color: inherit; padding: 0; }
+  .bubble blockquote { border-left: 3px solid #f59e0b; padding-left: 8px; color: #92400e; margin: 4px 0; }
+  .bubble strong { color: #0f172a; }
+  .sources { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #e2e8f0; font-size: 0.62rem; color: #94a3b8; }
+  .typing span { display: inline-block; width: 6px; height: 6px; margin-right: 3px; border-radius: 50%; background: #a78bfa; animation: bounce 1.2s infinite; }
+  .typing span:nth-child(2) { animation-delay: .15s; }
+  .typing span:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .5; } 40% { transform: translateY(-4px); opacity: 1; } }
+
+  .composer { border-top: 1px solid #e2e8f0; padding: 12px 14px; display: flex; gap: 8px; align-items: flex-end; }
+  .composer textarea {
+    flex: 1; resize: none; border: 1px solid #e2e8f0; border-radius: 10px;
+    padding: 9px 11px; font-family: inherit; font-size: 0.76rem; line-height: 1.45;
+    max-height: 120px; outline: none; background: #f8fafc;
+  }
+  .composer textarea:focus { border-color: #a78bfa; background: #fff; }
+  .composer button {
+    background: #3b82f6; color: #fff; border: none; border-radius: 10px;
+    padding: 9px 14px; font-size: 0.74rem; font-weight: 600; cursor: pointer;
+  }
+  .composer button:disabled { background: #93c5fd; cursor: not-allowed; }
+
+  /* ── 파일 상태 뷰 ── */
+  .view[hidden] { display: none !important; }
+  .files-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .files-head h2 { font-size: 1.05rem; font-weight: 700; }
+  .files-head p { font-size: 0.72rem; color: #64748b; margin-top: 4px; }
+  .files-tools { display: flex; align-items: center; gap: 8px; font-size: 0.7rem; color: #64748b; flex-wrap: wrap; }
+  .files-tools .chip { background: #fff; border: 1px solid #e2e8f0; border-radius: 999px; padding: 4px 10px; font-weight: 600; white-space: nowrap; }
+  .files-tools .chip b { color: #1e293b; }
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  .folder { background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.07); overflow: hidden; }
+  .folder-head { padding: 14px 18px; border-bottom: 1px solid #edf2f7; display: flex; align-items: center; gap: 12px; }
+  .folder-icon { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
+  .folder.protected .folder-icon { background: #dcfce7; }
+  .folder.unprotected .folder-icon { background: #fee2e2; }
+  .folder-title { min-width: 0; flex: 1; }
+  .folder-title h3 { font-size: 0.86rem; font-weight: 700; }
+  .folder-title code { display: block; font-family: 'JetBrains Mono', monospace; font-size: 0.64rem; color: #64748b; margin-top: 2px; overflow-wrap: anywhere; }
+  .folder-sum { display: flex; gap: 6px; flex-shrink: 0; }
+  .sum { font-size: 0.66rem; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+  .sum.ok { color: #15803d; background: #dcfce7; }
+  .sum.bad { color: #dc2626; background: #fee2e2; }
+  .sum.honey { color: #b45309; background: #fef3c7; }
+  .file-list { list-style: none; max-height: 430px; overflow-y: auto; }
+  .fname .fdir { display: block; color: #94a3b8; font-size: 0.6rem; }
+  .fname .tag-ext { display: inline-block; margin-left: 6px; color: #dc2626; background: #fee2e2; font-size: 0.58rem; font-weight: 700; padding: 1px 6px; border-radius: 4px; font-family: 'Inter', sans-serif; }
+  .fstate.unknown { color: #64748b; background: #f1f5f9; }
+  .fstate.honey { color: #b45309; background: #fef3c7; }
+  .file-row.honey { background: #fffbeb; }
+  .file-row.honey.selected { background: #fef3c7; }
+  .entbar.honey span { background: #f59e0b; }
+  .folder-empty { padding: 28px 18px; text-align: center; font-size: 0.72rem; color: #94a3b8; line-height: 1.7; }
+  .folder-empty code { display: inline-block; margin-top: 6px; background: #f1f5f9; color: #334155; padding: 3px 8px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 0.64rem; overflow-wrap: anywhere; }
+  .preview:empty { display: none; }
+  .file-row {
+    display: grid; grid-template-columns: minmax(0, 1.4fr) auto minmax(90px, 1fr) auto;
+    align-items: center; gap: 12px; padding: 10px 18px; border-bottom: 1px solid #f1f5f9;
+    cursor: pointer; font-size: 0.74rem;
+  }
+  .file-row:hover { background: #f8fafc; }
+  .file-row.selected { background: #eff6ff; box-shadow: inset 3px 0 0 #3b82f6; }
+  .file-row.enc { background: #fff1f2; }
+  .file-row.enc.selected { background: #ffe4e6; }
+  .fname { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; overflow-wrap: anywhere; }
+  .fname .renamed { display: block; color: #dc2626; font-size: 0.62rem; margin-top: 2px; }
+  .fstate { font-size: 0.64rem; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+  .fstate.ok { color: #15803d; background: #dcfce7; }
+  .fstate.enc { color: #dc2626; background: #fee2e2; }
+  .entbar { position: relative; height: 6px; background: #e2e8f0; border-radius: 999px; }
+  .entbar span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: #22c55e; }
+  .entbar.hi span { background: #ef4444; }
+  .entbar::after { content: ''; position: absolute; top: -3px; bottom: -3px; left: 87.5%; width: 2px; background: #94a3b8; }
+  .entval { font-size: 0.62rem; color: #64748b; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .fmeta { font-size: 0.64rem; color: #94a3b8; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .preview { border-top: 1px solid #e2e8f0; background: #f8fafc; padding: 12px 18px 16px; }
+  .preview-head { display: flex; justify-content: space-between; align-items: center; font-size: 0.66rem; color: #64748b; margin-bottom: 8px; gap: 8px; }
+  .preview-head b { color: #1e293b; font-family: 'JetBrains Mono', monospace; overflow-wrap: anywhere; }
+  .preview pre {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.66rem; line-height: 1.55;
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px;
+    white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow: auto; color: #334155;
+  }
+  .preview pre.hex { color: #b91c1c; background: #fff7f7; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; font-size: 0.66rem; color: #64748b; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
+
+  /* ── 반응형 ── */
+  @media (max-width: 600px) {
+    .folder-head { flex-wrap: wrap; }
+    .file-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; padding: 10px 14px; }
+    .file-row > div:nth-child(3) { grid-column: 1 / 2; }
+    .fmeta { text-align: right; }
+  }
+  @media (max-width: 1180px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .compare { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 960px) {
+    body { height: auto; min-height: 100vh; }
+    .main-layout { flex-direction: column; height: auto; overflow: visible; }
+    .side-rail {
+      width: 100%; flex-direction: row; justify-content: center; padding: 6px 0;
+      border-right: none; border-bottom: 1px solid #e2e8f0;
+      position: sticky; top: 60px; z-index: 90;
+    }
+    .rail-tab { flex-direction: row; width: auto; padding: 6px 12px; gap: 6px; }
+    .rail-tab .rail-icon { width: 26px; height: 26px; font-size: 0.85rem; }
+    .rail-tab.ai.active::before { display: none; }
+    .dashboard-pane { padding: 16px; overflow: visible; }
+    .ai-pane { width: 100%; border-left: none; border-top: 1px solid #e2e8f0; height: 80vh; }
+    header { padding: 0 16px; }
+    .logo span { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">
+    <div class="logo-icon">CC</div>
+    <h1>HoldFS EDR<span>Endpoint Detection &amp; Response</span></h1>
+  </div>
+  <div class="header-right">
+    <div class="live-dot" id="live">실시간 모니터링</div>
+    <div id="last-update">-</div>
+  </div>
+</header>
+
+<div class="main-layout" id="layout">
+  <!-- ── 좌측 탭 ── -->
+  <nav class="side-rail" aria-label="화면 전환">
+    <button class="rail-tab active" id="tab-events" title="보안 이벤트 로그">
+      <span class="rail-icon">📋</span>이벤트
+    </button>
+    <button class="rail-tab" id="tab-files" title="파일 상태 (보호 vs 비보호 비교)">
+      <span class="rail-icon">📁</span>파일 상태
+    </button>
+    <button class="rail-tab ai" id="tab-ai" title="AI 보안 분석관 열기/닫기" aria-expanded="false" aria-controls="ai-pane">
+      <span class="rail-icon">🤖</span>AI 분석관
+      <span class="rail-dot" id="ai-dot"></span>
+    </button>
+  </nav>
+
+  <!-- ── 대시보드 ── -->
+  <main class="dashboard-pane">
+   <div class="view" id="view-events">
+    <div class="stats">
+      <div class="card card-total">
+        <div class="card-icon">📋</div>
+        <div class="card-body"><div class="num" id="stat-total">0</div><div class="lbl">전체 이벤트</div></div>
+      </div>
+      <div class="card card-high">
+        <div class="card-icon">🚨</div>
+        <div class="card-body"><div class="num" id="stat-high">0</div><div class="lbl">HIGH 위협</div></div>
+      </div>
+      <div class="card card-medium">
+        <div class="card-icon">⚠️</div>
+        <div class="card-body"><div class="num" id="stat-medium">0</div><div class="lbl">MEDIUM 의심</div></div>
+      </div>
+      <div class="card card-low">
+        <div class="card-icon">🛡️</div>
+        <div class="card-body"><div class="num" id="stat-blocked">0</div><div class="lbl">차단된 작업</div></div>
+      </div>
+    </div>
+
+    <section class="section" id="table-anchor">
+      <div class="section-head">
+        <h2>보안 이벤트 로그</h2>
+        <div class="section-tools">
+          <button class="filter-btn active" data-filter="ALL">전체</button>
+          <button class="filter-btn" data-filter="HIGH">HIGH</button>
+          <button class="filter-btn" data-filter="MEDIUM">MEDIUM</button>
+          <button class="filter-btn" data-filter="ESCALATE">격상 이력</button>
+          <button class="filter-btn" data-filter="HONEYPOT">허니팟</button>
+          <span id="event-count">0개 이벤트</span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>시각</th><th>위험도</th><th>PID</th><th>프로세스</th>
+              <th>대상 파일</th><th>동작</th><th>결과</th><th>탐지 사유</th>
+            </tr>
+          </thead>
+          <tbody id="event-body">
+            <tr><td colspan="8" class="empty">
+              수신된 이벤트가 없습니다.<br><br>
+              에이전트 실행: <code>python dashboard/agent.py</code> &nbsp;·&nbsp; 샘플: <code>python dashboard/agent.py --demo</code>
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+   </div>
+
+   <!-- ── 파일 상태 (뼈대: 목업 데이터) ── -->
+   <div class="view" id="view-files" hidden>
+    <div class="files-head">
+      <div>
+        <h2>파일 상태</h2>
+        <p>VM 안의 폴더를 읽기 전용으로 보여줍니다. 같은 공격을 받은 두 폴더를 비교하세요.</p>
+      </div>
+      <div class="files-tools">
+        <span class="chip">암호화 판정 엔트로피 ≥ <b id="files-threshold">7.0</b></span>
+        <span class="chip" id="files-updated">불러오는 중…</span>
+      </div>
+    </div>
+
+    <div class="compare">
+      <section class="folder protected">
+        <div class="folder-head">
+          <div class="folder-icon">🛡️</div>
+          <div class="folder-title">
+            <h3>보호 폴더 (HoldFS)</h3>
+            <code id="path-protected">-</code>
+          </div>
+          <div class="folder-sum" id="sum-protected"></div>
+        </div>
+        <ul class="file-list" id="list-protected"></ul>
+        <div class="preview" id="preview-protected"></div>
+      </section>
+
+      <section class="folder unprotected">
+        <div class="folder-head">
+          <div class="folder-icon">⚠️</div>
+          <div class="folder-title">
+            <h3>보호 없는 폴더</h3>
+            <code id="path-unprotected">-</code>
+          </div>
+          <div class="folder-sum" id="sum-unprotected"></div>
+        </div>
+        <ul class="file-list" id="list-unprotected"></ul>
+        <div class="preview" id="preview-unprotected"></div>
+      </section>
+    </div>
+
+    <div class="legend">
+      <span><i style="background:#22c55e"></i>정상 (엔트로피 &lt; 7.0)</span>
+      <span><i style="background:#ef4444"></i>암호화 의심 (엔트로피 ≥ 7.0)</span>
+      <span><i style="background:#94a3b8"></i>막대의 세로선 = 판정 기준 7.0 (최대 8.0)</span>
+    </div>
+   </div>
+  </main>
+
+  <!-- ── AI 분석관 ── -->
+  <aside class="ai-pane" id="ai-pane">
+    <div class="ai-head">
+      <div class="ai-title">
+        <div class="ai-icon">🤖</div>
+        <div><h3>AI 보안 분석관</h3><small>RAG + LLM 침입 분석</small></div>
+      </div>
+      <div class="ai-head-right">
+        <div id="ai-status">● 준비됨</div>
+        <button class="ai-close" id="ai-close" title="닫기" aria-label="AI 분석관 닫기">✕</button>
+      </div>
+    </div>
+    <div class="chat" id="chat">
+      <div class="intro">
+        <b>⚡ HoldFS AI 보안 분석관</b>
+        현재 수신된 EDR 이벤트를 기반으로 침입 시나리오를 분석합니다.<br>
+        위협 분석, MITRE ATT&amp;CK 매핑, 대응 방안을 물어보세요.
+        표의 PID를 클릭하면 해당 프로세스를 바로 분석합니다.<br>
+        패널은 ✕ 버튼, 왼쪽 탭, Esc 키로 닫을 수 있습니다.
+      </div>
+    </div>
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="예: pid 905425가 뭘 한건지 알려줘"></textarea>
+      <button id="send">전송</button>
+    </div>
+  </aside>
+</div>
+
+<script>
+(() => {
+  const POLL_MS = 2000;
+  const state = { events: [], lastId: 0, gen: 0, filter: 'ALL', history: [], busy: false };
+  const $ = (id) => document.getElementById(id);
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // ── 이벤트 폴링 ──
+  async function poll() {
+    try {
+      const res = await fetch(`/api/events?since_id=${state.lastId}&gen=${state.gen}`);
+      const data = await res.json();
+      let fresh = [];
+      if (data.reset) {
+        state.events = data.events;
+      } else {
+        fresh = data.events;
+        state.events.push(...fresh);
+      }
+      state.gen = data.gen;
+      state.lastId = data.last_id;
+      renderStats(data.stats);
+      if (data.reset || fresh.length) renderTable(new Set(fresh.map((e) => e.id)));
+      $('live').classList.remove('offline');
+      $('live').textContent = '실시간 모니터링';
+      $('last-update').textContent =
+        new Date().toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ' 갱신';
+    } catch (e) {
+      $('live').classList.add('offline');
+      $('live').textContent = '서버 연결 끊김';
+    }
+  }
+
+  function renderStats(s) {
+    $('stat-total').textContent = s.total;
+    $('stat-high').textContent = s.high;
+    $('stat-medium').textContent = s.medium;
+    $('stat-blocked').textContent = s.blocked;
+  }
+
+  function matchFilter(e) {
+    if (state.filter === 'ALL') return true;
+    if (state.filter === 'HONEYPOT') return /honeypot/i.test(e.reason || '');
+    if (state.filter === 'ESCALATE') return ['ESCALATE', 'SIGSTOP', 'RETURN'].includes(e.action) || e.result === 'ESCALATED_TO_HIGH';
+    return e.level === state.filter;
+  }
+
+  function renderTable(newIds = new Set()) {
+    const rows = state.events.filter(matchFilter).slice().reverse();
+    $('event-count').textContent = `${rows.length}개 이벤트`;
+    if (!rows.length) {
+      $('event-body').innerHTML = `<tr><td colspan="8" class="empty">${state.events.length
+        ? '필터에 해당하는 이벤트가 없습니다.'
+        : '수신된 이벤트가 없습니다.<br><br>에이전트 실행: <code>python dashboard/agent.py</code> &nbsp;·&nbsp; 샘플: <code>python dashboard/agent.py --demo</code>'}</td></tr>`;
+      return;
+    }
+    $('event-body').innerHTML = rows.slice(0, 500).map((e) => `
+      <tr class="lv-${esc(e.level)}${newIds.has(e.id) ? ' new' : ''}">
+        <td class="time">${esc(e.time)}</td>
+        <td><span class="badge badge-${esc(e.level)}">${esc(e.level)}</span></td>
+        <td><span class="pid-link" data-pid="${esc(e.pid)}" title="AI 분석관에게 이 PID 분석 요청">${esc(e.pid)}</span></td>
+        <td class="proc">${esc(e.process || '-')}</td>
+        <td class="target">${esc(e.target).replace(/\//g, '/<wbr>')}</td>
+        <td><span class="action">${esc(e.action)}</span></td>
+        <td class="result res-${esc(e.result)}">${esc(e.result)}</td>
+        <td class="reason">${esc(e.reason)}</td>
+      </tr>`).join('');
+  }
+
+  document.querySelectorAll('.filter-btn').forEach((b) => b.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    state.filter = b.dataset.filter;
+    renderTable();
+  }));
+
+  // ── AI 분석관 패널 열기/닫기 (기본: 닫힘 → 이벤트 로그 전체 화면) ──
+  function setAiOpen(open) {
+    $('layout').classList.toggle('ai-open', open);
+    $('tab-ai').classList.toggle('active', open);
+    $('tab-ai').setAttribute('aria-expanded', String(open));
+    if (open) {
+      $('ai-dot').classList.remove('show');
+      $('chat').scrollTop = $('chat').scrollHeight;
+      if (window.matchMedia('(max-width: 960px)').matches) $('ai-pane').scrollIntoView({ behavior: 'smooth' });
+      else $('input').focus();
+    }
+  }
+  const aiOpen = () => $('layout').classList.contains('ai-open');
+  $('tab-ai').addEventListener('click', () => setAiOpen(!aiOpen()));
+  $('ai-close').addEventListener('click', () => setAiOpen(false));
+  // ── 메인 뷰 전환 (이벤트 로그 / 파일 상태) ──
+  function showView(name) {
+    $('view-events').hidden = name !== 'events';
+    $('view-files').hidden = name !== 'files';
+    $('tab-events').classList.toggle('active', name === 'events');
+    $('tab-files').classList.toggle('active', name === 'files');
+    if (name === 'files') pollFiles();
+  }
+  $('tab-events').addEventListener('click', () => showView('events'));
+  $('tab-files').addEventListener('click', () => showView('files'));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && aiOpen()) setAiOpen(false); });
+
+  $('event-body').addEventListener('click', (ev) => {
+    const el = ev.target.closest('.pid-link');
+    if (!el) return;
+    setAiOpen(true);
+    ask(`pid ${el.dataset.pid}가 뭘 한건지 알려줘. 왜 격상됐는지도 설명해줘.`);
+  });
+
+  // ── 마크다운 렌더러 (LLM 응답용, 외부 라이브러리 없이) ──
+  function inline(s) {
+    return esc(s)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
+  }
+  function markdown(src) {
+    const lines = String(src).replace(/\r/g, '').split('\n');
+    const out = [];
+    let list = null, inCode = false, code = [];
+    const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+    for (const line of lines) {
+      if (line.trim().startsWith('```')) {
+        if (inCode) { out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`); code = []; inCode = false; }
+        else { closeList(); inCode = true; }
+        continue;
+      }
+      if (inCode) { code.push(line); continue; }
+      let m;
+      if ((m = line.match(/^\s*#{1,6}\s+(.*)/))) { closeList(); out.push(`<h3>${inline(m[1])}</h3>`); }
+      else if ((m = line.match(/^\s*\d+[.)]\s+(.*)/))) {
+        if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; }
+        out.push(`<li>${inline(m[1])}</li>`);
+      } else if ((m = line.match(/^\s*[-*•]\s+(.*)/))) {
+        if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; }
+        out.push(`<li>${inline(m[1])}</li>`);
+      } else if ((m = line.match(/^\s*>\s?(.*)/))) { closeList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); }
+      else if (!line.trim()) { closeList(); }
+      else { closeList(); out.push(`<p>${inline(line)}</p>`); }
+    }
+    if (inCode) out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+    closeList();
+    return out.join('');
+  }
+
+  // ── 채팅 ──
+  function addMsg(role, html) {
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    div.innerHTML = `<div class="avatar">${role === 'ai' ? 'AI' : '나'}</div><div class="bubble">${html}</div>`;
+    $('chat').appendChild(div);
+    $('chat').scrollTop = $('chat').scrollHeight;
+    return div;
+  }
+
+  function setBusy(b) {
+    state.busy = b;
+    $('send').disabled = b;
+    document.querySelectorAll('.quick button').forEach((x) => { x.disabled = b; });
+    const st = $('ai-status');
+    if (b) { st.className = 'busy'; st.textContent = '● 분석 중'; }
+    else refreshHealth();
+  }
+
+  async function ask(text) {
+    text = (text || '').trim();
+    if (!text || state.busy) return;
+    addMsg('user', esc(text));
+    const pending = addMsg('ai', '<div class="typing"><span></span><span></span><span></span></div>');
+    setBusy(true);
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, history: state.history }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      const src = data.sources || {};
+      const meta = [
+        data.mode === 'llm' ? 'LLM 분석' : '로컬 규칙 기반 분석',
+        src.pids && src.pids.length ? `참조 PID: ${src.pids.join(', ')}` : '',
+        src.events ? `이벤트 ${src.events}건` : '',
+        src.docs && src.docs.length ? `지식: ${src.docs.join(' · ')}` : '',
+      ].filter(Boolean).join(' | ');
+      pending.querySelector('.bubble').innerHTML = markdown(data.reply) + `<div class="sources">${esc(meta)}</div>`;
+      if (!aiOpen()) $('ai-dot').classList.add('show');
+      state.history.push({ role: 'user', content: text }, { role: 'assistant', content: data.reply });
+      state.history = state.history.slice(-16);
+    } catch (e) {
+      pending.querySelector('.bubble').innerHTML = `<blockquote>분석 요청 실패: ${esc(e.message)}</blockquote>`;
+    } finally {
+      setBusy(false);
+      $('chat').scrollTop = $('chat').scrollHeight;
+    }
+  }
+
+  async function refreshHealth() {
+    try {
+      const h = await (await fetch('/api/health')).json();
+      const st = $('ai-status');
+      if (h.llm) { st.className = ''; st.textContent = '● 준비됨'; st.title = h.model; }
+      else { st.className = 'local'; st.textContent = '● 로컬 모드'; st.title = 'OPENAI_API_KEY 미설정 — 규칙 기반 분석'; }
+    } catch (e) { /* 폴링에서 연결 상태 표시 */ }
+  }
+
+  document.querySelectorAll('.quick button').forEach((b) => b.addEventListener('click', () => ask(b.dataset.q)));
+  $('send').addEventListener('click', () => { ask($('input').value); $('input').value = ''; autosize(); });
+  $('input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      ask($('input').value); $('input').value = ''; autosize();
+    }
+  });
+  const autosize = () => { const t = $('input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px'; };
+  $('input').addEventListener('input', autosize);
+
+  // ── 파일 상태 (/api/files, 읽기 전용) ──
+  const FILE_POLL_MS = 2000;
+  const files = { data: null, selected: {}, preview: {}, previewKey: {} };
+  // 비어 있을 때 안내할 시뮬레이터 실행 경로 (보호 폴더는 마운트를 거쳐야 HoldFS가 개입한다)
+  const SIM_TARGET = {
+    protected: '~/guardfs_runtime/mount/sim_target',
+    unprotected: '~/guardfs_demo/unprotected/sim_target',
+  };
+  const fmtSize = (b) => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : b >= 1024 ? (b / 1024).toFixed(1) + ' KB' : b + ' B';
+  const hhmmss = (d) => [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
+  const fmtTime = (t) => hhmmss(new Date(t * 1000));
+  const filesVisible = () => !$('view-files').hidden;
+
+  const STATE_LABEL = {
+    ok: ['ok', '✅ 정상'],
+    encrypted: ['enc', '🔴 암호화 의심'],
+    unknown: ['unknown', '판정 불가'],
+    honeypot: ['honey', '🍯 미끼 파일'],
+    unreadable: ['unknown', '읽기 실패'],
+  };
+
+  function emptyHtml(folder) {
+    const cmd = `python3 experiments/simulators/sim_highentropy.py ${SIM_TARGET[folder.key]} --keep`;
+    if (!folder.exists) {
+      return `<div class="folder-empty">폴더가 없습니다.<br><code>mkdir -p ${esc(folder.path)}</code></div>`;
+    }
+    return `<div class="folder-empty">파일이 없습니다. 시뮬레이터를 실행해 보세요.<br><code>${esc(cmd)}</code></div>`;
+  }
+
+  function renderFolder(folder) {
+    const key = folder.key;
+    const list = $('list-' + key);
+    const scroll = list.scrollTop;
+    $('path-' + key).textContent = folder.path;
+
+    const enc = folder.files.filter((f) => f.state === 'encrypted').length;
+    const ok = folder.files.filter((f) => f.state === 'ok').length;
+    const honey = folder.files.filter((f) => f.state === 'honeypot').length;
+    $('sum-' + key).innerHTML = folder.files.length
+      ? `<span class="sum ok">정상 ${ok}</span>` + (enc ? `<span class="sum bad">암호화 ${enc}</span>` : '')
+        + (honey ? `<span class="sum honey" title="정상/암호화 개수에서 제외">미끼 ${honey}</span>` : '')
+      : '';
+
+    if (!folder.files.length) {
+      list.innerHTML = emptyHtml(folder);
+      $('preview-' + key).innerHTML = '';
+      files.selected[key] = null;
+      return;
+    }
+
+    // 선택 유지. 없으면 암호화 의심 파일 → 첫 파일 순으로 고른다.
+    let sel = folder.files.find((f) => f.path === files.selected[key]);
+    if (!sel) sel = folder.files.find((f) => f.state === 'encrypted') || folder.files[0];
+    files.selected[key] = sel.path;
+
+    list.innerHTML = folder.files.map((f) => {
+      const [cls, label] = STATE_LABEL[f.state] || STATE_LABEL.unknown;
+      const hi = f.state === 'encrypted';
+      const hp = f.state === 'honeypot';
+      const ent = f.entropy;
+      return `<li class="file-row${hi ? ' enc' : ''}${hp ? ' honey' : ''}${f.path === sel.path ? ' selected' : ''}" data-key="${key}" data-path="${esc(f.path)}">
+        <div class="fname">${f.dir ? `<span class="fdir">${esc(f.dir)}/</span>` : ''}${esc(f.name)}${f.ransom_ext ? '<span class="tag-ext">의심 확장자</span>' : ''}</div>
+        <span class="fstate ${cls}">${label}</span>
+        <div><div class="entbar${hi ? ' hi' : ''}${hp ? ' honey' : ''}"><span style="width:${ent == null ? 0 : (ent / 8 * 100).toFixed(1)}%"></span></div>
+             <div class="entval">${ent == null ? '샘플 부족' : '엔트로피 ' + ent.toFixed(2)}</div></div>
+        <div class="fmeta">${fmtSize(f.size)}<br>${fmtTime(f.mtime)}</div>
+      </li>`;
+    }).join('') + (folder.truncated ? '<li class="folder-empty">파일이 많아 일부만 표시합니다.</li>' : '');
+    list.scrollTop = scroll;
+    loadPreview(key, sel);
+  }
+
+  async function loadPreview(key, f) {
+    const pkey = `${f.path}|${f.mtime}|${f.size}`;
+    if (files.previewKey[key] !== pkey) {
+      files.previewKey[key] = pkey;
+      try {
+        const res = await fetch(`/api/files/preview?folder=${key}&path=${encodeURIComponent(f.path)}`);
+        files.preview[key] = res.ok ? await res.json() : { kind: 'error' };
+      } catch (e) {
+        files.preview[key] = { kind: 'error' };
+      }
+    }
+    const p = files.preview[key];
+    if (!p || files.selected[key] !== f.path) return;
+    const desc = p.kind === 'text' ? '앞부분 텍스트' : p.kind === 'hex' ? `앞부분 ${p.bytes} 바이트 (hex)` : '';
+    $('preview-' + key).innerHTML = `
+      <div class="preview-head"><span>미리보기 · <b>${esc(f.path)}</b></span><span>${desc}</span></div>
+      <pre class="${p.kind === 'hex' ? 'hex' : ''}">${p.kind === 'error' ? '미리보기를 불러오지 못했습니다.' : esc(p.content)}</pre>`;
+  }
+
+  function renderFiles() {
+    if (!files.data) return;
+    $('files-threshold').textContent = files.data.threshold.toFixed(1);
+    files.data.folders.forEach(renderFolder);
+  }
+
+  async function pollFiles() {
+    if (!filesVisible()) return;
+    try {
+      const res = await fetch('/api/files');
+      files.data = await res.json();
+      renderFiles();
+      $('files-updated').textContent = hhmmss(new Date()) + ' 갱신';
+    } catch (e) {
+      $('files-updated').textContent = '서버 연결 끊김';
+    }
+  }
+
+  $('view-files').addEventListener('click', (ev) => {
+    const row = ev.target.closest('.file-row');
+    if (!row) return;
+    files.selected[row.dataset.key] = row.dataset.path;
+    renderFiles();
+  });
+
+  setInterval(pollFiles, FILE_POLL_MS);
+
+  refreshHealth();
+  poll();
+  setInterval(poll, POLL_MS);
+})();
+</script>
+</body>
+</html>

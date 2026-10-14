@@ -2,6 +2,7 @@
 # All pins/unpinned entries below already have cp312 wheels on PyPI;
 # pyfuse3 has no prebuilt wheels at all (it's a Cython/libfuse3 C
 # extension) and is always built from source via pip.
+
 pyfuse3
 trio
 scikit-learn==1.3.2
