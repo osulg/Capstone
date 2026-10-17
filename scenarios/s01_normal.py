@@ -97,11 +97,13 @@ def run(
     on_step=None,
     propagation_timeout=30.0,
     total_timeout=120.0,
+    on_progress=None,
 ):
     """Return a JSON-compatible report; stop on first failed operation.
 
     Failed runs retain their unique directory for diagnosis. No recursive cleanup
     or forced state overrides are used. on_step receives completed step records.
+    on_progress receives running and completed records immediately, in order.
     """
     if not all(
         math.isfinite(value) and value > 0
@@ -249,25 +251,47 @@ def run(
     ]
     for name, operation in operations:
         step_wait_seconds = 0.0
-        step = {"name": name, "started_at": timestamp()}
+        step = {
+            "name": name,
+            "status": "running",
+            "started_at": timestamp(),
+        }
+
+        # 실제 작업 전에 시작을 알린다. 최종 보고서에는 아직 추가하지 않는다.
+        if on_progress:
+            on_progress(dict(step))
+
         try:
-            require(time.monotonic() < deadline, "Scenario total timeout exceeded.")
+            require(
+                time.monotonic() < deadline,
+                "Scenario total timeout exceeded.",
+            )
             details = operation()
             check_health(mount, guardfs_pid)
             step.update(status="passed", details=details or {})
+
         except (OSError, RuntimeError) as error:
             step.update(status="failed", error=str(error))
+
         step["finished_at"] = timestamp()
         step["propagation_wait_seconds"] = round(step_wait_seconds, 3)
-        report["steps"].append(step)
+
+        # 완료 또는 실패를 즉시 알리고, 최종 보고서에도 동일한 결과를 보관한다.
+        report["steps"].append(dict(step))
+        if on_progress:
+            on_progress(dict(step))
+
+        # 기존 호출자는 완료 이벤트만 받도록 호환성을 유지한다.
         if on_step:
             on_step(dict(step))
+
         if step["status"] == "failed":
             report["status"] = "failed"
             break
     else:
         report["status"] = "passed"
         report["artifact_path"] = None
+
     report["finished_at"] = timestamp()
     return report
 
@@ -283,20 +307,39 @@ def main():
     args = parser.parse_args()
 
     def progress(step):
-        print(f"[{step['status'].upper()}] {step['name']}", file=sys.stderr, flush=True)
+        event = {
+            "type": "step",
+            "scenario_id": "S01",
+            "pid": os.getpid(),
+            "step": step,
+        }
+
+        # stderr: 한 줄에 하나의 진행 이벤트. stdout의 최종 JSON과 분리한다.
+        print(
+            "PROGRESS " + json.dumps(event, ensure_ascii=False),
+            file=sys.stderr,
+            flush=True,
+        )
 
     try:
         report = run(
-            args.mount,
-            args.underlay,
-            args.holdfs_pid,
-            progress,
-            args.propagation_timeout,
-            args.total_timeout,
+            mount=args.mount,
+            underlay=args.underlay,
+            guardfs_pid=args.holdfs_pid,
+            propagation_timeout=args.propagation_timeout,
+            total_timeout=args.total_timeout,
+            on_progress=progress,
         )
+
     except ValueError as error:
         parser.error(str(error))
-    print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
+
+    # stdout에는 최종 결과 JSON만 출력한다.
+    print(
+        json.dumps(report, ensure_ascii=False, indent=2),
+        flush=True,
+    )
+
     return 0 if report["status"] == "passed" else 1
 
 

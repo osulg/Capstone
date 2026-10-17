@@ -126,6 +126,121 @@ class ScenarioRunner:
             # 생성 중인 프로세스를 놓치지 않도록 작업 자체는 취소하지 않는다.
             await asyncio.shield(self._active_task)
 
+    async def _read_progress(
+        self,
+        process,
+        record: RunResponse,
+        scenario: Scenario,
+    ):
+        """stderr를 읽어 실제 작업 상태를 화면 단계에 반영한다."""
+        operations = {}
+
+        allowed_names = {
+            name for step in scenario.steps for name in step.operation_names
+        }
+
+        protocol_error = None
+
+        while True:
+            line = await process.stderr.readline()
+
+            if not line:
+                break
+
+            text = line.decode("utf-8", errors="replace").rstrip()
+
+            # 일반 오류·진단 출력은 서버 로그에 남긴다.
+            if not text.startswith("PROGRESS "):
+                logger.info(
+                    "Scenario run %s stderr: %s",
+                    record.run_id,
+                    text,
+                )
+                continue
+
+            try:
+                event = json.loads(text.removeprefix("PROGRESS "))
+
+                if not isinstance(event, dict):
+                    raise ValueError("진행 이벤트가 객체가 아닙니다.")
+
+                if event.get("type") != "step":
+                    raise ValueError("잘못된 진행 이벤트 종류입니다.")
+
+                if event.get("scenario_id") != scenario.id:
+                    raise ValueError("진행 이벤트의 시나리오가 다릅니다.")
+
+                if event.get("pid") != record.pid:
+                    raise ValueError("진행 이벤트의 PID가 다릅니다.")
+
+                step = event.get("step")
+
+                if not isinstance(step, dict):
+                    raise ValueError("단계 정보가 없습니다.")
+
+                name = step.get("name")
+                status = step.get("status")
+
+                if name not in allowed_names:
+                    raise ValueError("등록되지 않은 작업입니다.")
+
+                if status not in ("running", "passed", "failed"):
+                    raise ValueError("잘못된 작업 상태입니다.")
+
+                previous = operations.get(name)
+
+                # 각 작업은 running → passed/failed 순서로 전달돼야 한다.
+                if status == "running":
+                    if previous is not None:
+                        raise ValueError("중복된 작업 시작 이벤트입니다.")
+                elif previous is None or previous["status"] != "running":
+                    raise ValueError("작업 시작 없이 완료 이벤트를 받았습니다.")
+
+                operations[name] = step
+
+                # 전체 실행 상태는 running으로 유지하고,
+                # 화면 단계 상태만 실행 중에 갱신한다.
+                self._map_steps(
+                    record,
+                    scenario,
+                    {"steps": list(operations.values())},
+                    final=False,
+                )
+
+            except (ValueError, TypeError) as error:
+                # 잘못된 이벤트가 있어도 파이프는 끝까지 읽는다.
+                # 읽기를 멈추면 자식 프로세스의 출력이 막힐 수 있다.
+                protocol_error = error
+                logger.warning(
+                    "Invalid progress event for %s: %s",
+                    record.run_id,
+                    error,
+                )
+
+        if protocol_error is not None:
+            raise ValueError(f"진행 이벤트 처리 실패: {protocol_error}")
+
+    async def _collect_output(
+        self,
+        process,
+        record: RunResponse,
+        scenario: Scenario,
+    ):
+        """최종 stdout 수집과 실시간 stderr 읽기를 동시에 수행한다."""
+        results = await asyncio.gather(
+            process.stdout.read(),
+            self._read_progress(process, record, scenario),
+            process.wait(),
+            return_exceptions=True,
+        )
+
+        # 모든 스트림을 정리한 뒤 오류를 상위 실행 처리에 전달한다.
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
+        return results[0]
+
     async def _execute(
         self,
         record: RunResponse,
@@ -155,8 +270,14 @@ class ScenarioRunner:
             )
             record.pid = process.pid
 
-            # stdout·stderr를 함께 읽어 파이프가 차는 것을 방지한다.
-            communication = asyncio.create_task(process.communicate())
+            # stdout은 최종 JSON, stderr는 실시간 진행 이벤트로 읽는다.
+            communication = asyncio.create_task(
+                self._collect_output(
+                    process,
+                    record,
+                    scenario,
+                )
+            )
 
             stop_wait = asyncio.create_task(self._stop.wait())
             done, _ = await asyncio.wait(
@@ -172,25 +293,20 @@ class ScenarioRunner:
                     return
                 raise TimeoutError
 
-            stdout, stderr = communication.result()
+            stdout = communication.result()
 
-            stderr_text = stderr.decode("utf-8", errors="replace")
-
-            if stderr_text:
-                logger.info(
-                    "Scenario run %s stderr:\n%s",
-                    record.run_id,
-                    stderr_text,
-                )
-
+            # 최종 결과는 기존 방식대로 검증한다.
             result = json.loads(stdout.decode("utf-8"))
 
             self._validate_result(result, record, scenario)
 
             record.result = result
-            # 기존 S01 출력 키를 지원하면서 API 명칭은 HoldFS로 통일한다.
-            record.holdfs_pid = result.get("holdfs_pid", result.get("guardfs_pid"))
+            record.holdfs_pid = result.get(
+                "holdfs_pid",
+                result.get("guardfs_pid"),
+            )
 
+            # 최종 JSON을 기준으로 단계 결과를 다시 확정한다.
             self._map_steps(record, scenario, result)
 
             all_steps_passed = all(step.status == "passed" for step in record.steps)
@@ -268,7 +384,13 @@ class ScenarioRunner:
                     communication.add_done_callback(self._cleanup_done)
             finally:
                 for step in record.steps:
-                    if step.status == "pending":
+                    if step.status == "running":
+                        step.status = "failed"
+                        step.error = (
+                            record.error
+                            or "단계 완료를 확인하기 전에 실행이 종료됐습니다."
+                        )
+                    elif step.status == "pending":
                         step.status = "skipped"
 
                 record.finished_at = now()
@@ -340,7 +462,9 @@ class ScenarioRunner:
         record: RunResponse,
         scenario: Scenario,
         result: dict,
+        final: bool = True,
     ):
+        """세부 작업들을 카탈로그의 화면 단계로 묶는다."""
         operations = {operation["name"]: operation for operation in result["steps"]}
 
         for definition, step in zip(scenario.steps, record.steps):
@@ -350,6 +474,9 @@ class ScenarioRunner:
                 if name in operations
             ]
 
+            # 이전 오류가 다음 갱신에 잘못 남지 않게 초기화한다.
+            step.error = None
+
             failed = next(
                 (operation for operation in matched if operation["status"] == "failed"),
                 None,
@@ -357,12 +484,19 @@ class ScenarioRunner:
 
             if failed:
                 step.status = "failed"
-                step.error = failed.get("error") or f"{failed['name']} 단계 실패"
+                step.error = failed.get("error") or f"{failed['name']} 작업 실패"
             elif (
                 definition.operation_names
                 and len(matched) == len(definition.operation_names)
                 and all(operation["status"] == "passed" for operation in matched)
             ):
+                # 묶인 작업이 모두 성공해야 화면 단계도 완료 처리한다.
                 step.status = "passed"
-            else:
+            elif final:
+                # 실행 종료 후 완료되지 않은 단계이다.
                 step.status = "skipped"
+            elif matched:
+                # 일부 작업이 시작되거나 완료됐지만 단계 전체는 미완료이다.
+                step.status = "running"
+            else:
+                step.status = "pending"

@@ -1,0 +1,522 @@
+/* 기본 색상과 글꼴 */
+:root {
+  font-family:
+    "Pretendard", "Noto Sans KR", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  color: #171717;
+  background: #f7f7f7;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #333;
+  outline-offset: 4px;
+}
+
+/* 카드 전체: 중앙에 배치 */
+.demo-page {
+  min-height: 100vh;
+  padding: 40px 24px;
+}
+
+.demo-card {
+  width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
+  overflow: hidden;
+  background: white;
+  border: 1px solid #e5e5e5;
+  border-radius: 24px;
+  box-shadow: 0 8px 36px rgb(0 0 0 / 3%);
+}
+
+/* 헤더 */
+.demo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 26px;
+  border-bottom: 1px solid #efefef;
+}
+
+.demo-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.demo-subtitle {
+  margin: 8px 0 0;
+  color: #737373;
+  font-size: 14px;
+}
+
+.demo-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.demo-intro-button {
+  padding: 8px 12px;
+  background: white;
+  border: 1px solid #e5e5e5;
+  border-radius: 999px;
+  color: #666;
+  font-size: 12px;
+}
+
+.demo-intro-button:disabled {
+  opacity: 0.5;
+}
+
+.demo-tag,
+.run-badge {
+  border-radius: 999px;
+  background: #f1f1f1;
+  color: #686868;
+  font-size: 12px;
+}
+
+.demo-tag {
+  padding: 8px 12px;
+}
+
+/* 제목과 보조 문구 */
+.demo-content {
+  padding: 30px 26px;
+}
+
+.demo-content h1,
+.demo-content h2 {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.5;
+}
+
+.demo-muted {
+  margin: 8px 0 18px;
+  color: #737373;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+/* 실제 radio input을 사용해 키보드 선택을 지원 */
+.scenario-list {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* 카드 배치: 선택 원, 설명, 준비 상태, 체크를 가로로 정렬 */
+.scenario-option {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 80px;
+  padding: 18px;
+  border: 1px solid #e6e6e6;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 150ms, background 150ms;
+}
+
+/* 미선택: 회색 원 */
+.scenario-option input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+
+  border: 0;
+  border-radius: 50%;
+  background-color: #aaa;
+
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+/* 선택: 검은색 원 */
+.scenario-option input[type="radio"]:checked {
+  background-color: #111;
+}
+
+/* 키보드로 선택할 때 포커스 표시 */
+.scenario-option input[type="radio"]:focus-visible {
+  outline: 2px solid #555;
+  outline-offset: 4px;
+}
+
+/* 실행 중 선택이 잠긴 상태 */
+.scenario-option input[type="radio"]:disabled {
+  cursor: not-allowed;
+}
+
+.scenario-option:hover {
+  background: #fafafa;
+}
+
+.scenario-option.is-selected {
+  border-color: #bdbdbd;
+  background: #fdfdfd;
+}
+
+.scenario-list:disabled .scenario-option {
+  cursor: not-allowed;
+}
+
+.scenario-copy {
+  display: grid;
+  flex: 1;
+  gap: 7px;
+}
+
+.scenario-copy strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.scenario-copy > span {
+  color: #737373;
+  font-size: 13px;
+}
+
+.scenario-check {
+  width: 16px;
+  text-align: center;
+}
+
+.scenario-unavailable {
+  color: #737373;
+  font-size: 11px;
+}
+
+/* 선택한 시나리오 설명과 전체 상태 */
+.scenario-detail {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid #efefef;
+}
+
+.scenario-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.run-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 7px 10px;
+}
+
+.run-badge.success {
+  color: #456452;
+  background: #edf3ef;
+}
+
+.run-badge.error {
+  color: #8b3737;
+  background: #fbefef;
+}
+
+/* 임의 애니메이션 대신 서버가 확인한 완료 비율을 표시 */
+.demo-progress {
+  display: block;
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: #f0f0f0;
+}
+
+.demo-progress::-webkit-progress-bar {
+  background: #f0f0f0;
+}
+
+.demo-progress::-webkit-progress-value {
+  background: #777;
+  /* 실제 완료 비율이 갱신될 때 부드럽게 이동 */
+  transition: width 300ms ease;
+}
+
+.demo-progress::-moz-progress-bar {
+  background: #777;
+  transition: width 300ms ease;
+}
+
+/* 네 단계 검증 영역 */
+.run-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  margin: 28px 0 36px;
+  padding: 0;
+  list-style: none;
+}
+
+.run-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.step-number {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  background: #aaa;
+  color: white;
+  font-size: 11px;
+}
+
+.run-step.passed .step-number {
+  background: #555;
+}
+
+.run-step.failed .step-number {
+  background: #a34646;
+}
+
+.run-step strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.run-step div > span {
+  display: block;
+  margin-top: 4px;
+  color: #737373;
+  font-size: 11px;
+}
+
+/* 서버가 running으로 전달한 현재 단계만 강조 */
+.run-step.running .step-number {
+  background: #555;
+  box-shadow: 0 0 0 5px #ededed;
+}
+
+.run-step.running strong {
+  color: #111;
+  font-weight: 600;
+}
+
+.run-step.running div > span {
+  color: #555;
+}
+
+/* 운영체제의 움직임 줄이기 설정을 존중 */
+@media (prefers-reduced-motion: reduce) {
+  .demo-progress::-webkit-progress-value,
+  .demo-progress::-moz-progress-bar {
+    transition: none;
+  }
+}
+
+.step-error {
+  color: #963e3e;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+/* 예상 결과와 실행 버튼 */
+.demo-footer {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  align-items: center;
+  gap: 28px;
+}
+
+.expected-result h3,
+.actual-result h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.expected-result p {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.8;
+}
+
+.demo-start-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  min-height: 50px;
+  padding: 12px 24px;
+  border: 0;
+  border-radius: 999px;
+  color: white;
+  background: #111;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.demo-start-button:hover:not(:disabled) {
+  background: #333;
+}
+
+.demo-start-button:disabled {
+  color: #686868;
+  background: #ededed;
+}
+
+.demo-caption {
+  color: #737373;
+  font-size: 11px;
+  line-height: 1.8;
+}
+
+.demo-disclaimer {
+  margin: 20px 0 0;
+}
+
+/* 오류와 실제 결과 */
+.demo-notice {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.demo-notice.error {
+  border-color: #ecd2d2;
+  background: #fffafa;
+}
+
+.demo-notice button {
+  padding: 7px 12px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background: white;
+}
+
+.actual-result {
+  margin-top: 24px;
+  padding: 18px;
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.actual-result details {
+  margin-top: 14px;
+}
+
+.actual-result summary {
+  cursor: pointer;
+}
+
+.actual-result pre {
+  max-height: 360px;
+  overflow: auto;
+  padding: 14px;
+  background: #f7f7f7;
+  font-size: 12px;
+}
+
+.actual-result p {
+  overflow-wrap: anywhere;
+}
+
+/* 스크린 리더에서만 읽히는 설명 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* 작은 화면에서는 단계와 버튼을 세로로 배치 */
+@media (max-width: 720px) {
+  .demo-page {
+    padding: 16px 12px;
+  }
+
+  .demo-header,
+  .demo-content {
+    padding: 20px;
+  }
+
+  .demo-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .scenario-detail-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .run-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .demo-footer {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+}
+
+@media (max-width: 420px) {
+  .run-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .scenario-unavailable {
+    display: none;
+  }
+}
