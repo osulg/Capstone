@@ -12,7 +12,12 @@
   3. ebpf_collector.py로 워크로드를 실행한다 (프로세스 트리만 추적)
   4. run 메타데이터 한 줄을 CSV에 append 한다 (label=benign)
 
-run_id 형식: benign_<workload>_<files>x<size_kb>k_<repeat>
+run_id 형식: benign_<workload>_<files>x<size_kb>k_<repeat>       (--decoy legacy)
+             benign_<workload>_b<seed>                        (--decoy random, 방법 B)
+             benign_<workload>_L<seed>                        (--decoy random --decoy-files N, 평가 전용)
+
+--decoy random (방법 B): run마다 시드로 미끼 트리(파일 수·깊이·크기·종류)를 뽑는다
+(decoy_gen.py). 악성 수집과 같은 생성기·분포를 써야 미끼 조건이 라벨과 엮이지 않는다.
 
 root로 실행하고, 워크로드는 --as-user 사용자 권한으로 돌리는 것을 권장한다.
 """
@@ -29,12 +34,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import benign_workloads as bw  # noqa: E402
+import decoy_gen  # noqa: E402
 
 COLLECTOR = os.path.join(HERE, "ebpf_collector.py")
 META_FIELDS = [
     "run_id", "label", "workload", "files", "size_kb", "repeat",
     "start_wall", "end_wall", "duration_sec", "collector_rc", "status",
 ]
+# --decoy random 전용 추가 열 (기존 benign_runs.csv와 헤더가 달라 별도 CSV에 쓴다)
+DECOY_FIELDS = ["decoy_mode", "decoy_seed", "decoy_files", "decoy_depth",
+                "decoy_dirs", "decoy_bytes"]
 
 
 def parse_args():
@@ -50,6 +59,16 @@ def parse_args():
     p.add_argument("--cleanup", action="store_true",
                    help="각 run 종료 후 워크로드 데이터 삭제 (로그는 유지, 디스크 절약)")
     p.add_argument("--dry-run", action="store_true", help="실행 계획만 출력")
+    p.add_argument("--decoy", choices=["legacy", "random"], default="legacy",
+                   help="씨앗 방식. legacy=기존 고정 개수/크기, random=방법 B(run마다 무작위 트리)")
+    p.add_argument("--runs", type=int, default=3,
+                   help="[random] 워크로드당 run 수 (run마다 다른 시드)")
+    p.add_argument("--seed-base", type=int, default=100000,
+                   help="[random] 첫 시드. 이어서 수집할 땐 겹치지 않게 바꿀 것")
+    p.add_argument("--decoy-files", type=int,
+                   help="[random] 파일 수 고정 (L 평가셋: 5000). run_id 접두가 L로 바뀐다")
+    p.add_argument("--decoy-files-min", type=int, default=decoy_gen.FILES_MIN)
+    p.add_argument("--decoy-files-max", type=int, default=decoy_gen.FILES_MAX)
     p.add_argument("--guardfs", action="store_true",
                    help="각 run마다 GuardFS를 collect-only로 마운트해 FUSE 로그도 남긴다"
                         " (collect_one.sh와 동일 방식: 일반 사용자로 실행하고 수집기는 sudo로 돈다)")
@@ -88,35 +107,58 @@ def main():
     counts = [int(x) for x in args.files.split(",")]
     sizes = [int(x) for x in args.sizes.split(",")]
 
+    random_mode = args.decoy == "random"
+    default_csv = "benign_runs_b.csv" if random_mode else "benign_runs.csv"
     out_csv = args.out_csv or os.path.join(
-        os.path.dirname(mount), "collect", "benign_runs.csv"
+        os.path.dirname(mount), "collect", default_csv
     )
     os.makedirs(os.path.dirname(out_csv), exist_ok=True)
     new_file = not os.path.exists(out_csv)
 
-    plan = [
-        (name, builder, n, kb, r)
-        for name, builder in workloads.items()
-        for n in counts
-        for kb in sizes
-        for r in range(1, args.repeats + 1)
-    ]
-    print(f"[run_benign] 워크로드 {len(workloads)}종 × 개수 {counts} × 크기 {sizes} "
-          f"× 반복 {args.repeats} = 총 {len(plan)} run")
+    # plan 항목: (run_id, name, builder, files, size_kb, repeat, spec)
+    plan = []
+    if random_mode:
+        seed = args.seed_base
+        tag = "L" if args.decoy_files else "b"
+        for name, builder in workloads.items():
+            for r in range(1, args.runs + 1):
+                spec = decoy_gen.sample_spec(
+                    seed, args.decoy_files_min, args.decoy_files_max,
+                    files_fixed=args.decoy_files)
+                # 씨앗을 안 쓰는 워크로드(random_write 등)도 같은 규모를 쓰도록
+                kb = max(1, sorted(spec["sizes"])[len(spec["sizes"]) // 2] // 1024)
+                plan.append((f"benign_{name}_{tag}{seed}", name, builder,
+                             spec["files"], kb, r, spec))
+                seed += 1
+        print(f"[run_benign] [방법 B] 워크로드 {len(workloads)}종 × {args.runs} run "
+              f"= 총 {len(plan)} run (시드 {args.seed_base}~{seed - 1})")
+    else:
+        for name, builder in workloads.items():
+            for n in counts:
+                for kb in sizes:
+                    for r in range(1, args.repeats + 1):
+                        plan.append((f"benign_{name}_{n}x{kb}k_{r}", name, builder,
+                                     n, kb, r, None))
+        print(f"[run_benign] 워크로드 {len(workloads)}종 × 개수 {counts} × 크기 {sizes} "
+              f"× 반복 {args.repeats} = 총 {len(plan)} run")
 
     if args.dry_run:
-        for name, _b, n, kb, r in plan:
-            print(f"  benign_{name}_{n}x{kb}k_{r}")
+        for run_id, _n, _b, n, kb, _r, spec in plan:
+            extra = (f"  files={n} depth={spec['depth']} "
+                     f"{sum(spec['sizes']) / 2**20:.1f}MB") if spec else ""
+            print(f"  {run_id}{extra}")
         return 0
 
+    fields = META_FIELDS + (DECOY_FIELDS if random_mode else [])
     csv_f = open(out_csv, "a", newline="", encoding="utf-8")
-    writer = csv.DictWriter(csv_f, fieldnames=META_FIELDS)
+    writer = csv.DictWriter(csv_f, fieldnames=fields)
     if new_file:
         writer.writeheader()
 
     done = 0
-    for name, builder, n, kb, r in plan:
-        run_id = f"benign_{name}_{n}x{kb}k_{r}"
+    for run_id, name, builder, n, kb, r, spec in plan:
+        bw.DECOY_SPEC = spec
+        bw.LAST_DECOY = None
         workdir = os.path.join(mount, "runs", run_id)
 
         status = "ok"
@@ -168,14 +210,20 @@ def main():
                     shutil.rmtree(os.path.join(underlay, "runs", run_id),
                                   ignore_errors=True)
 
-        writer.writerow({
+        row = {
             "run_id": run_id, "label": "benign", "workload": name,
             "files": n, "size_kb": kb, "repeat": r,
             "start_wall": start_wall,
             "end_wall": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "duration_sec": round(time.time() - start, 3),
             "collector_rc": rc, "status": status,
-        })
+        }
+        if random_mode:
+            # 씨앗을 안 쓰는 워크로드는 LAST_DECOY가 None → 시드만 남긴다
+            row.update({"decoy_mode": "L" if args.decoy_files else "random",
+                        "decoy_seed": spec["seed"]})
+            row.update(bw.LAST_DECOY or {})
+        writer.writerow(row)
         csv_f.flush()
 
         done += 1
