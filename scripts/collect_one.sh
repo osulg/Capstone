@@ -23,6 +23,9 @@
 #   --timeout <sec>        eBPF 수집기 최대 실행 시간(초). 기본 120
 #   --target-subdir <name> 마운트 하위 대상 디렉터리 이름. 기본 attack_target
 #   --no-prep              테스트 파일 20종 생성을 건너뜀 (기존 마운트 내용 사용)
+#   --decoy-seed <N>       방법 B: 고정 20종 대신 decoy_gen.py로 시드 N의 무작위 미끼 트리 생성
+#                          (정상 수집 run_benign.py --decoy random 과 같은 생성기·분포)
+#   --decoy-files <N>      [--decoy-seed와 함께] 파일 수 고정 (L 평가셋: 5000)
 #   --repo <path>          레포 루트. 기본: 이 스크립트의 상위 디렉터리
 #   -h, --help             도움말
 #
@@ -46,6 +49,8 @@ AS_USER=""
 TIMEOUT="120"
 TARGET_SUBDIR="attack_target"
 DO_PREP=1
+DECOY_SEED=""
+DECOY_FILES=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -84,6 +89,8 @@ while [ $# -gt 0 ]; do
         --timeout)       TIMEOUT="${2:-}"; shift 2 ;;
         --target-subdir) TARGET_SUBDIR="${2:-}"; shift 2 ;;
         --no-prep)       DO_PREP=0; shift ;;
+        --decoy-seed)    DECOY_SEED="${2:-}"; shift 2 ;;
+        --decoy-files)   DECOY_FILES="${2:-}"; shift 2 ;;
         --repo)          REPO="${2:-}"; shift 2 ;;
         -h|--help)       usage 0 ;;
         --)              shift; COMMAND=("$@"); break ;;
@@ -97,14 +104,19 @@ done
 [ -n "$RUN_ID" ] || die "--run-id 가 필요합니다."
 [[ "$RUN_ID" =~ ^[A-Za-z0-9._-]+$ ]] || die "run_id 형식 오류(영문/숫자/._- 만): $RUN_ID"
 [ "${#COMMAND[@]}" -gt 0 ] || die "추적할 명령이 없습니다. '-- <command>' 형태로 넘기세요."
+[ -z "$DECOY_SEED" ] || [[ "$DECOY_SEED" =~ ^[0-9]+$ ]] || die "--decoy-seed 는 숫자: $DECOY_SEED"
+[ -z "$DECOY_FILES" ] || [[ "$DECOY_FILES" =~ ^[0-9]+$ ]] || die "--decoy-files 는 숫자: $DECOY_FILES"
+[ -z "$DECOY_FILES" ] || [ -n "$DECOY_SEED" ] || die "--decoy-files 는 --decoy-seed 와 함께 써야 합니다"
 
 COLLECTOR="$REPO/models/dynamic/collect/ebpf_collector.py"
+DECOY_GEN="$REPO/models/dynamic/collect/decoy_gen.py"
 PASSTHROUGH="$REPO/guardfs/fuse_fs/passthrough.py"
 VENV_ACTIVATE="$REPO/venv/bin/activate"
 TARGET_DIR="$MOUNT_DIR/$TARGET_SUBDIR"
 
 [ -f "$COLLECTOR" ]   || die "수집기를 찾을 수 없음: $COLLECTOR"
 [ -f "$PASSTHROUGH" ] || die "passthrough.py를 찾을 수 없음: $PASSTHROUGH"
+[ -z "$DECOY_SEED" ] || [ -f "$DECOY_GEN" ] || die "decoy_gen.py를 찾을 수 없음: $DECOY_GEN"
 [ -f "$VENV_ACTIVATE" ] || die "venv가 없습니다. 먼저 ./scripts/setup.sh 실행: $VENV_ACTIVATE"
 
 # 이미 존재하는 run_id 로그는 수집기가 거부하므로 미리 확인
@@ -165,6 +177,7 @@ echo "  target     : $TARGET_DIR"
 echo "  collect    : $COLLECT_DIR"
 echo "  timeout    : ${TIMEOUT}s"
 echo "  as_user    : ${AS_USER:-(root)}"
+echo "  decoy      : ${DECOY_SEED:+random seed=$DECOY_SEED${DECOY_FILES:+ files=$DECOY_FILES}}${DECOY_SEED:-legacy 20종}"
 echo "  command    : ${COMMAND[*]}"
 echo "========================================================"
 
@@ -189,7 +202,20 @@ echo "[collect_one] 마운트 완료"
 # ----------------------------------------
 # 2) 대상 파일 준비 + 실행 전 해시
 # ----------------------------------------
-if [ "$DO_PREP" -eq 1 ]; then
+if [ "$DO_PREP" -eq 1 ] && [ -n "$DECOY_SEED" ]; then
+    # 방법 B: 정상 수집과 같은 생성기·분포로 무작위 미끼 트리를 만든다.
+    # 생성 요약(seed/파일 수/디렉터리 수/용량)은 <run_id>.decoy.json 으로 남긴다.
+    echo "[collect_one] 미끼 트리 생성(seed=$DECOY_SEED${DECOY_FILES:+, files=$DECOY_FILES}): $TARGET_DIR"
+    if [ -n "$TARGET_SUBDIR" ] && [ "$TARGET_DIR" != "$MOUNT_DIR" ]; then
+        rm -rf "$TARGET_DIR"
+    fi
+    mkdir -p "$TARGET_DIR"
+    DECOY_ARGS=(--out "$TARGET_DIR" --seed "$DECOY_SEED")
+    [ -n "$DECOY_FILES" ] && DECOY_ARGS+=(--files "$DECOY_FILES")
+    python3 "$DECOY_GEN" "${DECOY_ARGS[@]}" > "$COLLECT_DIR/${RUN_ID}.decoy.json" \
+        || die "미끼 생성 실패 (seed=$DECOY_SEED)"
+    echo "[collect_one] 미끼 요약: $(cat "$COLLECT_DIR/${RUN_ID}.decoy.json")"
+elif [ "$DO_PREP" -eq 1 ]; then
     echo "[collect_one] 테스트 파일 20종 생성: $TARGET_DIR"
     # 이전 run의 암호화 잔재/랜섬노트를 제거해 매번 깨끗한 20개로 시작한다.
     # (잔재가 남으면 샘플이 '이미 암호화됨'으로 보고 일부만 건드린다)
