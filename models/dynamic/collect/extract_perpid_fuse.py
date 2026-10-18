@@ -149,7 +149,19 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--min-events", type=int, default=3,
                     help="이벤트가 이보다 적은 PID는 제외 (잡음 제거)")
+    ap.add_argument("--workload-only", action="store_true",
+                    help="수집기가 띄운 워크로드 프로세스 계통(root_pid 서브트리)의 PID만 남긴다."
+                         " 미끼 생성기(run_benign 자신)·prep 하네스·데스크톱 데몬 등이"
+                         " FUSE 로그에 섞여 정상(0)으로 들어가는 것을 막는다."
+                         " lineage가 없는 run은 전체를 그대로 둔다")
+    ap.add_argument("--exclude-runs", action="append", default=[],
+                    help="제외할 run_id 목록 파일(한 줄에 하나, #은 주석). 여러 번 지정 가능")
     args = ap.parse_args()
+
+    excluded = set()
+    for ex in args.exclude_runs:
+        with open(ex, encoding="utf-8") as f:
+            excluded |= {ln.split("#")[0].strip() for ln in f} - {""}
 
     labels = load_labels(args.labels)
     ebpf_dirs = args.ebpf_dir or [args.collect_dir]
@@ -163,8 +175,12 @@ def main():
 
     rows = []
     n_mal_runs = n_coarse = 0
+    n_excluded = n_no_lineage = n_dropped_pids = 0
     for path in fuse_files:
         run_id = os.path.basename(path)[: -len(".fuse.jsonl")]
+        if run_id in excluded:
+            n_excluded += 1
+            continue
         recs = load_jsonl(path)
         if not recs:
             continue
@@ -174,10 +190,19 @@ def main():
         family = lab["family"]
         workload = workload_of(run_id)
 
+        # 워크로드 계통(root_pid 서브트리). 악성 run 라벨링과 --workload-only 필터가 같이 쓴다.
+        sub = malicious_subtree(run_id, ebpf_dirs) \
+            if (run_label == 1 or args.workload_only) else None
+        keep_pids = None
+        if args.workload_only:
+            if sub is None:
+                n_no_lineage += 1
+            else:
+                keep_pids = sub[0]
+
         mal_pids = None
         if run_label == 1:
             n_mal_runs += 1
-            sub = malicious_subtree(run_id, ebpf_dirs)
             if sub is None:
                 # 폴백: lineage 정보가 없으면 run 전체를 악성으로(거칠게) 본다.
                 n_coarse += 1
@@ -194,6 +219,9 @@ def main():
             by_pid.setdefault(pid, []).append(r)
 
         for pid, precs in by_pid.items():
+            if keep_pids is not None and pid not in keep_pids:
+                n_dropped_pids += 1
+                continue
             if len(precs) < args.min_events:
                 continue
             feats = compute_features(precs)
@@ -222,6 +250,11 @@ def main():
     print(f"[extract] {len(rows)} PID-샘플 → {args.out}")
     print(f"[extract]   정상 {nb} / 악성 {nm} / unknown {nu}")
     print(f"[extract]   악성 run {n_mal_runs}개 중 lineage 없어 거칠게 라벨한 run: {n_coarse}")
+    if excluded:
+        print(f"[extract]   제외 목록으로 뺀 run: {n_excluded}")
+    if args.workload_only:
+        print(f"[extract]   --workload-only: 워크로드 계통 밖이라 뺀 PID {n_dropped_pids}개, "
+              f"lineage 없어 필터 못 한 run {n_no_lineage}개")
     if nm:
         fams = {}
         for r in rows:
