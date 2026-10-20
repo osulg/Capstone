@@ -11,6 +11,7 @@
 
 import os
 import posixpath
+import re
 
 HIGH_ENTROPY = 7.0
 
@@ -58,12 +59,44 @@ def _ext(path):
     return posixpath.splitext(path)[1].lower()
 
 
+# 임시 파일에 쓰고 원래 이름으로 rename 하는 "안전한 저장"(rsync, sed -i, git, 편집기 등)의
+# 임시 파일 이름. 이 rename은 확장자가 바뀌어 보여도 랜섬웨어식 확장자 변경이 아니다.
+_TEMP_NAME = re.compile(
+    r"^(\.|#)"                               # .name.XXXXXX (rsync), .#name, 숨김 임시파일
+    r"|^sed[A-Za-z0-9]{6}$"                   # sed -i
+    r"|^tmp[A-Za-z0-9_]{4,}$|^tmp_obj_"       # mkstemp, git 객체
+    r"|(\.tmp|\.temp|\.swp|\.part|\.lock|~)$",
+    re.IGNORECASE)
+
+
+def _is_ext_change(old_path, new_path, rule="v5"):
+    """rename이 확장자 변경인지.
+
+    v5: 확장자가 다르면 무조건 변경 (기존 v5 모델 학습 기준, 기본값).
+    v6: 임시 파일 → 원래 이름 rename과 확장자 제거(shred, *.lock → 원래 이름)는 세지 않는다.
+    """
+    if not new_path:
+        return False
+    old_ext, new_ext = _ext(old_path), _ext(new_path)
+    if old_ext == new_ext:
+        return False
+    if rule == "v6":
+        if not new_ext:
+            return False
+        if _TEMP_NAME.search(posixpath.basename(old_path or "")):
+            return False
+    return True
+
+
 def _safe_div(a, b):
     return a / b if b else 0.0
 
 
-def compute_features(records) -> dict:
-    """정렬 여부와 무관하게 동작하도록 내부에서 ts로 정렬한다."""
+def compute_features(records, ext_rule="v5") -> dict:
+    """정렬 여부와 무관하게 동작하도록 내부에서 ts로 정렬한다.
+
+    ext_rule: 확장자 변경 rename 판정 규칙("v5" 기본, "v6"은 _is_ext_change 참고).
+    """
     evs = sorted(records, key=lambda r: r.get("ts_ns", 0))
 
     op_counts = {}
@@ -126,11 +159,9 @@ def compute_features(records) -> dict:
 
         elif op == "RENAME":
             total_renames += 1
-            old_ext = _ext(path)
-            new_ext = _ext(e.get("new_path"))
-            if e.get("new_path") and old_ext != new_ext:
+            if _is_ext_change(path, e.get("new_path"), ext_rule):
                 ext_change_renames += 1
-                new_exts.add(new_ext)
+                new_exts.add(_ext(e.get("new_path")))
 
         elif op == "CRYPTO":
             crypto += 1

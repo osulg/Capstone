@@ -154,6 +154,9 @@ def main():
                          " 미끼 생성기(run_benign 자신)·prep 하네스·데스크톱 데몬 등이"
                          " FUSE 로그에 섞여 정상(0)으로 들어가는 것을 막는다."
                          " lineage가 없는 run은 전체를 그대로 둔다")
+    ap.add_argument("--ext-rule", choices=["v5", "v6"], default="v5",
+                    help="확장자 변경 rename 판정 규칙. v6은 임시파일→원래이름 rename과"
+                         " 확장자 제거를 세지 않는다 (features._is_ext_change)")
     ap.add_argument("--exclude-runs", action="append", default=[],
                     help="제외할 run_id 목록 파일(한 줄에 하나, #은 주석). 여러 번 지정 가능")
     args = ap.parse_args()
@@ -224,7 +227,7 @@ def main():
                 continue
             if len(precs) < args.min_events:
                 continue
-            feats = compute_features(precs)
+            feats = compute_features(precs, ext_rule=args.ext_rule)
             if run_label == 0:
                 plabel = 0
             elif run_label == 1:
