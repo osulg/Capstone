@@ -177,7 +177,11 @@ echo "  target     : $TARGET_DIR"
 echo "  collect    : $COLLECT_DIR"
 echo "  timeout    : ${TIMEOUT}s"
 echo "  as_user    : ${AS_USER:-(root)}"
-echo "  decoy      : ${DECOY_SEED:+random seed=$DECOY_SEED${DECOY_FILES:+ files=$DECOY_FILES}}${DECOY_SEED:-legacy 20종}"
+if [ -n "$DECOY_SEED" ]; then
+    echo "  decoy      : random seed=$DECOY_SEED${DECOY_FILES:+ files=$DECOY_FILES}"
+else
+    echo "  decoy      : legacy 20종"
+fi
 echo "  command    : ${COMMAND[*]}"
 echo "========================================================"
 
