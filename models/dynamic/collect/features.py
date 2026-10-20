@@ -11,7 +11,7 @@
 
 import os
 import posixpath
-import re
+import sys
 
 HIGH_ENTROPY = 7.0
 
@@ -59,33 +59,11 @@ def _ext(path):
     return posixpath.splitext(path)[1].lower()
 
 
-# 임시 파일에 쓰고 원래 이름으로 rename 하는 "안전한 저장"(rsync, sed -i, git, 편집기 등)의
-# 임시 파일 이름. 이 rename은 확장자가 바뀌어 보여도 랜섬웨어식 확장자 변경이 아니다.
-_TEMP_NAME = re.compile(
-    r"^(\.|#)"                               # .name.XXXXXX (rsync), .#name, 숨김 임시파일
-    r"|^sed[A-Za-z0-9]{6}$"                   # sed -i
-    r"|^tmp[A-Za-z0-9_]{4,}$|^tmp_obj_"       # mkstemp, git 객체
-    r"|(\.tmp|\.temp|\.swp|\.part|\.lock|~)$",
-    re.IGNORECASE)
-
-
-def _is_ext_change(old_path, new_path, rule="v5"):
-    """rename이 확장자 변경인지.
-
-    v5: 확장자가 다르면 무조건 변경 (기존 v5 모델 학습 기준, 기본값).
-    v6: 임시 파일 → 원래 이름 rename과 확장자 제거(shred, *.lock → 원래 이름)는 세지 않는다.
-    """
-    if not new_path:
-        return False
-    old_ext, new_ext = _ext(old_path), _ext(new_path)
-    if old_ext == new_ext:
-        return False
-    if rule == "v6":
-        if not new_ext:
-            return False
-        if _TEMP_NAME.search(posixpath.basename(old_path or "")):
-            return False
-    return True
+# 확장자 변경 rename 판정은 런타임 PidStats와 같은 코드를 쓴다(guardfs/common/ext_rule.py).
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if _REPO not in sys.path:
+    sys.path.insert(0, _REPO)
+from guardfs.common.ext_rule import is_ext_change as _is_ext_change  # noqa: E402
 
 
 def _safe_div(a, b):

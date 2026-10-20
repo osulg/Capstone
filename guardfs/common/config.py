@@ -97,6 +97,13 @@ STATIC_MODEL_WEIGHT = 0.5
 #   (FPR 0% 되는 최저값은 0.3; 재측정은 dataset_v5/train_v5_report.json)
 STAGE2_DYN_ONLY_HIGH_THRESHOLD = 0.5
 
+# 동적 피처 "확장자 변경 rename" 판정 규칙 (guardfs/common/ext_rule.py).
+#   런타임 PidStats가 이 규칙으로 피처를 만들고, 모델은 같은 규칙으로 뽑은
+#   데이터로 학습돼 있어야 한다. paths.DYNAMIC_MODEL_PATH 와 반드시 짝을 맞춘다.
+#     "v5": rf_model_v5.pkl (현재 배포 모델)
+#     "v6": rf_model_v6.pkl (models/dynamic/dataset_v6, 임시파일 rename·확장자 제거 제외)
+DYNAMIC_EXT_RULE = "v5"
+
 # ========== Stage 2 - MEDIUM Re-evaluation ========== #
 STAGE2_REEVAL_INTERVAL_SEC = 1.0
 STAGE2_MEDIUM_TIMEOUT_SEC = 10.0
