@@ -90,19 +90,19 @@ STATIC_MODEL_WEIGHT = 0.5
 #   (예: dyn=0.65, stat=0.30 -> score=0.47 로 MEDIUM 후 LOW 복귀)
 #   행동만으로도 충분히 확신하면 정적 점수와 무관하게 격상하도록 OR 규칙을 둔다.
 #
-#   값은 추정이 아니라 데이터로 정한다(dataset_v5, train_v5.py 교차검증 OOF):
-#   정상 PID 3382개의 OOF 점수 최대가 0.145, 악성은 대부분 0.9+ 로 깨끗이
-#   갈린다. 임계값 0.3~0.80 어디서든 정상 오탐률(FPR) 0% / 악성 탐지율 97.4%.
-#   아래 0.5 는 정상 최대(0.145) 대비 큰 여유를 두면서 탐지율 손실이 없는 값.
-#   (FPR 0% 되는 최저값은 0.3; 재측정은 dataset_v5/train_v5_report.json)
-STAGE2_DYN_ONLY_HIGH_THRESHOLD = 0.5
+#   값은 추정이 아니라 데이터로 정한다(dataset_v6, eval_v6.py):
+#   계열(악성)·워크로드(정상) 단위로 묶은 교차검증에서 0.6일 때 탐지 29.7/31,
+#   정상 96 run 중 오탐 run 0.3개(0.5는 31/31 · 5.0개), 처음 보는 계열(LOLO) 27/31.
+#   holdout(INCRansom 4, RansomEXX 2)을 보기 전에 0.6으로 확정했다(holdout 4/6).
+#   (v5 모델 기준값은 0.5였다: dataset_v5/RESULTS.md)
+STAGE2_DYN_ONLY_HIGH_THRESHOLD = 0.6
 
 # 동적 피처 "확장자 변경 rename" 판정 규칙 (guardfs/common/ext_rule.py).
 #   런타임 PidStats가 이 규칙으로 피처를 만들고, 모델은 같은 규칙으로 뽑은
 #   데이터로 학습돼 있어야 한다. paths.DYNAMIC_MODEL_PATH 와 반드시 짝을 맞춘다.
-#     "v5": rf_model_v5.pkl (현재 배포 모델)
-#     "v6": rf_model_v6.pkl (models/dynamic/dataset_v6, 임시파일 rename·확장자 제거 제외)
-DYNAMIC_EXT_RULE = "v5"
+#     "v5": rf_model_v5.pkl
+#     "v6": rf_model_v6.pkl (현재 배포 모델; dataset_v6, 임시파일 rename·확장자 제거 제외)
+DYNAMIC_EXT_RULE = "v6"
 
 # ========== Stage 2 - MEDIUM Re-evaluation ========== #
 STAGE2_REEVAL_INTERVAL_SEC = 1.0
