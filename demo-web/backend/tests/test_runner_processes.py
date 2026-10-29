@@ -100,13 +100,44 @@ class RunnerCleanupTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             runner, "_collect_output",
             new=AsyncMock(side_effect=ValueError("invalid progress")),
-        ), self.assertLogs("app.services.runner", level="WARNING"):
+        ), patch.object(
+            runner, "_terminate_process_group",
+            new=AsyncMock(),
+        ) as terminate_group, self.assertLogs("app.services.runner", level="WARNING"):
             created = runner.start("S01")
             await runner._active_task
+        # 이 검사는 출력 오류와 실행 잠금의 관계만 다룬다.
+        # 가짜 PID를 실제 OS 조회나 종료 신호에 사용하지 않는다.
+        terminate_group.assert_awaited_once_with(process)
         result = runner.get(created.run_id)
         self.assertEqual(result.status, "failed")
         self.assertIn("invalid progress", result.error)
         self.assertFalse(runner._cleanup_blocked)
+        await runner.close()
+
+    async def test_group_cleanup_failure_blocks_new_runs(self):
+        process = SimpleNamespace(pid=100, returncode=1)
+        runner = ScenarioRunner()
+        with patch(
+            "app.services.runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ), patch.object(
+            runner, "_collect_output",
+            new=AsyncMock(side_effect=ValueError("invalid progress")),
+        ), patch.object(
+            runner, "_terminate_process_group",
+            new=AsyncMock(side_effect=TimeoutError("group still exists")),
+        ), self.assertLogs("app.services.runner", level="WARNING"):
+            created = runner.start("S01")
+            await runner._active_task
+
+        result = runner.get(created.run_id)
+        self.assertEqual(result.status, "failed")
+        self.assertIn("group still exists", result.error)
+        self.assertTrue(runner._cleanup_blocked)
+        from app.services.runner import RunBusyError
+        with self.assertRaises(RunBusyError):
+            runner.start("S01")
         await runner.close()
 
 

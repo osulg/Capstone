@@ -8,6 +8,8 @@ import asyncio
 import json
 import logging
 import math
+import os
+import signal
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -389,6 +391,119 @@ class ScenarioRunner:
             worker.start_time_ticks,
         )
 
+    @staticmethod
+    def _group_exists(pgid: int) -> bool:
+        """그룹이 존재하는지 확인한다. 권한 오류는 종료 확인 실패로 전달한다."""
+
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+
+        return True
+
+    @staticmethod
+    def _signal_group(pgid: int, sig: int) -> None:
+        """존재하는 그룹에 신호를 보낸다."""
+
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            # 확인 직후 그룹이 종료되는 경우는 정상이다.
+            return
+
+    async def _wait_group_exit(
+        self,
+        process,
+        pgid: int,
+        timeout_seconds: float,
+    ) -> bool:
+        """관리자 종료와 그룹 소멸을 함께 기다린다."""
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+
+        while True:
+            group_exists = self._group_exists(pgid)
+
+            # 관리자가 종료되어도 자식이 남으면 완료로 판단하지 않는다.
+            if process.returncode is not None and not group_exists:
+                await process.wait()
+                return True
+
+            remaining = deadline - loop.time()
+
+            if remaining <= 0:
+                return False
+
+            await asyncio.sleep(min(0.05, remaining))
+
+    async def _terminate_process_group(self, process) -> None:
+        """
+        이 runner가 독립 세션으로 생성한 실행 그룹을 종료한다.
+
+        등록된 작업 PID 목록으로 종료 대상을 구성하지 않는다.
+        create_subprocess_exec()가 반환한 관리자 PID만 그룹 ID로 사용한다.
+        """
+
+        if sys.platform != "linux":
+            # Windows에서는 기존 관리자 단독 종료 동작을 유지한다.
+            # 전체 그룹 정리는 Linux에서 지원한다.
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+
+            await asyncio.wait_for(
+                process.wait(),
+                timeout=self.cleanup_seconds,
+            )
+            return
+
+        pgid = process.pid
+
+        # runner 자신의 그룹으로 신호가 전달되는 것을 방지한다.
+        if pgid <= 1 or pgid == os.getpgrp():
+            raise RuntimeError("안전하지 않은 실행 그룹 ID입니다.")
+
+        # 관리자가 아직 존재한다면 독립 세션·그룹인지 다시 확인한다.
+        try:
+            actual_pgid = os.getpgid(process.pid)
+            actual_sid = os.getsid(process.pid)
+        except ProcessLookupError:
+            # 관리자가 먼저 종료돼도 자식 그룹은 남을 수 있다.
+            pass
+        else:
+            if actual_pgid != pgid or actual_sid != pgid:
+                raise RuntimeError(
+                    "관리자가 독립 실행 그룹에 속하지 않아 종료를 중단했습니다."
+                )
+
+        if self._group_exists(pgid):
+            # 먼저 정상 종료를 요청한다.
+            self._signal_group(pgid, signal.SIGTERM)
+
+            # SIGSTOP 상태의 프로세스도 종료 요청을 처리하도록 재개한다.
+            self._signal_group(pgid, signal.SIGCONT)
+
+        if await self._wait_group_exit(
+            process,
+            pgid,
+            self.cleanup_seconds,
+        ):
+            return
+
+        # 정상 종료 요청을 따르지 않는 프로세스는 강제 종료한다.
+        self._signal_group(pgid, signal.SIGKILL)
+
+        if not await self._wait_group_exit(
+            process,
+            pgid,
+            self.cleanup_seconds,
+        ):
+            raise TimeoutError(f"실행 그룹 종료를 확인하지 못했습니다: pgid={pgid}")
+
     async def _collect_output(
         self,
         process,
@@ -529,15 +644,37 @@ class ScenarioRunner:
                 if stop_wait is not None:
                     stop_wait.cancel()
                     await asyncio.gather(stop_wait, return_exceptions=True)
-                if process and process.returncode is None:
+
+                if process is not None:
                     try:
-                        process.kill()
-                    except ProcessLookupError:
-                        pass
+                        # 정상 종료 후에도 자식이 남았는지 확인한다.
+                        await self._terminate_process_group(process)
+
+                    except (OSError, RuntimeError, TimeoutError) as error:
+                        self._cleanup_blocked = True
+
+                        # 시간 초과는 기존 timed_out 상태를 유지한다.
+                        if record.status != "timed_out":
+                            record.status = "failed"
+
+                        message = (
+                            f"실행 그룹 정리 실패: {error}. "
+                            "종료를 확인하지 못해 새 실행을 차단했습니다."
+                        )
+
+                        record.error = (
+                            f"{record.error} {message}" if record.error else message
+                        )
+
+                        logger.exception(
+                            "실행 그룹 정리 실패: %s",
+                            record.run_id,
+                        )
 
                 cleanup = communication
                 if cleanup is None and process is not None:
                     cleanup = asyncio.create_task(process.wait())
+
                 if cleanup is not None:
                     try:
                         await asyncio.wait_for(
