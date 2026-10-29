@@ -22,6 +22,8 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from scenarios.common import emit_process, emit_progress, register_process_and_wait
+
 CONTENT = b"hello holdfs\nnormal document editing test\n"
 
 
@@ -98,18 +100,19 @@ def run(
     propagation_timeout=30.0,
     total_timeout=120.0,
     on_progress=None,
+    on_process=None,
 ):
-    """Return a JSON-compatible report; stop on first failed operation.
+    """파일 생명주기를 검증하고 진행·프로세스 등록 콜백을 호출한다.
 
-    Failed runs retain their unique directory for diagnosis. No recursive cleanup
-    or forced state overrides are used. on_step receives completed step records.
-    on_progress receives running and completed records immediately, in order.
+    on_process는 환경 검증 성공 후 한 번 호출한다.
+    생략하면 기존처럼 이벤트 출력 없이 run()을 직접 호출할 수 있다.
     """
     if not all(
         math.isfinite(value) and value > 0
         for value in (propagation_timeout, total_timeout)
     ):
         raise ValueError("Timeouts must be positive and finite.")
+
     deadline = time.monotonic() + total_timeout
     mount = Path(os.path.abspath(Path(mount).expanduser()))
     underlay = Path(underlay).expanduser().resolve()
@@ -124,6 +127,7 @@ def run(
         "pid": os.getpid(),
         "guardfs_pid": guardfs_pid,
         "holdfs_pid": guardfs_pid,
+        "processes": [],
         "started_at": timestamp(),
         "mount": str(mount),
         "underlay": str(underlay),
@@ -198,6 +202,12 @@ def run(
         require(
             absent(folder) and absent(under(folder)), "Run directory already exists."
         )
+
+        # 실제 파일 작업 전에 자신의 작업 PID를 등록한다.
+        # CLI에서는 공통 함수가 이벤트를 출력하고, 반환 정보는 최종 JSON에 보관한다.
+        if on_process is not None:
+            process_info = on_process()
+            report["processes"].append(process_info)
 
     def prepare():
         folder.mkdir()
@@ -304,21 +314,27 @@ def main():
     parser.add_argument("--holdfs-pid", "--guardfs-pid", dest="holdfs_pid", type=int)
     parser.add_argument("--propagation-timeout", type=float, default=30.0)
     parser.add_argument("--total-timeout", type=float, default=120.0)
+    parser.add_argument("--wait-registration-ack", action="store_true")
+
     args = parser.parse_args()
 
     def progress(step):
-        event = {
-            "type": "step",
-            "scenario_id": "S01",
-            "pid": os.getpid(),
-            "step": step,
-        }
+        # 공통 형식을 사용하되 stdout의 최종 결과 JSON과는 분리한다.
+        emit_progress(scenario_id="S01", step=step)
 
-        # stderr: 한 줄에 하나의 진행 이벤트. stdout의 최종 JSON과 분리한다.
-        print(
-            "PROGRESS " + json.dumps(event, ensure_ascii=False),
-            file=sys.stderr,
-            flush=True,
+    def register_process():
+        if args.wait_registration_ack:
+            # API 실행: 등록이 승인되어야 파일 작업을 시작한다.
+            return register_process_and_wait(
+                scenario_id="S01",
+                role="normal_worker",
+                timeout_seconds=5.0,
+            )
+
+        # 직접 실행: 응답해 줄 runner가 없으므로 기다리지 않는다.
+        return emit_process(
+            scenario_id="S01",
+            role="normal_worker",
         )
 
     try:
@@ -329,6 +345,7 @@ def main():
             propagation_timeout=args.propagation_timeout,
             total_timeout=args.total_timeout,
             on_progress=progress,
+            on_process=register_process,
         )
 
     except ValueError as error:

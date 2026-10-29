@@ -16,7 +16,12 @@ from pathlib import Path
 from guardfs.common.paths import PROJECT_ROOT as HOLDFS_PROJECT_ROOT
 from scenarios.catalog import Scenario, get_scenario
 
-from ..schemas.run import RunCreatedResponse, RunResponse, RunStepResponse
+from ..schemas.run import (
+    RunCreatedResponse,
+    RunProcess,
+    RunResponse,
+    RunStepResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +137,7 @@ class ScenarioRunner:
         record: RunResponse,
         scenario: Scenario,
     ):
-        """stderr를 읽어 실제 작업 상태를 화면 단계에 반영한다."""
+        """단계 이벤트와 작업 프로세스 등록 이벤트를 처리한다."""
         operations = {}
 
         allowed_names = {
@@ -147,9 +152,12 @@ class ScenarioRunner:
             if not line:
                 break
 
-            text = line.decode("utf-8", errors="replace").rstrip()
+            text = line.decode(
+                "utf-8",
+                errors="replace",
+            ).rstrip()
 
-            # 일반 오류·진단 출력은 서버 로그에 남긴다.
+            # 일반 진단 출력은 이벤트로 해석하지 않고 로그에 남긴다.
             if not text.startswith("PROGRESS "):
                 logger.info(
                     "Scenario run %s stderr: %s",
@@ -162,16 +170,56 @@ class ScenarioRunner:
                 event = json.loads(text.removeprefix("PROGRESS "))
 
                 if not isinstance(event, dict):
-                    raise ValueError("진행 이벤트가 객체가 아닙니다.")
+                    raise ValueError("진행 이벤트가 JSON 객체가 아닙니다.")
 
-                if event.get("type") != "step":
-                    raise ValueError("잘못된 진행 이벤트 종류입니다.")
-
+                # 두 종류의 이벤트 모두 동일한 관리 프로세스에서
+                # 출력되어야 한다.
                 if event.get("scenario_id") != scenario.id:
-                    raise ValueError("진행 이벤트의 시나리오가 다릅니다.")
+                    raise ValueError("이벤트의 시나리오 ID가 다릅니다.")
 
-                if event.get("pid") != record.pid:
-                    raise ValueError("진행 이벤트의 PID가 다릅니다.")
+                emitter_pid = event.get("pid")
+
+                if type(emitter_pid) is not int or emitter_pid != record.pid:
+                    raise ValueError("이벤트의 관리 PID가 다릅니다.")
+
+                event_type = event.get("type")
+
+                # ── 작업 프로세스 등록 ──
+                if event_type == "process":
+                    payload = event.get("process")
+                    request_id = event.get("request_id")
+
+                    if not isinstance(payload, dict):
+                        raise ValueError("작업 프로세스 정보가 없습니다.")
+
+                    if request_id is not None and (
+                        not isinstance(request_id, str)
+                        or not request_id.strip()
+                        or len(request_id) > 128
+                    ):
+                        raise ValueError("등록 요청 ID가 올바르지 않습니다.")
+
+                    try:
+                        self._register_process(record, payload)
+                    except (ValueError, TypeError) as error:
+                        if request_id is not None:
+                            await self._send_registration_reply(
+                                process, record, request_id, payload, str(error)
+                            )
+                        raise
+
+                    # 기존 응답 불필요 이벤트는 그대로 지원한다.
+                    if request_id is not None:
+                        await self._send_registration_reply(
+                            process, record, request_id, payload
+                        )
+
+                    # 프로세스 등록은 단계 결과를 변경하지 않는다.
+                    continue
+
+                # ── 단계 상태 갱신 ──
+                if event_type != "step":
+                    raise ValueError(f"지원하지 않는 이벤트 종류: {event_type}")
 
                 step = event.get("step")
 
@@ -181,25 +229,26 @@ class ScenarioRunner:
                 name = step.get("name")
                 status = step.get("status")
 
-                if name not in allowed_names:
-                    raise ValueError("등록되지 않은 작업입니다.")
+                if not isinstance(name, str) or name not in allowed_names:
+                    raise ValueError("등록되지 않은 작업 이름입니다.")
 
                 if status not in ("running", "passed", "failed"):
                     raise ValueError("잘못된 작업 상태입니다.")
 
+                if step.get("error") is not None and not isinstance(step["error"], str):
+                    raise ValueError("작업 오류 메시지는 문자열이어야 합니다.")
+
                 previous = operations.get(name)
 
-                # 각 작업은 running → passed/failed 순서로 전달돼야 한다.
                 if status == "running":
                     if previous is not None:
                         raise ValueError("중복된 작업 시작 이벤트입니다.")
+
                 elif previous is None or previous["status"] != "running":
                     raise ValueError("작업 시작 없이 완료 이벤트를 받았습니다.")
 
-                operations[name] = step
+                operations[name] = dict(step)
 
-                # 전체 실행 상태는 running으로 유지하고,
-                # 화면 단계 상태만 실행 중에 갱신한다.
                 self._map_steps(
                     record,
                     scenario,
@@ -208,9 +257,10 @@ class ScenarioRunner:
                 )
 
             except (ValueError, TypeError) as error:
-                # 잘못된 이벤트가 있어도 파이프는 끝까지 읽는다.
-                # 읽기를 멈추면 자식 프로세스의 출력이 막힐 수 있다.
+                # 오류가 있어도 stderr는 끝까지 읽어 출력 막힘을 방지한다.
+                # 최종적으로는 실행 실패로 처리되도록 오류를 보관한다.
                 protocol_error = error
+
                 logger.warning(
                     "Invalid progress event for %s: %s",
                     record.run_id,
@@ -219,6 +269,125 @@ class ScenarioRunner:
 
         if protocol_error is not None:
             raise ValueError(f"진행 이벤트 처리 실패: {protocol_error}")
+
+    @staticmethod
+    async def _send_registration_reply(
+        process,
+        record: RunResponse,
+        request_id: str,
+        payload: dict,
+        error: str | None = None,
+    ) -> None:
+        """관리 프로세스의 stdin에 한 줄 JSON 등록 결과를 보낸다."""
+        if process.stdin is None:
+            raise ValueError("등록 응답용 stdin이 연결되지 않았습니다.")
+
+        reply = {
+            "type": "process_registered",
+            "request_id": request_id,
+            "scenario_id": record.scenario_id,
+            "status": "rejected" if error is not None else "accepted",
+            "role": payload.get("role"),
+            "pid": payload.get("pid"),
+            "start_time_ticks": payload.get("start_time_ticks"),
+            "error": error,
+        }
+        data = (json.dumps(reply, ensure_ascii=False) + "\n").encode("utf-8")
+        try:
+            process.stdin.write(data)
+            await asyncio.wait_for(process.stdin.drain(), timeout=2.0)
+        except (TimeoutError, OSError, RuntimeError) as exc:
+            raise ValueError("프로세스 등록 응답을 전달하지 못했습니다.") from exc
+
+    @staticmethod
+    def _register_process(
+        record: RunResponse,
+        payload: dict,
+    ) -> None:
+        """작업 프로세스를 검증하고 실행 기록에 등록한다.
+
+        # 현재 등록 범위:
+        - 시나리오 관리 프로세스 자신
+        - 관리 프로세스가 직접 실행한 자식 프로세스
+
+        등록 정보는 종료 권한을 의미하지 않는다.
+        실제 종료 시에는 별도 검증이 필요하다.
+        """
+
+        worker = RunProcess.model_validate(payload)
+
+        if not worker.role.strip():
+            raise ValueError("작업 프로세스 역할이 비어 있습니다.")
+
+        if record.pid is None:
+            raise ValueError("시나리오 관리 PID가 아직 없습니다.")
+
+        if worker.start_time_ticks is None:
+            raise ValueError("프로세스 시작 정보를 확인할 수 없어 등록하지 않습니다.")
+
+        try:
+            content = Path(f"/proc/{worker.pid}/stat").read_text(encoding="utf-8")
+
+        except (FileNotFoundError, ProcessLookupError) as error:
+            raise ValueError(
+                f"등록할 프로세스가 이미 종료되었습니다: pid={worker.pid}"
+            ) from error
+
+        except PermissionError as error:
+            raise ValueError(
+                f"프로세스 정보를 읽을 권한이 없습니다: pid={worker.pid}"
+            ) from error
+
+        try:
+            # comm 필드는 공백·괄호를 포함할 수 있으므로
+            # 마지막 닫는 괄호 뒤부터 나눈다.
+            fields = content.rsplit(")", 1)[1].split()
+
+            parent_pid = int(fields[1])
+            actual_start_time = int(fields[19])
+
+        except (IndexError, ValueError) as error:
+            raise ValueError(f"프로세스 정보 형식 오류: pid={worker.pid}") from error
+
+        # 같은 PID 번호의 다른 프로세스인지 확인한다.
+        if actual_start_time != worker.start_time_ticks:
+            raise ValueError("프로세스 시작 정보가 일치하지 않습니다.")
+
+        # 다른 실행의 프로세스를 작업 PID로 등록하지 못하게 제한한다.
+        if worker.pid != record.pid and parent_pid != record.pid:
+            raise ValueError(
+                "작업 프로세스가 시나리오 관리 프로세스의 직접 자식이 아닙니다."
+            )
+
+        for existing in record.processes:
+            same_identity = (
+                existing.pid == worker.pid
+                and existing.start_time_ticks == worker.start_time_ticks
+            )
+
+            if same_identity:
+                if existing.role != worker.role:
+                    raise ValueError("같은 프로세스가 다른 역할로 등록되었습니다.")
+
+                # 같은 정보가 다시 도착하면 중복 추가하지 않는다.
+                return
+
+            # 현재 설계는 실행당 역할별 프로세스 하나를 사용한다.
+            if existing.role == worker.role:
+                raise ValueError(f"이미 등록된 작업 역할입니다: {worker.role}")
+
+        # 등록 시각은 서버가 실제로 수신·검증한 시각으로 기록한다.
+        worker.registered_at = now()
+
+        record.processes.append(worker)
+
+        logger.info(
+            "Registered process: run=%s role=%s pid=%s start=%s",
+            record.run_id,
+            worker.role,
+            worker.pid,
+            worker.start_time_ticks,
+        )
 
     async def _collect_output(
         self,
@@ -259,15 +428,28 @@ class ScenarioRunner:
                 record.error = "서버 종료로 실행을 취소했습니다."
                 return
 
-            process = await asyncio.create_subprocess_exec(
+            command = [
                 sys.executable,
                 "-u",
                 "-m",
                 scenario.module,
+            ]
+            # API 실행에서만 PID 등록 승인을 기다린다.
+            if scenario.module == "scenarios.s01_normal":
+                command.append("--wait-registration-ack")
+
+            process = await asyncio.create_subprocess_exec(
+                *command,
                 cwd=str(PROJECT_ROOT),
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                # Linux에서는 시나리오를 새로운 세션으로 실행한다.
+                # 시나리오 PID가 새 세션 ID와 프로세스 그룹 ID가 된다.
+                # Windows에서는 기존 실행 방식을 유지한다.
+                start_new_session=(sys.platform == "linux"),
             )
+
             record.pid = process.pid
 
             # stdout은 최종 JSON, stderr는 실시간 진행 이벤트로 읽는다.
@@ -369,16 +551,28 @@ class ScenarioRunner:
                         self._pending_cleanup.add(cleanup)
                         cleanup.add_done_callback(self._cleanup_done)
                     except Exception:
-                        self._cleanup_blocked = True
-                        logger.exception("테스트 종료 확인 실패: %s", record.run_id)
-                        record.status = "failed"
-                        record.error = "테스트 종료 확인 실패로 새 실행을 차단했습니다."
+                        if process is not None and process.returncode is not None:
+                            # 출력/이벤트 처리 실패와 프로세스 종료 실패는 다르다.
+                            # 이미 종료된 경우에는 원래 오류를 보존하고 새 실행을 허용한다.
+                            logger.warning(
+                                "종료된 테스트의 출력 처리 실패: %s",
+                                record.run_id,
+                                exc_info=True,
+                            )
+                        else:
+                            self._cleanup_blocked = True
+                            logger.exception("테스트 종료 확인 실패: %s", record.run_id)
+                            record.status = "failed"
+                            record.error = (
+                                "테스트 종료 확인 실패로 새 실행을 차단했습니다."
+                            )
             except OSError as error:
                 # kill() 실패도 기록하고, 실행 태스크 밖으로 유실시키지 않는다.
                 self._cleanup_blocked = True
                 record.status = "failed"
                 record.error = f"테스트 종료 요청 실패: {error}"
                 logger.exception("테스트 종료 요청 실패: %s", record.run_id)
+
                 if communication is not None:
                     self._pending_cleanup.add(communication)
                     communication.add_done_callback(self._cleanup_done)
