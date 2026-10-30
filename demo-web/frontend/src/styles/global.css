@@ -520,3 +520,109 @@ summary:focus-visible {
     display: none;
   }
 }
+
+/* 실행 중과 완료 후에 공통으로 표시하는 실행 정보 */
+.run-info {
+  margin-top: 24px;
+  padding: 20px;
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.run-info-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.run-info-heading h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.run-info-heading > span {
+  color: #666;
+}
+
+.run-info-meta {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.run-info-meta > div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.run-info-meta dt {
+  color: #777;
+}
+
+.run-info-meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-info h4 {
+  margin: 20px 0 10px;
+  font-size: 13px;
+}
+
+.run-info-table-wrap {
+  overflow-x: auto;
+}
+
+.run-info-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.run-info-table th,
+.run-info-table td {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+  vertical-align: top;
+}
+
+.run-info-table th {
+  background: #fafafa;
+  color: #666;
+  font-weight: 500;
+}
+
+.run-info-table td strong,
+.run-info-table td code {
+  display: block;
+}
+
+.run-info-table td code {
+  margin-top: 4px;
+  color: #777;
+  overflow-wrap: anywhere;
+}
+
+.run-info-note {
+  margin: 12px 0 0;
+  color: #777;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 420px) {
+  .run-info {
+    padding: 16px;
+  }
+
+  .run-info-meta > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}

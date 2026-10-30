@@ -28,9 +28,17 @@ export interface RunStep extends ScenarioStep {
   error: string | null;
 }
 
+export interface RunProcess {
+  role: string;
+  pid: number;
+  start_time_ticks: number | null;
+  registered_at: string;
+}
+
 export interface Run extends RunCreated {
   pid: number | null;
   holdfs_pid: number | null;
+  processes: RunProcess[];
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

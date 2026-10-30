@@ -9,6 +9,8 @@ import type {
   StepStatus,
 } from "../types/api";
 
+import RunInfo from "../components/RunInfo";
+
 /** 이 상태에 도달하면 반복 조회를 종료한다. */
 const TERMINAL_STATUSES: RunStatus[] = [
   "passed",
@@ -437,6 +439,15 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                 </div>
               )}
             </section>
+          )}
+
+          {/* 실행 ID를 받은 직후부터 진행 중·완료 후 모두 표시한다. */}
+          {runId && (
+            <RunInfo
+              runId={runId}
+              run={run}
+              stale={Boolean(pollError)}
+            />
           )}
 
           {/* 파일 작업 성공을 탐지·오탐 검증 성공과 구분한다. */}
