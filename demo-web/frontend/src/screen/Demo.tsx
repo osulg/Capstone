@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
-import { getRun, getScenarios, startRun } from "../api/clients";
+import {
+  ApiError,
+  getRun,
+  getScenarios,
+  startRun,
+} from "../api/clients";
+
 import type {
   Run,
   RunStatus,
@@ -8,6 +14,12 @@ import type {
   Scenario,
   StepStatus,
 } from "../types/api";
+
+import {
+  clearSavedRun,
+  readSavedRun,
+  saveRun,
+} from "../utils/runSession";
 
 import RunInfo from "../components/RunInfo";
 import RunResult from "../components/RunResult";
@@ -51,9 +63,15 @@ interface DemoProps {
 }
 
 export default function Demo({ onReplayIntro }: DemoProps) {
+  // 같은 탭의 새로고침에서는 저장된 실행 ID로 조회를 재개한다.
+  const [savedRun] = useState(readSavedRun);
+  const [sessionNotice, setSessionNotice] = useState("");
+
   // ── 시나리오 목록과 선택 상태 ──
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [selectedId, setSelectedId] = useState("S01");
+  const [selectedId, setSelectedId] = useState(
+    savedRun?.scenarioId ?? "S01",
+  );
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState("");
   const [listRetry, setListRetry] = useState(0);
@@ -70,7 +88,9 @@ export default function Demo({ onReplayIntro }: DemoProps) {
   const submittingRef = useRef(false);
 
   // ── 현재 실행과 결과 조회 상태 ──
-  const [runId, setRunId] = useState<string | null>(null);
+  const [runId, setRunId] = useState<string | null>(
+    savedRun?.runId ?? null,
+  );
   const [run, setRun] = useState<Run | null>(null);
   const [pollError, setPollError] = useState("");
   const [pollRetry, setPollRetry] = useState(0);
@@ -143,10 +163,25 @@ export default function Demo({ onReplayIntro }: DemoProps) {
           timer = setTimeout(poll, 500);
         }
       } catch (error: unknown) {
-        if (!stopped) {
-          // 조회 실패와 실제 테스트 실패는 별개다.
-          setPollError(errorMessage(error));
+        if (stopped) return;
+
+        if (error instanceof ApiError && error.status === 404) {
+          // 서버에서 사라진 조회 기록을 정리한다.
+          // 기록이 없다는 응답이 작업 프로세스의 종료를 보장하지는 않는다.
+          clearSavedRun();
+          setRunId(null);
+          setRun(null);
+          setPollError("");
+          setSessionNotice(
+            "이전 실행 기록을 찾을 수 없습니다. " +
+              "서버가 재시작되었을 수 있습니다. " +
+              "이 메시지가 작업 프로세스의 종료를 의미하지는 않습니다.",
+          );
+          return;
         }
+
+        // 연결 오류에서는 ID를 유지하고 같은 실행을 다시 조회한다.
+        setPollError(errorMessage(error));
       }
     }
 
@@ -162,11 +197,13 @@ export default function Demo({ onReplayIntro }: DemoProps) {
   function selectScenario(id: string) {
     if (busy || id === selectedId) return;
 
+    clearSavedRun();
     setSelectedId(id);
     setRunId(null);
     setRun(null);
     setStartError("");
     setPollError("");
+    setSessionNotice("");
   }
 
   // ── 4. 사용자가 버튼을 눌렀을 때만 실행 요청 ──
@@ -180,14 +217,25 @@ export default function Demo({ onReplayIntro }: DemoProps) {
     try {
       const created = await startRun(selected.id);
 
+      const stored = saveRun({
+        runId: created.run_id,
+        scenarioId: created.scenario_id,
+      });
+
+      setSessionNotice(
+        stored
+          ? ""
+          : "브라우저에 실행 정보를 저장하지 못했습니다. " +
+              "현재 실행은 조회할 수 있지만, 새로고침 후 자동 복원은 사용할 수 없습니다.",
+      );
       setRun(null);
       setPollError("");
       setRunId(created.run_id);
     } catch (error: unknown) {
       setStartError(errorMessage(error));
 
-      // 현재 API 클라이언트는 HTTP 오류와 전송 오류를 구분하지 않는다.
-      // 보수적으로 중복 POST를 막고 서버 상태를 먼저 확인하도록 한다.
+      // 기존의 보수적인 중복 실행 방지 정책을 유지한다.
+      // 응답을 받지 못한 POST의 실행 ID 복구는 별도 기능이 필요하다.
       setStartUncertain(true);
     } finally {
       submittingRef.current = false;
@@ -273,6 +321,12 @@ export default function Demo({ onReplayIntro }: DemoProps) {
         </header>
 
         <div className="demo-content">
+          {sessionNotice && (
+            <div className="demo-notice" role="status">
+              {sessionNotice}
+            </div>
+          )}
+
           <section aria-labelledby="scenario-heading">
             <h1 id="scenario-heading">테스트 시나리오 선택</h1>
             <p className="demo-muted">
@@ -286,7 +340,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                 <p>목록 조회 실패: {listError}</p>
                 <button
                   type="button"
-                  disabled={busy || loading}
+                  disabled={loading}
                   onClick={() => setListRetry((value) => value + 1)}
                 >
                   다시 불러오기
@@ -427,19 +481,24 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                 </div>
               )}
 
-              {pollError && (
-                <div className="demo-notice error" role="alert">
-                  <p>상태 조회 실패: {pollError}</p>
-                  <p>실제 테스트 실패를 의미하지 않습니다.</p>
-                  <button
-                    type="button"
-                    onClick={() => setPollRetry((value) => value + 1)}
-                  >
-                    같은 실행 다시 조회
-                  </button>
-                </div>
-              )}
             </section>
+          )}
+
+          {/* 목록을 불러오지 못해도 실행 조회 복구는 가능해야 한다. */}
+          {pollError && (
+            <div className="demo-notice error" role="alert">
+              <p>상태 조회 실패: {pollError}</p>
+              <p>실제 테스트 실패를 의미하지 않습니다.</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setPollRetry((value) => value + 1);
+                  setListRetry((value) => value + 1);
+                }}
+              >
+                같은 실행 다시 조회
+              </button>
+            </div>
           )}
 
           {/* 실행 ID를 받은 직후부터 진행 중·완료 후 모두 표시한다. */}

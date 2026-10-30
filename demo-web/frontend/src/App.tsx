@@ -2,13 +2,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import Demo from "./screen/Demo";
 import Intro from "./screen/Intro";
+import { readSavedRun } from "./utils/runSession";
 
 export default function App() {
-  const [screen, setScreen] = useState<"intro" | "demo">("intro");
+  const [savedRun] = useState(readSavedRun);
 
-  // 처음에는 데모를 생성하지 않는다.
-  // 처음 방문한 이후에는 유지해서 실행 결과를 보존한다.
-  const [demoVisited, setDemoVisited] = useState(false);
+  const [screen, setScreen] = useState<"intro" | "demo">(
+    savedRun ? "demo" : "intro",
+  );
+
+  const [demoVisited, setDemoVisited] = useState(
+    savedRun !== null,
+  );
+
   const demoContainerRef = useRef<HTMLDivElement>(null);
 
   const openDemo = useCallback(() => {
@@ -28,7 +34,9 @@ export default function App() {
 
   return (
     <>
-      {screen === "intro" && <Intro onComplete={openDemo} />}
+      {screen === "intro" && (
+        <Intro onComplete={openDemo} />
+      )}
 
       {demoVisited && (
         <div
