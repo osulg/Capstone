@@ -10,6 +10,7 @@ import type {
 } from "../types/api";
 
 import RunInfo from "../components/RunInfo";
+import RunResult from "../components/RunResult";
 
 /** 이 상태에 도달하면 반복 조회를 종료한다. */
 const TERMINAL_STATUSES: RunStatus[] = [
@@ -452,30 +453,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
 
           {/* 파일 작업 성공을 탐지·오탐 검증 성공과 구분한다. */}
           {run && isFinished(run.status) && (
-            <div className="actual-result">
-              <h3>실제 검증 결과</h3>
-              <p>{RUN_LABELS[run.status]}</p>
-              <p>
-                탐지·오탐 검증:{" "}
-                    {run.detection_verification === "not_checked"
-                      ? "아직 검증하지 않음"
-                      : run.detection_verification === "passed"
-                        ? "성공"
-                        : "실패"}
-              </p>
-
-              {run.error && (
-                <p className="step-error" role="alert">{run.error}</p>
-              )}
-
-              <details>
-                <summary>실행 정보 및 상세 결과</summary>
-                <p>실행 ID: {run.run_id}</p>
-                <p>테스트 PID: {run.pid ?? "확인되지 않음"}</p>
-                <p>HoldFS PID: {run.holdfs_pid ?? "확인되지 않음"}</p>
-                <pre>{JSON.stringify(run.result, null, 2)}</pre>
-              </details>
-            </div>
+            <RunResult run={run} />
           )}
 
           <p className="demo-caption demo-disclaimer">
