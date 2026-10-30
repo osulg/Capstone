@@ -126,3 +126,42 @@ python3 models/dynamic/collect/eval_v6.py --data models/dynamic/dataset_v6 --hol
 ```
 
 위 수치는 scikit-learn 1.9.1에서 계산했다. 1.3.2(VM venv)에서는 소수점이 조금 다를 수 있다.
+
+## 7. 런타임 검증 (VM, GuardFS 실제 마운트)
+
+v6 모델(rf_model_v6.pkl, ext_rule=v6, dyn-only HIGH 0.6)을 GuardFS에 올려 마운트 위에서 확인한 결과다.
+
+### 정상 작업 (오탐 없음)
+
+| 작업 | Stage 2 진입 | 최고 dyn | 결과 |
+|---|---|---|---|
+| 파일 생성·읽기·rename·삭제 (기본 회귀) | 비신뢰 프로세스라 MEDIUM 선제 적용 | 0.000 | 10초 후 커밋, LOW 복귀 |
+| `sed -i` 30개 파일 | Stage 1 미탐지 | – | LOW 유지 |
+| `rsync` 텍스트 30개 | Stage 1 미탐지 | – | LOW 유지 |
+| `rsync` 고엔트로피 64KB×30 (임시파일→원래 이름) | EntropyDetector | 0.025 | LOW 복귀 |
+| `shred -u` 11개 | EntropyDetector | 0.022 | LOW 복귀 |
+
+- 고엔트로피 rsync 패턴을 오프라인에서 재현하면 같은 v6 모델로 v5 확장자 규칙 피처는 0.655(HIGH 차단),
+  v6 규칙 피처는 0.065다. 런타임 확장자 규칙을 v6로 맞추지 않으면 정상 rsync가 차단된다.
+
+### 공격 시뮬레이션
+
+| 시나리오 | 결과 | 차단 주체 |
+|---|---|---|
+| `sim_highentropy.py` (.txt 덮어쓰기 + .locked) | 첫 파일에서 HIGH | MEDIUM 엔트로피 규칙 (PLAIN_TEXT 6.5) |
+| 같은 시나리오, rename 없음 | 첫 파일에서 HIGH | MEDIUM 엔트로피 규칙 |
+| .png 전체 덮어쓰기 + .x7k2 rename | 두 번째 파일에서 HIGH | MEDIUM magic number 검사 (dyn 0.04→0.215 상승 중) |
+| **.png 헤더 8바이트 보존 + 본문 덮어쓰기 + .x7k2 rename** | **미탐: 30개 전부 반영** | 없음 |
+
+마지막 시나리오:
+- dyn이 0.24 → 0.48로 계속 올랐지만 0.6에 못 미쳤다. 오프라인 재현 점수는 v6 0.51, v5 0.39라
+  v5였어도 미탐이다(v5 임계값 0.5). v6 회귀가 아니라 학습 분포 밖 패턴(읽기 비율 0.89,
+  파일당 쓰기 1회)에 대한 경계 점수다. holdout RansomEXX(0.52~0.57)와 같은 유형의 약점이다.
+- 가중합 0.387로 MEDIUM에 들어갔지만, 10초 관찰이 끝나자 "헤더 정상"으로 판단해 버퍼를 전부 커밋했다.
+  헤더를 보존하는 부분 암호화는 현재 MEDIUM 정책으로 막을 수 없다.
+
+### 후속 과제 (이 결과로 임계값을 다시 튜닝하지 않는다)
+1. MEDIUM 타임아웃 커밋 조건 보강: MEDIUM 중에 미지 확장자 rename이 여러 파일에서 일어났거나
+   dyn이 계속 오르면 커밋을 보류하거나 HIGH로 격상한다 (MEDIUM 정책 작업).
+2. v7 데이터: 헤더 보존 부분 암호화, 확장자를 바꾸지 않는 제자리 암호화, 큰 단위 쓰기 1회 + 작은 단위 읽기
+   여러 번 패턴을 추가로 수집한다.
