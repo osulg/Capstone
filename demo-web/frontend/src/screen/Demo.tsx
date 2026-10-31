@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   ApiError,
+  cancelRun,
   getRun,
   getScenarios,
   startRun,
@@ -29,14 +30,17 @@ const TERMINAL_STATUSES: RunStatus[] = [
   "passed",
   "failed",
   "timed_out",
+  "cancelled",
 ];
 
 const RUN_LABELS: Record<RunStatus, string> = {
   queued: "실행 대기",
   running: "실행 중",
+  cancelling: "프로세스 종료 중",
   passed: "파일 작업 검증 성공",
   failed: "검증 실패",
   timed_out: "시간 초과",
+  cancelled: "테스트 프로세스 종료됨",
 };
 
 const STEP_LABELS: Record<StepStatus, string> = {
@@ -44,7 +48,7 @@ const STEP_LABELS: Record<StepStatus, string> = {
   running: "실행 중",
   passed: "완료",
   failed: "실패",
-  skipped: "수행하지 않음",
+  skipped: "검증하지 못함",
 };
 
 function isFinished(status: RunStatus): boolean {
@@ -95,13 +99,29 @@ export default function Demo({ onReplayIntro }: DemoProps) {
   const [pollError, setPollError] = useState("");
   const [pollRetry, setPollRetry] = useState(0);
 
+  // ── 테스트 프로세스 중단 요청 상태 ──
+  const [cancelSubmitting, setCancelSubmitting] = useState(false);
+  const [cancelAcknowledged, setCancelAcknowledged] = useState(false);
+  const [cancelError, setCancelError] = useState("");
+
+  // state 반영 전 연속 클릭도 차단한다.
+  const cancelSubmittingRef = useRef(false);
+
+  // 확인 응답을 받았더라도 최종 완료 상태는 GET으로 확인한다.
+  const cancellationPending =
+    cancelSubmitting ||
+    (cancelAcknowledged &&
+      runId !== null &&
+      (run === null || !isFinished(run.status))) ||
+    run?.status === "cancelling";
+
   const selected = scenarios.find((item) => item.id === selectedId);
 
   // 조회가 실패해도 실제 테스트가 종료됐다고 가정하지 않는다.
   const awaitingResult =
     runId !== null && (run === null || !isFinished(run.status));
 
-  const busy = submitting || awaitingResult || startUncertain;
+  const busy = submitting || awaitingResult || startUncertain || cancelSubmitting;
 
   // ── 1. 화면 진입 및 재시도 시 시나리오 목록 조회 ──
   useEffect(() => {
@@ -172,6 +192,8 @@ export default function Demo({ onReplayIntro }: DemoProps) {
           setRunId(null);
           setRun(null);
           setPollError("");
+          setCancelAcknowledged(false);
+          setCancelError("");
           setSessionNotice(
             "이전 실행 기록을 찾을 수 없습니다. " +
               "서버가 재시작되었을 수 있습니다. " +
@@ -204,6 +226,8 @@ export default function Demo({ onReplayIntro }: DemoProps) {
     setStartError("");
     setPollError("");
     setSessionNotice("");
+    setCancelAcknowledged(false);
+    setCancelError("");
   }
 
   // ── 4. 사용자가 버튼을 눌렀을 때만 실행 요청 ──
@@ -231,6 +255,8 @@ export default function Demo({ onReplayIntro }: DemoProps) {
       setRun(null);
       setPollError("");
       setRunId(created.run_id);
+      setCancelAcknowledged(false);
+      setCancelError("");
     } catch (error: unknown) {
       setStartError(errorMessage(error));
 
@@ -240,6 +266,48 @@ export default function Demo({ onReplayIntro }: DemoProps) {
     } finally {
       submittingRef.current = false;
       setSubmitting(false);
+    }
+  }
+
+  // ── 5. 테스트 프로세스 종료 요청: HoldFS 대기 작업은 취소하지 않는다. ──
+  async function handleCancel() {
+    if (
+      !runId ||
+      !run ||
+      !["queued", "running"].includes(run.status) ||
+      cancellationPending ||
+      cancelSubmittingRef.current
+    ) {
+      return;
+    }
+
+    const currentRunId = runId;
+
+    cancelSubmittingRef.current = true;
+    setCancelSubmitting(true);
+    setCancelError("");
+
+    try {
+      const result = await cancelRun(currentRunId);
+
+      setCancelAcknowledged(
+        result.status === "cancelling" || result.status === "cancelled",
+      );
+
+      // POST 응답으로 화면 상태를 덮어쓰지 않는다.
+      // 기존 GET과 응답 순서가 뒤바뀌더라도 최신 상태를 다시 확인한다.
+    } catch (error: unknown) {
+      setCancelError(
+        `프로세스 종료 요청 결과를 확인하지 못했습니다: ${errorMessage(error)}. ` +
+          "서버에서 처리됐을 수 있어 같은 실행을 다시 조회합니다.",
+      );
+    } finally {
+      cancelSubmittingRef.current = false;
+      setCancelSubmitting(false);
+
+      // 성공·실패 모두 기존 조회를 재시작한다.
+      // 조회가 이전에 중단됐던 경우에도 복구할 수 있다.
+      setPollRetry((value) => value + 1);
     }
   }
 
@@ -416,8 +484,11 @@ export default function Demo({ onReplayIntro }: DemoProps) {
 
               {awaitingResult && (
                 <p className="demo-caption" role="status">
-                  파일 작업 및 지연 반영을 확인하고 있습니다.
-                  완료된 단계부터 진행 상태가 갱신됩니다.
+                  {cancellationPending
+                    ? "테스트 프로세스의 종료를 확인하고 있습니다. " +
+                      "HoldFS에 접수된 작업은 자체 정책에 따라 처리됩니다."
+                    : "파일 작업 및 지연 반영을 확인하고 있습니다. " +
+                      "완료된 단계부터 진행 상태가 갱신됩니다."}
                 </p>
               )}
 
@@ -498,6 +569,41 @@ export default function Demo({ onReplayIntro }: DemoProps) {
               >
                 같은 실행 다시 조회
               </button>
+            </div>
+          )}
+
+          {/* 테스트 프로세스 종료와 HoldFS의 후속 처리는 구분한다. */}
+          {runId && run && !isFinished(run.status) && (
+            <div className="run-cancel">
+              <div>
+                <strong>
+                  {cancellationPending
+                    ? "테스트 프로세스를 종료하고 있습니다."
+                    : "테스트 프로세스의 실행을 멈출 수 있습니다."}
+                </strong>
+                <p>
+                  이미 접수된 작업은 HoldFS 정책에 따라
+                  프로세스 종료 후에도 반영될 수 있습니다.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void handleCancel()}
+                disabled={cancellationPending}
+              >
+                {cancelSubmitting
+                  ? "종료 요청 중"
+                  : cancellationPending
+                    ? "프로세스 종료 중"
+                    : "테스트 프로세스 중단"}
+              </button>
+            </div>
+          )}
+
+          {cancelError && (
+            <div className="demo-notice error" role="alert">
+              {cancelError}
             </div>
           )}
 

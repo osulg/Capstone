@@ -12,9 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 RunStatus = Literal[
     "queued",
     "running",
+    "cancelling",
     "passed",
     "failed",
     "timed_out",
+    "cancelled",
 ]
 
 StepStatus = Literal[
@@ -69,7 +71,14 @@ class RunResponse(BaseModel):
 
     run_id: str
     scenario_id: str
-    status: RunStatus
+    status: RunStatus = Field(
+        description=(
+            "cancelling은 테스트 프로세스 종료 처리 중, "
+            "cancelled는 테스트 프로세스 실행 중단 완료를 의미한다. "
+            "HoldFS에 접수된 대기 작업의 폐기·처리 완료나 "
+            "파일 변경의 원상복구를 의미하지 않는다."
+        ),
+    )
 
     pid: int | None = None
     holdfs_pid: int | None = None

@@ -131,7 +131,12 @@ class RunnerGroupTests(unittest.IsolatedAsyncioTestCase):
 
     async def _spawn_group(self, mode="normal"):
         manager = await self.spawn(
-            sys.executable, "-u", "-c", MANAGER_CODE, mode, CHILD_CODE,
+            sys.executable,
+            "-u",
+            "-c",
+            MANAGER_CODE,
+            mode,
+            CHILD_CODE,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -167,7 +172,9 @@ class RunnerGroupTests(unittest.IsolatedAsyncioTestCase):
         manager, child_pid = await self._spawn_group("ignore")
         runner = self._runner()
         with patch.object(
-            runner, "_signal_group", wraps=runner._signal_group,
+            runner,
+            "_signal_group",
+            wraps=runner._signal_group,
         ) as send_signal:
             await runner._terminate_process_group(manager)
         self.assertIn(
@@ -180,7 +187,9 @@ class RunnerGroupTests(unittest.IsolatedAsyncioTestCase):
         manager, child_pid = await self._spawn_group("stopped")
         runner = self._runner()
         with patch.object(
-            runner, "_signal_group", wraps=runner._signal_group,
+            runner,
+            "_signal_group",
+            wraps=runner._signal_group,
         ) as send_signal:
             await runner._terminate_process_group(manager)
         calls = [call.args for call in send_signal.call_args_list]
@@ -222,7 +231,8 @@ class RunnerGroupTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(runner.close(), timeout=8)
             else:
                 await asyncio.wait_for(
-                    asyncio.shield(runner._active_task), timeout=8,
+                    asyncio.shield(runner._active_task),
+                    timeout=8,
                 )
 
         result = runner.get(created.run_id)
@@ -266,6 +276,58 @@ class RunnerGroupTests(unittest.IsolatedAsyncioTestCase):
             self.reaper.cancel()
             await asyncio.gather(self.reaper, return_exceptions=True)
             self._prctl(36, self.previous_subreaper)
+
+    async def test_user_cancel_cleans_group_and_allows_next_run(self):
+        runner = self._runner()
+
+        # 같은 runner로 두 번 실행해 이전 중단 이벤트가 남지 않는지 확인한다.
+        for _ in range(2):
+            spawned = asyncio.Event()
+            captured = {}
+
+            async def create_test_process(*args, **kwargs):
+                manager, child_pid = await self._spawn_group()
+
+                captured.update(
+                    manager=manager,
+                    child_pid=child_pid,
+                )
+                spawned.set()
+                return manager
+
+            with patch(
+                "app.services.runner.asyncio.create_subprocess_exec",
+                side_effect=create_test_process,
+            ):
+                created = runner.start("S01")
+                await asyncio.wait_for(spawned.wait(), timeout=6)
+
+                # 이전 실행의 중단 이벤트 때문에 자동 취소되면 안 된다.
+                await asyncio.sleep(0.05)
+                self.assertEqual(
+                    runner.get(created.run_id).status,
+                    "running",
+                )
+
+                reply = runner.cancel(created.run_id)
+                self.assertEqual(reply.status, "cancelling")
+
+                await asyncio.wait_for(
+                    asyncio.shield(runner._active_task),
+                    timeout=8,
+                )
+
+            result = runner.get(created.run_id)
+
+            self.assertEqual(result.status, "cancelled")
+            self.assertIsNotNone(result.finished_at)
+            self.assertFalse(runner._cleanup_blocked)
+
+            # 실제 관리자·자식과 실행 그룹이 모두 사라졌는지 확인한다.
+            self._assert_gone(
+                captured["manager"],
+                captured["child_pid"],
+            )
 
 
 if __name__ == "__main__":

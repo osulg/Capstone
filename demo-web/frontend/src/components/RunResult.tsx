@@ -17,27 +17,32 @@ function durationLabel(run: Run): string {
   return `${(milliseconds / 1000).toFixed(1)}초`;
 }
 
-/** 파일 작업 결과와 탐지 검증 결과를 별도로 표시한다. */
+/** 파일 작업 검증, 프로세스 실행 중단, 탐지 검증 결과를 구분해 표시한다. */
 export default function RunResult({ run }: RunResultProps) {
   const passed = run.status === "passed";
+  const cancelled = run.status === "cancelled";
   const completed = run.steps.filter((step) => step.status === "passed").length;
   const detection = run.detection_verification;
 
-  const title = passed
-    ? "파일 작업 검증을 완료했습니다"
-    : run.status === "timed_out"
-      ? "실행 제한 시간을 초과했습니다"
-      : "파일 작업 검증을 완료하지 못했습니다";
+  const title = cancelled
+    ? "테스트 프로세스 실행을 중단했습니다"
+    : passed
+      ? "파일 작업 검증을 완료했습니다"
+      : run.status === "timed_out"
+        ? "실행 제한 시간을 초과했습니다"
+        : "파일 작업 검증을 완료하지 못했습니다";
 
   return (
     <section
-      className={`actual-result ${passed ? "is-passed" : "is-failed"}`}
+      className={`actual-result ${
+        cancelled ? "is-cancelled" : passed ? "is-passed" : "is-failed"
+      }`}
       aria-labelledby="result-heading"
     >
       <header className="result-heading">
         <div className="result-heading-copy">
           <span className="result-icon" aria-hidden="true">
-            {passed ? "✓" : "!"}
+            {cancelled ? "−" : passed ? "✓" : "!"}
           </span>
           <div>
             <p className="result-eyebrow">실제 검증 결과</p>
@@ -45,7 +50,13 @@ export default function RunResult({ run }: RunResultProps) {
           </div>
         </div>
         <span className="result-status">
-          {passed ? "검증 성공" : run.status === "timed_out" ? "시간 초과" : "검증 실패"}
+          {cancelled
+            ? "프로세스 종료"
+            : passed
+              ? "검증 성공"
+              : run.status === "timed_out"
+                ? "시간 초과"
+                : "검증 실패"}
         </span>
       </header>
 
@@ -68,20 +79,37 @@ export default function RunResult({ run }: RunResultProps) {
         </div>
       </dl>
 
-      {detection === "not_checked" && (
+      {cancelled && (
         <p className="result-note">
-          이 결과는 파일 작업에 대한 검증입니다. 탐지·오탐 여부는 별도로 검증해야 합니다.
+          테스트가 중단되어 전체 파일 작업 검증을 완료하지 못했습니다.
+          완료한 단계 수는 중단 전에 검증을 마친 단계만 집계합니다.
         </p>
       )}
 
-      {run.error && (
+      {detection === "not_checked" && (
+        <p className="result-note">
+          탐지·오탐 여부는 별도로 검증해야 합니다.
+        </p>
+      )}
+
+      {/* 실행 중단 완료는 HoldFS 대기 작업의 취소나 처리 완료를 의미하지 않는다. */}
+      {cancelled ? (
+        <div className="result-policy-note">
+          <strong>HoldFS 후속 처리 안내</strong>
+          <p>
+            이미 접수된 작업은 HoldFS 정책에 따라 이후 반영될 수 있습니다.
+            이 중단 요청은 대기 작업을 폐기하거나 파일 변경을 되돌리지 않습니다.
+          </p>
+          <p>최종 반영 내역은 대시보드에서 해당 작업 PID로 확인하세요.</p>
+        </div>
+      ) : run.error ? (
         <div className="result-error" role="alert">
           <strong>오류 내용</strong>
           <p>{run.error}</p>
         </div>
-      )}
+      ) : null}
 
-      {/* PID와 실행 ID는 위의 실행 정보 영역에서 확인한다. */}
+      {/* 중단 시 result가 없어도 상태와 단계를 확인하도록 전체 응답을 표시한다. */}
       <details className="result-details" key={run.run_id}>
         <summary>
           <span className="result-details-label">
@@ -95,7 +123,7 @@ export default function RunResult({ run }: RunResultProps) {
         </summary>
         <div className="result-json-header">시나리오 실행 결과</div>
         <pre tabIndex={0} aria-label="시나리오 실행 결과 JSON">
-          <code>{JSON.stringify(run.result, null, 2)}</code>
+          <code>{JSON.stringify(run, null, 2)}</code>
         </pre>
       </details>
     </section>

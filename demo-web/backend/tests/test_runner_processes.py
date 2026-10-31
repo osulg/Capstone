@@ -35,32 +35,41 @@ class RunnerStructureTests(unittest.TestCase):
             (BACKEND / "app/services/runner.py").read_text(encoding="utf-8")
         )
         cls = next(
-            node for node in tree.body
+            node
+            for node in tree.body
             if isinstance(node, ast.ClassDef) and node.name == "ScenarioRunner"
         )
         methods = {
-            node.name: node for node in cls.body
+            node.name: node
+            for node in cls.body
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
         self.assertIn("_register_process", methods)
         self.assertIn("_read_progress", methods)
-        self.assertFalse(any(
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node is not methods["_read_progress"]
-            for node in ast.walk(methods["_read_progress"])
-        ))
+        self.assertFalse(
+            any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node is not methods["_read_progress"]
+                for node in ast.walk(methods["_read_progress"])
+            )
+        )
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "Pydantic is not installed")
 class ProcessRegistrationTests(unittest.TestCase):
     def setUp(self):
         self.record = RunResponse(
-            run_id="test", scenario_id="S01", status="running",
-            pid=100, created_at=now(),
+            run_id="test",
+            scenario_id="S01",
+            status="running",
+            pid=100,
+            created_at=now(),
         )
         self.payload = {
-            "role": "normal_worker", "pid": 200,
-            "start_time_ticks": 1234, "registered_at": now(),
+            "role": "normal_worker",
+            "pid": 200,
+            "start_time_ticks": 1234,
+            "registered_at": now(),
         }
 
     def test_direct_child_registration_and_duplicate(self):
@@ -94,16 +103,23 @@ class RunnerCleanupTests(unittest.IsolatedAsyncioTestCase):
     async def test_output_error_does_not_lock_finished_process(self):
         process = SimpleNamespace(pid=100, returncode=1)
         runner = ScenarioRunner()
-        with patch(
-            "app.services.runner.asyncio.create_subprocess_exec",
-            new=AsyncMock(return_value=process),
-        ), patch.object(
-            runner, "_collect_output",
-            new=AsyncMock(side_effect=ValueError("invalid progress")),
-        ), patch.object(
-            runner, "_terminate_process_group",
-            new=AsyncMock(),
-        ) as terminate_group, self.assertLogs("app.services.runner", level="WARNING"):
+        with (
+            patch(
+                "app.services.runner.asyncio.create_subprocess_exec",
+                new=AsyncMock(return_value=process),
+            ),
+            patch.object(
+                runner,
+                "_collect_output",
+                new=AsyncMock(side_effect=ValueError("invalid progress")),
+            ),
+            patch.object(
+                runner,
+                "_terminate_process_group",
+                new=AsyncMock(),
+            ) as terminate_group,
+            self.assertLogs("app.services.runner", level="WARNING"),
+        ):
             created = runner.start("S01")
             await runner._active_task
         # 이 검사는 출력 오류와 실행 잠금의 관계만 다룬다.
@@ -118,16 +134,23 @@ class RunnerCleanupTests(unittest.IsolatedAsyncioTestCase):
     async def test_group_cleanup_failure_blocks_new_runs(self):
         process = SimpleNamespace(pid=100, returncode=1)
         runner = ScenarioRunner()
-        with patch(
-            "app.services.runner.asyncio.create_subprocess_exec",
-            new=AsyncMock(return_value=process),
-        ), patch.object(
-            runner, "_collect_output",
-            new=AsyncMock(side_effect=ValueError("invalid progress")),
-        ), patch.object(
-            runner, "_terminate_process_group",
-            new=AsyncMock(side_effect=TimeoutError("group still exists")),
-        ), self.assertLogs("app.services.runner", level="WARNING"):
+        with (
+            patch(
+                "app.services.runner.asyncio.create_subprocess_exec",
+                new=AsyncMock(return_value=process),
+            ),
+            patch.object(
+                runner,
+                "_collect_output",
+                new=AsyncMock(side_effect=ValueError("invalid progress")),
+            ),
+            patch.object(
+                runner,
+                "_terminate_process_group",
+                new=AsyncMock(side_effect=TimeoutError("group still exists")),
+            ),
+            self.assertLogs("app.services.runner", level="WARNING"),
+        ):
             created = runner.start("S01")
             await runner._active_task
 
@@ -136,6 +159,7 @@ class RunnerCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("group still exists", result.error)
         self.assertTrue(runner._cleanup_blocked)
         from app.services.runner import RunBusyError
+
         with self.assertRaises(RunBusyError):
             runner.start("S01")
         await runner.close()

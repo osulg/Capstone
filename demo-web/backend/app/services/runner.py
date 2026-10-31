@@ -5,6 +5,7 @@ backend/app/services/runner.py
 """
 
 import asyncio
+from asyncio import taskgroups
 import json
 import logging
 import math
@@ -58,6 +59,7 @@ class ScenarioRunner:
         self.cleanup_seconds = cleanup_seconds
 
         self._runs: dict[str, RunResponse] = {}
+        self._cancel_events: dict[str, asyncio.Event] = {}
         self._active_task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._cleanup_blocked = False
@@ -105,6 +107,7 @@ class ScenarioRunner:
             ],
         )
         self._runs[run_id] = record
+        self._cancel_events[run_id] = asyncio.Event()
 
         self._active_task = loop.create_task(
             self._execute(record, scenario),
@@ -123,6 +126,31 @@ class ScenarioRunner:
             raise KeyError(run_id)
 
         return self._runs[run_id].model_copy(deep=True)
+
+    def cancel(self, run_id: str) -> RunResponse:
+        """테스트 프로세스 그룹의 종료를 요청한다.
+
+        프로세스 정리는 실행 태스크가 수행한다.
+        HoldFS의 상태 전이, staging, 지연 반영 정책은 변경하지 않는다.
+        """
+
+        if run_id not in self._runs:
+            raise KeyError(run_id)
+
+        record = self._runs[run_id]
+
+        # 이미 완료됐거나 중단 요청을 받은 실행은 현재 상태를 반환한다.
+        # 다른 실행의 중단 이벤트에는 영향을 주지 않는다.
+        if record.status not in ("queued", "running"):
+            return self.get(run_id)
+
+        event = self._cancel_events[run_id]
+
+        record.status = "cancelling"
+        event.set()
+
+        # 응답은 ‘중단 요청 접수’이지 ‘프로세스 종료 완료’가 아니다.
+        return self.get(run_id)
 
     async def close(self):
         """서버 종료 시 실행 중인 테스트도 종료한다."""
@@ -533,14 +561,27 @@ class ScenarioRunner:
         process = None
         communication = None
         stop_wait = None
+        cancel_wait = None
 
-        record.status = "running"
+        cancel_event = self._cancel_events[record.run_id]
+        cancelled_by_user = False
+
+        # queued 상태에서 바로 중단 요청을 받은 경우도 처리한다.
+        if not cancel_event.is_set():
+            record.status = "running"
+
         record.started_at = now()
 
         try:
             if self._stop.is_set():
                 record.status = "failed"
                 record.error = "서버 종료로 실행을 취소했습니다."
+                return
+
+            if cancel_event.is_set():
+                cancelled_by_user = True
+                record.status = "cancelling"
+                record.error = "사용자가 테스트 프로세스 종료를 요청했습니다."
                 return
 
             command = [
@@ -577,17 +618,28 @@ class ScenarioRunner:
             )
 
             stop_wait = asyncio.create_task(self._stop.wait())
+            cancel_wait = asyncio.create_task(cancel_event.wait())
+
             done, _ = await asyncio.wait(
-                {communication, stop_wait},
+                {communication, stop_wait, cancel_wait},
                 timeout=self.timeout_seconds,
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
+            # 결과 수집이 이미 완료됐다면 최종 결과 처리를 우선한다.
+            # 완료와 중단 요청이 거의 동시에 발생한 경우의 기준이다.
             if communication not in done:
                 if stop_wait in done:
                     record.status = "failed"
                     record.error = "서버 종료로 테스트를 중단했습니다."
                     return
+
+                if cancel_wait in done:
+                    cancelled_by_user = True
+                    record.status = "cancelling"
+                    record.error = "사용자가 테스트 프로세스 종료를 요청했습니다."
+                    return
+
                 raise TimeoutError
 
             stdout = communication.result()
@@ -641,9 +693,20 @@ class ScenarioRunner:
 
         finally:
             try:
-                if stop_wait is not None:
-                    stop_wait.cancel()
-                    await asyncio.gather(stop_wait, return_exceptions=True)
+                waiters = [
+                    task
+                    for task in (stop_wait, cancel_wait)
+                    if task is not None
+                ]
+
+                for task in waiters:
+                    task.cancel()
+
+                if waiters:
+                    await asyncio.gather(
+                        *waiters,
+                        return_exceptions=True,
+                    )
 
                 if process is not None:
                     try:
@@ -714,13 +777,33 @@ class ScenarioRunner:
                     self._pending_cleanup.add(communication)
                     communication.add_done_callback(self._cleanup_done)
             finally:
+                # 그룹 정리가 확인된 경우에만 테스트 실행 중단을 확정한다.
+                if cancelled_by_user:
+                    # 종료 확인 실패는 중단 진행 상태로 남기지 않는다.
+                    # 새 실행 차단은 유지하고 최종 실패로 알린다.
+                    if self._cleanup_blocked:
+                        record.status = "failed"
+                    else:
+                        # 프로세스 실행만 중단한다. HoldFS의 후속 처리는 계속될 수 있다.
+                        record.status = "cancelled"
+                        record.error = (
+                            "사용자 요청으로 테스트 프로세스 실행을 중단했습니다. "
+                            "이미 접수된 작업은 HoldFS 정책에 따라 처리됩니다."
+                        )
+
                 for step in record.steps:
                     if step.status == "running":
-                        step.status = "failed"
-                        step.error = (
-                            record.error
-                            or "단계 완료를 확인하기 전에 실행이 종료됐습니다."
-                        )
+                        if record.status == "cancelled":
+                            # 중간에 멈춘 단계는 검증 실패로 단정하지 않는다.
+                            step.status = "skipped"
+                            step.error = None
+                        else:
+                            step.status = "failed"
+                            step.error = (
+                                record.error
+                                or "단계 완료를 확인하기 전에 실행이 종료됐습니다."
+                            )
+
                     elif step.status == "pending":
                         step.status = "skipped"
 

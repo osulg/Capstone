@@ -11,9 +11,11 @@ interface RunInfoProps {
 const STATUS_LABELS: Record<RunStatus, string> = {
   queued: "실행 대기",
   running: "실행 중",
+  cancelling: "프로세스 종료 중",
   passed: "성공",
   failed: "실패",
   timed_out: "시간 초과",
+  cancelled: "테스트 프로세스 종료됨",
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -35,7 +37,7 @@ export default function RunInfo({
 
   const finished =
     run !== null &&
-    ["passed", "failed", "timed_out"].includes(run.status);
+    ["passed", "failed", "timed_out", "cancelled"].includes(run.status);
 
   return (
     <section

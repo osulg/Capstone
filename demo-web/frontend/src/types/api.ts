@@ -14,8 +14,21 @@ export interface Scenario {
   steps: ScenarioStep[];
 }
 
-export type RunStatus = "queued" | "running" | "passed" | "failed" | "timed_out";
-export type StepStatus = "pending" | "running" | "passed" | "failed" | "skipped";
+export type RunStatus =
+  | "queued"
+  | "running"
+  | "cancelling"
+  | "passed"
+  | "failed"
+  | "timed_out"
+  | "cancelled";
+
+export type StepStatus =
+  | "pending"
+  | "running"
+  | "passed"
+  | "failed"
+  | "skipped";
 
 export interface RunCreated {
   run_id: string;

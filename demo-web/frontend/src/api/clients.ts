@@ -74,3 +74,11 @@ export function getRun(runId: string): Promise<Run> {
     `/api/runs/${encodeURIComponent(runId)}`,
   );
 }
+
+/** 테스트 프로세스 종료를 요청한다. HoldFS 대기 작업의 취소 요청은 아니다. */
+export function cancelRun(runId: string): Promise<Run> {
+  return request<Run>(
+    `/api/runs/${encodeURIComponent(runId)}/cancel`,
+    { method: "POST" },
+  );
+}

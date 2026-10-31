@@ -60,3 +60,26 @@ async def get_run(run_id: str, request: Request):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="존재하지 않는 실행 ID입니다.",
         ) from error
+
+
+@router.post(
+    "/{run_id}/cancel",
+    response_model=RunResponse,
+)
+async def cancel_run(run_id: str, request: Request):
+    """테스트 프로세스 그룹의 종료를 요청한다.
+
+    실제 종료 완료는 GET으로 확인한다. HoldFS에 이미 접수된 지연 작업의
+    폐기나 파일 변경의 원상복구를 요청하는 API는 아니다.
+    """
+
+    runner = get_runner(request)
+
+    try:
+        return runner.cancel(run_id)
+
+    except KeyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="존재하지 않는 실행 ID입니다.",
+        ) from error
