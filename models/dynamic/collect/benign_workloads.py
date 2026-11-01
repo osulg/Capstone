@@ -14,6 +14,13 @@
 import os
 import shutil
 
+import decoy_gen
+
+# 방법 B: run_benign.py가 run마다 사양을 넣어 주면 씨앗을 decoy_gen 트리로 만든다.
+# None이면 기존(legacy) 방식: 평면 디렉터리 + 고정 개수/크기 .dat 파일.
+DECOY_SPEC = None
+LAST_DECOY = None  # 이번 run 씨앗 요약(decoy_files/dirs/bytes). 씨앗 안 쓰는 워크로드는 None
+
 TEXT_LINE = ("the quick brown fox jumps over the lazy dog " * 2 + "\n").encode()
 
 
@@ -33,8 +40,17 @@ def _write_random(path, size_kb):
         f.write(os.urandom(size_kb * 1024))
 
 
+def _seed_decoy(root):
+    global LAST_DECOY
+    os.makedirs(root, exist_ok=True)
+    LAST_DECOY = decoy_gen.build(root, DECOY_SPEC)
+    return root
+
+
 def _seed_files(workdir, files, size_kb, kind="text"):
     src = os.path.join(workdir, "src")
+    if DECOY_SPEC is not None:
+        return _seed_decoy(src)
     os.makedirs(src, exist_ok=True)
     writer = _write_random if kind == "random" else _write_text
     for i in range(files):
@@ -45,6 +61,8 @@ def _seed_files(workdir, files, size_kb, kind="text"):
 def _seed_tree(workdir, files, size_kb, depth=3):
     """디렉터리 깊이가 있는 트리. find/rsync류 재귀 순회를 닮게 한다."""
     src = os.path.join(workdir, "tree")
+    if DECOY_SPEC is not None:
+        return _seed_decoy(src)
     cur = src
     for d in range(depth):
         cur = os.path.join(cur, f"lvl{d}")
@@ -52,6 +70,23 @@ def _seed_tree(workdir, files, size_kb, depth=3):
     for i in range(files):
         _write_text(os.path.join(cur, f"file_{i:04d}.txt"), size_kb)
     return src
+
+
+def _each(src, body):
+    """src 아래 모든 파일(재귀)에 대해 body를 실행하는 셸 명령. body에서 "$f"가 파일 경로.
+
+    목록을 먼저 만든 뒤 처리하므로, 처리 중 새로 생긴 파일(.enc/.b64 등)은 다시
+    처리되지 않는다 (기존 평면 *.dat glob과 같은 의미). 목록은 마운트 밖 임시 파일에
+    둬서 FUSE 이벤트에 섞이지 않게 한다.
+    """
+    return (f'L=$(mktemp) && find "{src}" -type f > "$L" && '
+            f'while IFS= read -r f; do {body}; done < "$L"; rm -f "$L"')
+
+
+def _all(src, cmd):
+    """src 아래 모든 파일(재귀)을 한 번에 cmd 인자로 넘긴다 (gzip 등, 미리 만든 목록 기준)."""
+    return (f'L=$(mktemp) && find "{src}" -type f > "$L" && '
+            f'xargs -d "\\n" {cmd} < "$L"; rm -f "$L"')
 
 
 # ---- 개별 워크로드 -------------------------------------------------------- #
@@ -79,7 +114,7 @@ def _bulk_delete(workdir, files, size_kb):
 def _rename_ext(workdir, files, size_kb):
     """확장자 일괄 변경 — 랜섬웨어의 대표 신호를 정상 작업으로 재현."""
     src = _seed_files(workdir, files, size_kb)
-    return ["sh", "-c", f'for f in "{src}"/*.dat; do mv "$f" "$f.bak"; done']
+    return ["sh", "-c", _each(src, 'mv "$f" "$f.bak"')]
 
 
 def _sed_inplace(workdir, files, size_kb):
@@ -113,7 +148,7 @@ def _tar_extract(workdir, files, size_kb):
 
 def _gzip_each(workdir, files, size_kb):
     src = _seed_files(workdir, files, size_kb)
-    return ["sh", "-c", f'gzip -f "{src}"/*.dat']
+    return ["sh", "-c", _all(src, 'gzip -f')]
 
 
 def _zip_archive(workdir, files, size_kb):
@@ -165,38 +200,37 @@ def _sqlite_bulk(workdir, files, size_kb):
 
 def _bzip2_each(workdir, files, size_kb):
     src = _seed_files(workdir, files, size_kb)
-    return ["sh", "-c", f'bzip2 -f "{src}"/*.dat']
+    return ["sh", "-c", _all(src, 'bzip2 -f')]
 
 
 def _xz_each(workdir, files, size_kb):
     src = _seed_files(workdir, files, size_kb)
-    return ["sh", "-c", f'xz -f "{src}"/*.dat']
+    return ["sh", "-c", _all(src, 'xz -f')]
 
 
 def _zstd_each(workdir, files, size_kb):
     src = _seed_files(workdir, files, size_kb)
-    return ["sh", "-c", f'zstd -f -q --rm "{src}"/*.dat']
+    return ["sh", "-c", _all(src, 'zstd -f -q --rm')]
 
 
 def _gpg_symmetric(workdir, files, size_kb):
     """정상 대칭 암호화 — 고엔트로피 출력이 정상 작업에서도 나옴을 학습(핵심 대조군)."""
     src = _seed_files(workdir, files, size_kb)
     return ["sh", "-c",
-            f'for f in "{src}"/*.dat; do gpg --batch --yes --passphrase x -c "$f"; done']
+            _each(src, 'gpg --batch --yes --passphrase x -c "$f"')]
 
 
 def _openssl_enc(workdir, files, size_kb):
     """정상 파일 암호화 (openssl). 랜섬웨어와 표면적으로 가장 닮은 정상 작업."""
     src = _seed_files(workdir, files, size_kb)
     return ["sh", "-c",
-            f'for f in "{src}"/*.dat; do openssl enc -aes-256-cbc -pbkdf2 '
-            f'-pass pass:x -in "$f" -out "$f.enc"; done']
+            _each(src, 'openssl enc -aes-256-cbc -pbkdf2 -pass pass:x -in "$f" -out "$f.enc"')]
 
 
 def _shred_delete(workdir, files, size_kb):
     """보안 삭제 — 덮어쓰기 후 삭제. 랜섬웨어의 원본 파괴와 표면적으로 유사한 정상 작업."""
     src = _seed_files(workdir, files, size_kb)
-    return ["sh", "-c", f'shred -u -n 1 "{src}"/*.dat']
+    return ["sh", "-c", f'find "{src}" -type f -exec shred -u -n 1 {{}} +']
 
 
 def _cp_archive(workdir, files, size_kb):
@@ -228,7 +262,7 @@ def _find_chmod(workdir, files, size_kb):
 def _sort_large(workdir, files, size_kb):
     src = _seed_files(workdir, files, size_kb)
     return ["sh", "-c",
-            f'cat "{src}"/*.dat | sort > "{workdir}/sorted.txt"']
+            f'find "{src}" -type f -exec cat {{}} + | sort > "{workdir}/sorted.txt"']
 
 
 def _split_join(workdir, files, size_kb):
@@ -244,7 +278,7 @@ def _split_join(workdir, files, size_kb):
 def _base64_roundtrip(workdir, files, size_kb):
     src = _seed_files(workdir, files, size_kb)
     return ["sh", "-c",
-            f'for f in "{src}"/*.dat; do base64 "$f" > "$f.b64"; base64 -d "$f.b64" > "$f.dec"; done']
+            _each(src, 'base64 "$f" > "$f.b64"; base64 -d "$f.b64" > "$f.dec"')]
 
 
 def _dd_copy(workdir, files, size_kb):
