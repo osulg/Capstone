@@ -100,13 +100,16 @@ v5 상위권이던 규모 피처(`total_write_bytes`, `files_per_dir`, `high_ent
 - 정상 데이터는 합성 워크로드다. 실사용 트레이스로 오탐을 확인하지 않았다.
 - holdout에 정상 데이터가 없어 holdout 오탐률은 측정하지 않았다(그룹 CV 오탐률로 대신).
 
-## 5. 배포 전 남은 작업
+## 5. 배포 작업 현황
 
-1. **런타임 피처 정합**: `passthrough.py`의 `PidStats`는 아직 v5 확장자 규칙이다. v6 모델을
-   배포하려면 `features._is_ext_change(rule="v6")`와 같은 규칙으로 맞춰야 한다(별도 FUSE 작업).
-2. **모델 파일**: 배포용 pkl은 GuardFS venv(scikit-learn 1.3.2)에서 아래 설정으로 다시 학습해야 한다.
-   RandomForest(n_estimators=400, random_state=42), run 균형 가중치, 임계값 0.6.
-3. 경계에서 흔들리는 문제(트리 수·시드 평균 등)는 **새 평가 데이터로** 검증한다.
+1. **런타임 피처 정합 — 완료** (`f1dec18`): `passthrough.py`의 `PidStats`와 학습 추출기
+   (`features.py`)가 같은 확장자 판정 규칙(`guardfs/common/ext_rule.py`)을 쓴다.
+   규칙은 `config.DYNAMIC_EXT_RULE = "v6"`로 모델과 짝을 맞춘다.
+2. **모델 파일 — 완료** (`1af0fb1`, `5af2be0`): `train_v6.py`로 GuardFS venv(scikit-learn 1.3.2)에서
+   RandomForest(n_estimators=400, random_state=42), run 균형 가중치로 학습한 `rf_model_v6.pkl`을
+   런타임 모델로 전환했다. dyn-only HIGH 임계값은 0.6(`STAGE2_DYN_ONLY_HIGH_THRESHOLD`).
+   메타데이터는 `train_v6_meta.json`.
+3. **남은 작업**: 경계에서 흔들리는 문제(트리 수·시드 평균 등)는 **새 평가 데이터로** 검증한다.
    이번 holdout으로 다시 튜닝하지 않는다.
 
 ## 6. 재현
