@@ -163,10 +163,11 @@ RE_SUSPECT = re.compile(r"\[STATE\] pid=(\d+) LOW -> SUSPICIOUS reason=(\S*)")
 RE_SCORE = re.compile(r"\[(?:STAGE2|WATCH|REEVAL)\] pid=(\d+) dyn=([\d.]+) stat=([\d.]+) "
                       r"(?:final|score)=([\d.]+)")
 RE_TO_MEDIUM = re.compile(r"\[(STAGE2|WATCH)\] pid=(\d+) → MEDIUM \(score=([\d.]+)\)")
-RE_TRUST = re.compile(r"\[TRUST\] pid=(\d+) untrusted origin → forced MEDIUM")
+# 비신뢰 실행 경로 프로세스가 판정 전에 선제 MEDIUM이 될 때 (Stage2 격상은 SUSPICIOUS → MEDIUM)
+RE_TRUST = re.compile(r"\[STATE\] pid=(\d+) ProcState\.LOW → ProcState\.MEDIUM")
 RE_HIGH = re.compile(r"\[TRIGGER HIGH\] pid=(\d+) reason=(.*)$")
 RE_SUSPEND = re.compile(r"\[HIGH\] pid=(\d+) suspend 완료")
-RE_LOW_REEVAL = re.compile(r"\[REEVAL\] pid=(\d+) 10초 경과 → Low 복귀")
+RE_LOW_REEVAL = re.compile(r"\[REEVAL\] pid=(\d+) (?:관찰 시간 종료 → LOW|10초 경과 → Low) 복귀")
 RE_LOW_WATCH = re.compile(r"\[WATCH\] pid=(\d+) 관찰 종료")
 # passthrough.py: 허니팟 경로에 대한 open/read/write/truncate/unlink/rmdir/rename 차단
 RE_HONEYPOT = re.compile(r"\[HONEYPOT\] pid=(\d+) op=(\S+) blocked path=(.+?)(?: new_path=(.+))?$")
@@ -233,7 +234,8 @@ class StdoutParser:
             pid = int(m.group(1))
             if self.level.get(pid) in ("MEDIUM", "HIGH"):
                 return None
-            return self._ev(pid, "MEDIUM", "MEDIUM", "untrusted_origin (비신뢰 실행 경로 → 선제 MEDIUM)")
+            return self._ev(pid, "MEDIUM", "MEDIUM",
+                            "untrusted_origin (비신뢰 실행 경로 → 선제 MEDIUM, 또는 강제 상태 파일)")
         m = RE_HIGH.search(line)
         if m:
             pid = int(m.group(1))

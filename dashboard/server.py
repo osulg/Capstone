@@ -18,10 +18,22 @@ import time
 from flask import Flask, jsonify, render_template, request
 
 try:
-    from dashboard.rag import build_context, local_analysis
+    from dashboard.rag import (
+        STAGE2_DYN_ONLY_HIGH_THRESHOLD,
+        STAGE2_HIGH_THRESHOLD,
+        STAGE2_MEDIUM_THRESHOLD,
+        build_context,
+        local_analysis,
+    )
     from dashboard import files as file_scan
 except ImportError:  # python dashboard/server.py 로 직접 실행한 경우
-    from rag import build_context, local_analysis
+    from rag import (
+        STAGE2_DYN_ONLY_HIGH_THRESHOLD,
+        STAGE2_HIGH_THRESHOLD,
+        STAGE2_MEDIUM_THRESHOLD,
+        build_context,
+        local_analysis,
+    )
     import files as file_scan
 
 try:
@@ -43,14 +55,14 @@ _llm_client = None
 if OpenAI is not None and os.environ.get("OPENAI_API_KEY"):
     _llm_client = OpenAI()
 
-SYSTEM_PROMPT = """당신은 엔드포인트 보안 분석 전문가입니다. HoldFS EDR 시스템의 보안 이벤트 로그를 분석하여 보안팀에게 인사이트를 제공합니다.
+SYSTEM_PROMPT = f"""당신은 엔드포인트 보안 분석 전문가입니다. HoldFS EDR 시스템의 보안 이벤트 로그를 분석하여 보안팀에게 인사이트를 제공합니다.
 
 HoldFS 시스템 개요:
 - FUSE 기반 실시간 파일 보호 정책 엔진
 - Stage1: 엔트로피 탐지 / 삭제 빈도 / 허니팟 접근 → score ≥ 1이면 ML 평가
 - Stage2: 동적 RF + 정적 RF 앙상블 (가중치 0.5/0.5)
-- MEDIUM (score 0.3~0.82): write 버퍼링 + 1초 주기 재평가
-- HIGH (score ≥ 0.82): write/rename/unlink/truncate 차단 + SIGSTOP
+- MEDIUM (score {STAGE2_MEDIUM_THRESHOLD}~{STAGE2_HIGH_THRESHOLD}): write 버퍼링 + 1초 주기 재평가
+- HIGH (score ≥ {STAGE2_HIGH_THRESHOLD} 또는 동적 점수 단독 ≥ {STAGE2_DYN_ONLY_HIGH_THRESHOLD}): write/rename/unlink/truncate 차단 + SIGSTOP
 
 MITRE ATT&CK 주요 매핑:
 - T1486 Data Encrypted for Impact: 고엔트로피 write + 확장자 변경

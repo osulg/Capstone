@@ -80,7 +80,7 @@ python dashboard/agent.py --stdout-log ~/guardfs_stdout.log
 | 소스 | 내용 | 대시보드 표시 |
 |---|---|---|
 | `~/filesecurity.log` | `log_medium_event` / `log_high_event` 블록 | WRITE BUFFERED, DELETE BLOCKED, DROP BUFFER_DROPPED, UNLINK STAGED ... |
-| `--stdout-log` | `[STAGE2]`, `[WATCH]`, `[REEVAL]`, `[TRIGGER HIGH]`, `[TRUST]`, `[HONEYPOT]` 줄 | `ESCALATE → MEDIUM/HIGH` 행. 탐지 사유에 Stage1 탐지기 + dyn/stat/score + HIGH 사유 표시, `SIGSTOP`, `RETURN → LOW` |
+| `--stdout-log` | `[STAGE2]`, `[WATCH]`, `[REEVAL]`, `[TRIGGER HIGH]`, `[STATE]`(선제 MEDIUM), `[HONEYPOT]` 줄 | `ESCALATE → MEDIUM/HIGH` 행. 탐지 사유에 Stage1 탐지기 + dyn/stat/score + HIGH 사유 표시, `SIGSTOP`, `RETURN → LOW` |
 
 - `PYTHONUNBUFFERED=1`이 없으면 파이프에서 stdout이 버퍼링돼 이벤트가 늦게 들어온다.
 - `--stdout-log`를 생략하면 정책 결과(BUFFERED/BLOCKED 등)만 표시되고 격상 행은 나오지 않는다.
