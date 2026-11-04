@@ -344,3 +344,6 @@ td.reason { color: #94a3b8; font-size: 0.7rem; white-space: normal; word-break: 
   header { padding: 0 16px; }
   .logo span { display: none; }
 }
+
+/* React 루트: body의 flex 레이아웃이 header/.main-layout에 그대로 적용되도록 */
+#root { display: contents; }

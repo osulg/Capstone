@@ -17,7 +17,7 @@ HoldFS 코드(`guardfs/`)는 수정하지 않는다. 에이전트가 HoldFS가 �
 | `agent.py` | HoldFS 로그 tail → JSON 변환 → 서버 전송. `--demo` 샘플 전송 |
 | `rag.py` | 이벤트·지식 검색(RAG), LLM 미연결 시 규칙 기반 로컬 분석 |
 | `files.py` | 파일 상태 탭: 보호/비보호 폴더 읽기 전용 스캔, 엔트로피 판정 |
-| `templates/index.html` | 대시보드 UI |
+| `web/` | 대시보드 화면 (React + TypeScript + Vite). 빌드 결과 `web/dist/`를 `server.py`가 서빙한다 |
 
 ## 빠른 실행 (권장): `run_all.sh`
 
@@ -106,6 +106,40 @@ rm -f /tmp/guardfs_state_*
 
 강제 상태는 ML을 거치지 않으므로 `ESCALATE` 행(격상 이유)은 나오지 않는다.
 격상 이유까지 보려면 실제 탐지 시나리오(예: `scripts/run_sample.sh`)를 돌린다.
+
+## 화면 개발 (React)
+
+화면 소스는 `dashboard/web/src/`에 있다. Node.js 20.19+ / 22.12+ 가 필요하다.
+
+```bash
+cd dashboard/web
+npm ci            # 처음 한 번
+```
+
+개발할 때는 터미널 두 개를 쓴다. 저장하면 브라우저가 새로고침 없이 바로 바뀐다.
+
+```bash
+python dashboard/server.py --port 5000     # 터미널 1: API 서버 (저장소 루트에서)
+cd dashboard/web && npm run dev            # 터미널 2: 화면 개발 서버 → http://127.0.0.1:5173
+```
+
+`npm run dev`는 `/api` 요청을 5000 포트로 넘긴다. 데이터가 필요하면 `python dashboard/agent.py --demo`를 실행한다.
+
+수정을 마치면 빌드해서 `web/dist/`를 함께 커밋한다. `run_all.sh`와 `server.py`는 빌드된 `dist/`를 쓰므로,
+Node.js가 없는 VM(인터넷 격리)에서도 그대로 실행된다.
+
+```bash
+cd dashboard/web && npm run build          # 타입 검사 + dist/ 생성
+```
+
+| 파일 | 역할 |
+|---|---|
+| `src/App.tsx` | 전체 레이아웃, 탭 전환, AI 패널 열기/닫기 |
+| `src/hooks/useEvents.ts` | `/api/events` 2초 증분 폴링 |
+| `src/hooks/useChat.ts` | AI 분석관 대화, `/api/chat`, LLM 상태 |
+| `src/components/` | `Header`, `SideRail`, `EventsView`, `FilesView`·`FolderPanel`, `AiPane` |
+| `src/markdown.ts` | LLM 응답 마크다운 렌더링 (이스케이프 후 허용 태그만 생성) |
+| `src/styles.css` | 전체 스타일 |
 
 ## 허니팟 접근 표시
 

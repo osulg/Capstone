@@ -15,7 +15,7 @@ import os
 import threading
 import time
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, request, send_from_directory
 
 try:
     from dashboard.rag import (
@@ -41,7 +41,10 @@ try:
 except ImportError:
     OpenAI = None
 
-app = Flask(__name__)
+# React 화면 빌드 결과 (dashboard/web 에서 npm run build)
+WEB_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "dist")
+
+app = Flask(__name__, static_folder=None)
 
 MAX_EVENTS = 5000
 events = []  # in-memory log store
@@ -144,7 +147,15 @@ def _snapshot() -> list:
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    if not os.path.isfile(os.path.join(WEB_DIST, "index.html")):
+        return ("대시보드 화면 빌드가 없습니다. dashboard/web 에서 npm ci && npm run build 를 실행하세요.",
+                503, {"Content-Type": "text/plain; charset=utf-8"})
+    return send_from_directory(WEB_DIST, "index.html")
+
+
+@app.route("/assets/<path:name>")
+def web_assets(name):
+    return send_from_directory(os.path.join(WEB_DIST, "assets"), name)
 
 
 @app.route("/api/events", methods=["POST"])
