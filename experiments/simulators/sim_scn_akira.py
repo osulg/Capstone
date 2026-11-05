@@ -73,7 +73,11 @@ def parse_args():
     p = argparse.ArgumentParser(description="Akira(Linux/ESXi) 파일연산 모의 재현")
     p.add_argument("target", help="GuardFS 마운트 안의 대상 폴더 (없으면 생성)")
     p.add_argument("--files", type=int, default=8, help="더미 VM 파일 개수")
-    p.add_argument("--size-kb", type=int, default=256, help="파일당 크기(KB)")
+    # 기본 64KB: VM 확장자는 EXTENSION_GROUPS 어디에도 없어 UNKNOWN 그룹(버퍼 상한
+    # 2MB)으로 분류된다. 준비 단계의 평문 쓰기가 전부 MEDIUM 버퍼에 쌓이므로,
+    # files*size 가 2MB 를 넘으면 공격 시작 전에 준비 PID 가 buffer_limit_exceeded
+    # 로 HIGH 격상돼 준비가 막힌다(8*256KB=2MB 에서 실측 확인). 8*64KB=512KB 로 여유.
+    p.add_argument("--size-kb", type=int, default=64, help="파일당 크기(KB)")
     p.add_argument(
         "--encryption-percent",
         type=float,
