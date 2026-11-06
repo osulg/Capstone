@@ -64,6 +64,7 @@ import scenario_lib as lib  # noqa: E402
 
 RADIATION = "☢"  # ☢ : DarkRadiation 이 암호화 파일에 붙이는 기호
 OPENSSL = "/usr/bin/openssl"
+SHRED = "/usr/bin/shred"
 
 
 def parse_args():
@@ -71,9 +72,19 @@ def parse_args():
     p.add_argument("target", help="GuardFS 마운트 안의 대상 폴더 (없으면 생성)")
     p.add_argument(
         "--engine",
-        choices=("inprocess", "openssl"),
+        choices=("inprocess", "openssl", "shred"),
         default="inprocess",
-        help="암호화 주체. openssl=시스템 신뢰 바이너리, inprocess=단일 프로세스",
+        help=(
+            "쓰기 주체. inprocess=비신뢰 단일 python(대조군), "
+            "openssl=신뢰 one-shot(파일당 PID; Stage2 미도달 입증), "
+            "shred=신뢰 지속 단일 PID(다중 파일 고엔트로피 덮어쓰기 → Stage2 dyn 재평가)"
+        ),
+    )
+    p.add_argument(
+        "--shred-passes",
+        type=int,
+        default=3,
+        help="--engine shred 의 덮어쓰기 패스 수(shred -n). 클수록 쓰기량·지속시간↑",
     )
     p.add_argument("--files", type=int, default=10, help="테스트 파일 개수")
     p.add_argument("--size-kb", type=int, default=64, help="파일당 크기(KB)")
@@ -98,8 +109,12 @@ def parse_args():
         p, prepare_timeout=args.prepare_timeout, duration=args.duration
     )
     lib.validate_non_negative(p, delay=args.delay)
+    if args.shred_passes <= 0:
+        p.error("--shred-passes 는 양수여야 합니다.")
     if args.engine == "openssl" and not os.path.exists(OPENSSL):
         p.error(f"{OPENSSL} 가 없습니다. --engine inprocess 를 사용하세요.")
+    if args.engine == "shred" and not os.path.exists(SHRED):
+        p.error(f"{SHRED} 가 없습니다. --engine inprocess 를 사용하세요.")
     return args
 
 
@@ -141,6 +156,76 @@ def _aes_encrypt_openssl(path: str) -> int:
     return size
 
 
+def _count_preserved(paths, size: int) -> int:
+    """shred 종료/차단 후, 앞부분이 아직 평문이면 보존된 것으로 센다."""
+    preserved = 0
+    for p in paths:
+        try:
+            with open(p, "rb") as f:
+                head = f.read(len(lib.PLAINTEXT_LINE))
+            if head == lib.PLAINTEXT_LINE:
+                preserved += 1
+        except OSError:
+            pass
+    return preserved
+
+
+def _run_shred_engine(paths, passes: int, timeout: float) -> int:
+    """
+    단일 shred 프로세스가 여러 파일을 random 으로 덮어쓴다(신뢰·지속 단일 PID).
+
+    openssl(파일당 one-shot) 과 달리 shred 는 한 번의 호출로 모든 파일을 처리하는
+    긴 수명 프로세스다. exe=/usr/bin/shred 는 비인터프리터 시스템 바이너리라 두
+    신뢰 판정(is_trusted_pid / _resolve_trust_target)을 모두 통과한다 → 신뢰라
+    Stage1 차단은 통과하되, 지속 PID라 Stage2 가 재평가 창 동안 이 PID 의 다중 파일
+    고엔트로피 쓰기 프로필을 누적해 dyn 단독 격상(HIGH)할 수 있다. 문서 ②의
+    "Stage2 동적 ML 이 유일한 탐지 주체" 구간을 실제로 밟기 위한 '상응 주체'다.
+
+    HoldFS 가 이 PID 를 SIGSTOP 하면 wait 가 멈추므로 timeout 으로 끊고 정리한다.
+    """
+    # -n passes: random 덮어쓰기 패스 수. -v: 진행 로그. 삭제(-u) 는 하지 않는다.
+    proc = subprocess.Popen(
+        [SHRED, "-n", str(passes), "-v", *paths],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    lib.log(
+        f"shred PID={proc.pid} — 이 PID 를 GuardFS 로그에서 추적하세요"
+        f"(Stage2 재평가 대상). HIGH 격상/ SIGSTOP 여부와 dyn 점수를 확인."
+    )
+    try:
+        proc.wait(timeout=timeout)
+        lib.log("shred 프로세스 정상 종료(차단 없었거나 차단이 늦게 걸림)")
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        lib.log("shred 가 timeout 까지 끝나지 않음(SIGSTOP 차단 가능성) → 정리")
+    return proc.pid
+
+
+def _run_shred_scenario(workdir, paths, names, size, args) -> int:
+    lib.log(
+        f"준비 완료. 쓰기 엔진: {SHRED} "
+        f"(신뢰 지속 단일 PID, -n {args.shred_passes}). "
+        f"신뢰라 Stage1 통과 → 지속 PID라 Stage2 dyn 재평가가 유일 탐지 주체."
+    )
+    rc = 0
+    try:
+        _run_shred_engine(paths, args.shred_passes, args.duration)
+        preserved = _count_preserved(paths, size)
+        lost = len(paths) - preserved
+        lib.log(
+            f"결과: 보존 {preserved}개 / 덮어씀(손실) {lost}개 "
+            f"— 'HIGH 격상 전 손실 개수'가 탐지≠완전차단의 척도."
+        )
+    except OSError as e:
+        lib.log(f"파일 연산 실패: {e} → GuardFS 상태/이벤트 로그로 확인")
+        rc = 3
+    finally:
+        lib.cleanup_workdir(workdir, args.keep)
+    return rc
+
+
 def main() -> int:
     args = parse_args()
 
@@ -161,6 +246,13 @@ def main() -> int:
         lib.log(f"준비 확인 실패. 공격 미시작; 진단용 폴더 보존: {workdir}")
         return 1
 
+    paths = [os.path.join(workdir, n) for n in names]
+
+    # shred 엔진: 신뢰 지속 단일 PID 가 다중 파일을 덮어써 Stage2 재평가를 유도.
+    # python 의 read/encrypt/rename 루프를 타지 않고 shred 한 프로세스에 위임한다.
+    if args.engine == "shred":
+        return _run_shred_scenario(workdir, paths, names, size, args)
+
     encrypt = _aes_encrypt_openssl if args.engine == "openssl" else _aes_encrypt_inprocess
     engine_desc = (
         f"{OPENSSL} (신뢰 시스템 바이너리, 파일당 one-shot PID)"
@@ -173,7 +265,6 @@ def main() -> int:
         f"GuardFS 로그/대시보드를 확인하세요."
     )
 
-    paths = [os.path.join(workdir, n) for n in names]
     start = time.time()
     total = 0
     rc = 0
