@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import stat
 import sys
 import time
@@ -22,7 +23,12 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scenarios.common import emit_process, emit_progress, register_process_and_wait
+from scenarios.common import (
+    emit_process,
+    emit_progress,
+    get_runtime_paths,
+    register_process_and_wait,
+)
 
 CONTENT = b"hello holdfs\nnormal document editing test\n"
 
@@ -101,6 +107,7 @@ def run(
     total_timeout=120.0,
     on_progress=None,
     on_process=None,
+    work_dir_name=None,
 ):
     """파일 생명주기를 검증하고 진행·프로세스 등록 콜백을 호출한다.
 
@@ -116,8 +123,19 @@ def run(
     deadline = time.monotonic() + total_timeout
     mount = Path(os.path.abspath(Path(mount).expanduser()))
     underlay = Path(underlay).expanduser().resolve()
-    run_id = "s01_" + uuid.uuid4().hex
-    folder = mount / run_id
+    # 직접 실행은 기존처럼 생성하고, 웹 실행은 runner가 전달한 이름을 사용한다.
+    if work_dir_name is None:
+        work_dir_name = "s01_" + uuid.uuid4().hex
+
+    # 임의 경로나 상위 디렉터리 접근을 허용하지 않는다.
+    if (
+        not isinstance(work_dir_name, str)
+        or re.fullmatch(r"s01_[0-9a-f]{32}", work_dir_name) is None
+    ):
+        raise ValueError("작업 폴더 이름은 s01_ 뒤에 소문자 16진수 32자리여야 합니다.")
+
+    run_id = work_dir_name
+    folder = mount / work_dir_name
     original = folder / "test.txt"
     renamed = folder / "test_renamed.txt"
     child = folder / "test_dir"
@@ -308,9 +326,23 @@ def run(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    runtime = Path.home() / "guardfs_runtime"
-    parser.add_argument("--mount", type=Path, default=runtime / "mount")
-    parser.add_argument("--underlay", type=Path, default=runtime / "underlay")
+    default_mount, default_underlay = get_runtime_paths()
+
+    parser.add_argument(
+        "--mount",
+        type=Path,
+        default=default_mount,
+    )
+    parser.add_argument(
+        "--underlay",
+        type=Path,
+        default=default_underlay,
+    )
+    parser.add_argument(
+        "--work-dir-name",
+        default=None,
+        help="runner가 지정한 실행별 작업 폴더 이름",
+    )
     parser.add_argument("--holdfs-pid", "--guardfs-pid", dest="holdfs_pid", type=int)
     parser.add_argument("--propagation-timeout", type=float, default=30.0)
     parser.add_argument("--total-timeout", type=float, default=120.0)
@@ -346,6 +378,7 @@ def main():
             total_timeout=args.total_timeout,
             on_progress=progress,
             on_process=register_process,
+            work_dir_name=args.work_dir_name,
         )
 
     except ValueError as error:

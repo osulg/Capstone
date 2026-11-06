@@ -66,6 +66,36 @@ class RunProcess(BaseModel):
     registered_at: datetime
 
 
+class RunWorkspace(BaseModel):
+    """실행별 작업 예정 경로. 실제 생성 여부를 의미하지 않는다."""
+
+    name: str
+    mount_path: str
+    underlay_path: str
+
+
+class RunEventCollection(BaseModel):
+    """관찰 시점까지 수집한 이벤트 후보와 수집 문제.
+
+    전체 로그의 도착이나 HoldFS 후속 처리 완료를 보장하지 않는다.
+    """
+
+    observed_at: datetime | None = None
+
+    # JSONL 이벤트 발생 시각의 조회 상한.
+    # 정책 로그는 checkpoint 이후 파일에 기록된 구간을 사용한다.
+    filesystem_until_ns: int | None = None
+
+    # 실행 전에 checkpoint를 확보한 로그 종류.
+    captured_sources: list[str] = Field(default_factory=list)
+
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    pid_only_events: list[dict[str, Any]] = Field(default_factory=list)
+
+    issues: list[str] = Field(default_factory=list)
+    pending_record: bool = False
+
+
 class RunResponse(BaseModel):
     """진행 상태와 최종 결과 조회"""
 
@@ -99,3 +129,5 @@ class RunResponse(BaseModel):
     ] = "not_checked"
 
     error: str | None = None
+    workspace: RunWorkspace | None = None
+    event_collection: RunEventCollection | None = None

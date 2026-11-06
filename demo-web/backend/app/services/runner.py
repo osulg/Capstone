@@ -5,25 +5,38 @@ backend/app/services/runner.py
 """
 
 import asyncio
-from asyncio import taskgroups
 import json
 import logging
 import math
 import os
 import signal
 import sys
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from guardfs.common.paths import PROJECT_ROOT as HOLDFS_PROJECT_ROOT
+from guardfs.common.paths import (
+    FILESECURITY_LOG_PATH,
+    PROJECT_ROOT as HOLDFS_PROJECT_ROOT,
+    get_event_log_path,
+)
 from scenarios.catalog import Scenario, get_scenario
+from scenarios.common import get_runtime_paths
 
 from ..schemas.run import (
     RunCreatedResponse,
+    RunEventCollection,
     RunProcess,
     RunResponse,
     RunStepResponse,
+    RunWorkspace,
+)
+from .holdfs_events import (
+    EventScope,
+    LogCheckpoint,
+    capture_log,
+    collect_events,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,12 +61,23 @@ class ScenarioRunner:
         self,
         timeout_seconds: float = 150,
         cleanup_seconds: float = 5,
+        *,
+        mount_path: str | Path | None = None,
+        underlay_path: str | Path | None = None,
     ):
         if not all(
             math.isfinite(value) and value > 0
             for value in (timeout_seconds, cleanup_seconds)
         ):
             raise ValueError("실행 및 종료 대기 시간은 양수여야 합니다.")
+
+        default_mount, default_underlay = get_runtime_paths()
+        mount = default_mount if mount_path is None else Path(mount_path)
+        underlay = default_underlay if underlay_path is None else Path(underlay_path)
+
+        # S01과 동일하게 mount 경로는 유지하고 underlay는 실제 경로로 정규화한다.
+        self.mount_path = Path(os.path.abspath(mount.expanduser()))
+        self.underlay_path = underlay.expanduser().resolve()
 
         self.timeout_seconds = timeout_seconds
         self.cleanup_seconds = cleanup_seconds
@@ -97,11 +121,20 @@ class ScenarioRunner:
         loop = asyncio.get_running_loop()
         run_id = uuid.uuid4().hex
 
+        # 최종 결과가 없는 중단 실행도 로그 수집 경로를 알 수 있도록 미리 기록한다.
+        work_dir_name = f"s01_{run_id}"
+        workspace = RunWorkspace(
+            name=work_dir_name,
+            mount_path=str(self.mount_path / work_dir_name),
+            underlay_path=str(self.underlay_path / work_dir_name),
+        )
+
         record = RunResponse(
             run_id=run_id,
             scenario_id=scenario.id,
             status="queued",
             created_at=now(),
+            workspace=workspace,
             steps=[
                 RunStepResponse(id=step.id, name=step.name) for step in scenario.steps
             ],
@@ -121,11 +154,24 @@ class ScenarioRunner:
         )
 
     def get(self, run_id: str) -> RunResponse:
-        """조회자가 내부 실행 기록을 변경하지 못하도록 복사한다."""
+        """최종 정리와 이벤트 수집이 끝난 뒤 완료 상태를 공개한다."""
         if run_id not in self._runs:
             raise KeyError(run_id)
 
-        return self._runs[run_id].model_copy(deep=True)
+        record = self._runs[run_id].model_copy(deep=True)
+        if record.finished_at is None and record.status in {
+            "passed",
+            "failed",
+            "timed_out",
+            "cancelled",
+        }:
+            cancel_event = self._cancel_events.get(run_id)
+            record.status = (
+                "cancelling"
+                if cancel_event is not None and cancel_event.is_set()
+                else "running"
+            )
+        return record
 
     def cancel(self, run_id: str) -> RunResponse:
         """테스트 프로세스 그룹의 종료를 요청한다.
@@ -553,6 +599,105 @@ class ScenarioRunner:
 
         return results[0]
 
+    def _capture_event_logs(
+        self,
+    ) -> tuple[list[LogCheckpoint], list[str]]:
+        """실행 전 로그 위치를 기록한다. 각 로그는 독립적으로 확인한다."""
+
+        checkpoints = []
+        issues = []
+
+        sources = (
+            (
+                "filesystem",
+                get_event_log_path(str(self.underlay_path)),
+            ),
+            (
+                "policy",
+                FILESECURITY_LOG_PATH,
+            ),
+        )
+
+        for source, path in sources:
+            try:
+                checkpoints.append(capture_log(path, source))
+            except (OSError, ValueError) as error:
+                # 하나를 읽지 못해도 다른 로그의 수집은 시도한다.
+                issues.append(f"{source} 로그 시작 위치 확인 실패: {error}")
+
+        return checkpoints, issues
+
+    def _collect_run_events(
+        self,
+        record: RunResponse,
+        checkpoints: list[LogCheckpoint],
+        capture_issues: list[str],
+        started_at_ns: int | None,
+    ) -> RunEventCollection:
+        """등록된 PID와 고유 작업 경로로 이벤트 후보를 수집한다."""
+
+        observed_until_ns = time.time_ns()
+
+        report = RunEventCollection(
+            observed_at=now(),
+            filesystem_until_ns=observed_until_ns,
+            captured_sources=[checkpoint.source for checkpoint in checkpoints],
+            issues=list(capture_issues),
+        )
+
+        if started_at_ns is None:
+            report.issues.append(
+                "프로세스 실행 전 종료되어 이벤트 수집을 시작하지 않았습니다."
+            )
+            return report
+
+        if record.workspace is None:
+            report.issues.append("이벤트를 연결할 작업 경로가 없습니다.")
+            return report
+
+        # 검증·등록된 작업 PID만 사용한다.
+        # 관리자 PID를 무조건 작업 PID로 간주하지 않는다.
+        pids = frozenset(process.pid for process in record.processes)
+
+        if not pids:
+            report.issues.append("등록된 작업 프로세스가 없어 수집하지 않았습니다.")
+            return report
+
+        scope = EventScope(
+            pids=pids,
+            roots=(
+                record.workspace.mount_path,
+                record.workspace.underlay_path,
+            ),
+            started_at_ns=started_at_ns,
+            observed_until_ns=observed_until_ns,
+        )
+
+        for checkpoint in checkpoints:
+            try:
+                collected = collect_events(checkpoint, scope)
+            except Exception as error:
+                # 로그별 오류를 보고하고 나머지 로그 수집은 계속한다.
+                # 수집 모듈의 예상하지 못한 예외도 파일 작업 결과와 분리한다.
+                logger.exception(
+                    "%s 이벤트 수집 실패: %s",
+                    checkpoint.source,
+                    record.run_id,
+                )
+                report.issues.append(
+                    f"{checkpoint.source} 이벤트 수집 중 예외 발생: "
+                    f"{type(error).__name__}: {error}"
+                )
+                continue
+
+            report.events.extend(collected.events)
+            report.pid_only_events.extend(collected.pid_only_events)
+            report.issues.extend(collected.issues)
+
+            report.pending_record = report.pending_record or collected.pending_record
+
+        return report
+
     async def _execute(
         self,
         record: RunResponse,
@@ -562,6 +707,9 @@ class ScenarioRunner:
         communication = None
         stop_wait = None
         cancel_wait = None
+        checkpoints: list[LogCheckpoint] = []
+        capture_issues: list[str] = []
+        event_started_at_ns: int | None = None
 
         cancel_event = self._cancel_events[record.run_id]
         cancelled_by_user = False
@@ -590,10 +738,46 @@ class ScenarioRunner:
                 "-m",
                 scenario.module,
             ]
-            # API 실행에서만 PID 등록 승인을 기다린다.
+            # 기록한 작업 경로를 S01에 전달하고 API 실행에서 등록 승인을 기다린다.
             if scenario.module == "scenarios.s01_normal":
-                command.append("--wait-registration-ack")
+                if record.workspace is None:
+                    raise ValueError("실행 작업 경로가 설정되지 않았습니다.")
 
+                command.extend(
+                    [
+                        "--wait-registration-ack",
+                        "--mount",
+                        str(self.mount_path),
+                        "--underlay",
+                        str(self.underlay_path),
+                        "--work-dir-name",
+                        record.workspace.name,
+                    ]
+                )
+
+            # 파일 읽기는 스레드에서 수행하고 수집 실패는 실행 결과와 분리한다.
+            try:
+                checkpoints, capture_issues = await asyncio.to_thread(
+                    self._capture_event_logs
+                )
+            except Exception as error:
+                logger.exception("로그 시작 위치 확인 실패: %s", record.run_id)
+                capture_issues.append(
+                    f"로그 시작 위치 확인 중 예외 발생: {type(error).__name__}: {error}"
+                )
+
+            # 로그 확인을 기다리는 동안 들어온 종료 요청도 생성 전에 반영한다.
+            if self._stop.is_set():
+                record.status = "failed"
+                record.error = "서버 종료로 실행을 취소했습니다."
+                return
+            if cancel_event.is_set():
+                cancelled_by_user = True
+                record.status = "cancelling"
+                record.error = "사용자가 테스트 프로세스 종료를 요청했습니다."
+                return
+
+            event_started_at_ns = time.time_ns()
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=str(PROJECT_ROOT),
@@ -694,9 +878,7 @@ class ScenarioRunner:
         finally:
             try:
                 waiters = [
-                    task
-                    for task in (stop_wait, cancel_wait)
-                    if task is not None
+                    task for task in (stop_wait, cancel_wait) if task is not None
                 ]
 
                 for task in waiters:
@@ -807,7 +989,27 @@ class ScenarioRunner:
                     elif step.status == "pending":
                         step.status = "skipped"
 
-                record.finished_at = now()
+                try:
+                    # 현재까지의 관찰 결과다. HoldFS 후속 처리 완료를 뜻하지 않는다.
+                    record.event_collection = await asyncio.to_thread(
+                        self._collect_run_events,
+                        record.model_copy(deep=True),
+                        checkpoints,
+                        capture_issues,
+                        event_started_at_ns,
+                    )
+                except Exception as error:
+                    logger.exception("실행 이벤트 수집 실패: %s", record.run_id)
+                    record.event_collection = RunEventCollection(
+                        observed_at=now(),
+                        captured_sources=[item.source for item in checkpoints],
+                        issues=[
+                            *capture_issues,
+                            f"이벤트 수집 중 예외 발생: {type(error).__name__}: {error}",
+                        ],
+                    )
+                finally:
+                    record.finished_at = now()
 
     def _cleanup_done(self, task):
         self._pending_cleanup.discard(task)
