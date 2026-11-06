@@ -859,7 +859,11 @@ summary:focus-visible {
 .intro-slide {
   width: 100%;
   max-width: 960px;
-  animation: intro-appear 350ms ease-out both;
+}
+
+/* 다음 내용을 바로 읽을 수 있도록 짧고 가벼운 전환만 적용한다. */
+.intro-copy {
+  animation: intro-appear 140ms ease-out both;
 }
 
 .intro-counter {
@@ -985,13 +989,11 @@ summary:focus-visible {
 
 @keyframes intro-appear {
   from {
-    opacity: 0;
-    transform: translateY(10px);
+    opacity: 0.7;
   }
 
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -1026,7 +1028,7 @@ summary:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .intro-slide {
+  .intro-copy {
     animation: none;
   }
 }

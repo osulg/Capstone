@@ -39,12 +39,13 @@ export default function Intro({ onComplete }: IntroProps) {
       return;
     }
 
-    setIndex((current) => current + 1);
+    // 빠르게 입력해도 마지막 장면의 범위를 벗어나지 않도록 한다.
+    setIndex((current) => Math.min(current + 1, SLIDES.length - 1));
   }, [index, onComplete]);
 
   // 장면 전환 후 제목으로 초점을 옮긴다.
   useEffect(() => {
-    headingRef.current?.focus();
+    headingRef.current?.focus({ preventScroll: true });
   }, [index]);
 
   useEffect(() => {
@@ -105,21 +106,24 @@ export default function Intro({ onComplete }: IntroProps) {
       </header>
 
       <section className="intro-content" aria-labelledby="intro-title">
-        <div className="intro-slide" key={index}>
-          <p className="intro-counter">
-            {String(index + 1).padStart(2, "0")} /{" "}
-            {String(SLIDES.length).padStart(2, "0")}
-          </p>
+        <div className="intro-slide">
+          {/* 내용만 짧게 전환하고 다음 버튼은 다시 생성하지 않는다. */}
+          <div className="intro-copy" key={index}>
+            <p className="intro-counter">
+              {String(index + 1).padStart(2, "0")} /{" "}
+              {String(SLIDES.length).padStart(2, "0")}
+            </p>
 
-          <p className="intro-label">{slide.label}</p>
+            <p className="intro-label">{slide.label}</p>
 
-          <h1 id="intro-title" ref={headingRef} tabIndex={-1}>
-            {slide.title.map((line) => (
-              <span key={line}>{line}</span>
-            ))}
-          </h1>
+            <h1 id="intro-title" ref={headingRef} tabIndex={-1}>
+              {slide.title.map((line) => (
+                <span key={line}>{line}</span>
+              ))}
+            </h1>
 
-          <p className="intro-description">{slide.description}</p>
+            <p className="intro-description">{slide.description}</p>
+          </div>
 
           <button
             type="button"
