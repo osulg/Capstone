@@ -26,6 +26,7 @@ try:
         local_analysis,
     )
     from dashboard import files as file_scan
+    from dashboard import system as sys_status
 except ImportError:  # python dashboard/server.py 로 직접 실행한 경우
     from rag import (
         STAGE2_DYN_ONLY_HIGH_THRESHOLD,
@@ -35,6 +36,13 @@ except ImportError:  # python dashboard/server.py 로 직접 실행한 경우
         local_analysis,
     )
     import files as file_scan
+    import system as sys_status
+
+# MEDIUM 관찰 시간: 보류된 쓰기가 원본에 반영되기까지 (파일 현황 › 보류 중인 쓰기의 남은 시간)
+try:
+    from guardfs.common.config import STAGE2_MEDIUM_TIMEOUT_SEC
+except ImportError:
+    STAGE2_MEDIUM_TIMEOUT_SEC = 10.0
 
 try:
     from openai import OpenAI
@@ -220,7 +228,16 @@ def file_preview():
 @app.route("/api/health")
 def health():
     return jsonify({"ok": True, "llm": _llm_client is not None,
-                    "model": OPENAI_MODEL if _llm_client else "local-rules"})
+                    "model": OPENAI_MODEL if _llm_client else "local-rules",
+                    "medium_timeout_sec": STAGE2_MEDIUM_TIMEOUT_SEC})
+
+
+@app.route("/api/system")
+def system_status():
+    data = sys_status.status()
+    data["llm"] = {"connected": _llm_client is not None,
+                   "model": OPENAI_MODEL if _llm_client else "local-rules"}
+    return jsonify(data)
 
 
 @app.route("/api/chat", methods=["POST"])

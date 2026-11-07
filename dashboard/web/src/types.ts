@@ -29,6 +29,7 @@ export interface Health {
   ok: boolean;
   llm: boolean;
   model: string;
+  medium_timeout_sec?: number;   // MEDIUM 관찰 시간 (보류 쓰기 반영까지)
 }
 
 export interface ChatTurn {
@@ -77,3 +78,11 @@ export type Preview =
   | { kind: "text"; path: string; content: string }
   | { kind: "hex"; path: string; content: string; bytes: number }
   | { kind: "error" };
+
+export interface SystemStatus {
+  holdfs: { running: boolean; pid: number | null };
+  mount: { mounted: boolean; path: string };
+  agent: { running: boolean; pid: number | null };
+  llm: { connected: boolean; model: string };
+  protected: boolean;
+}

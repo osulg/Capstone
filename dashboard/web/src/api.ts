@@ -1,5 +1,5 @@
 import type {
-  ChatResponse, ChatTurn, EventsResponse, FilesResponse, FolderKey, Health, Preview,
+  ChatResponse, ChatTurn, EventsResponse, FilesResponse, FolderKey, Health, Preview, SystemStatus,
 } from "./types";
 
 async function getJson<T>(url: string): Promise<T> {
@@ -13,6 +13,8 @@ export const fetchEvents = (sinceId: number, gen: number) =>
 export const fetchHealth = () => getJson<Health>("/api/health");
 
 export const fetchFiles = () => getJson<FilesResponse>("/api/files");
+
+export const fetchSystem = () => getJson<SystemStatus>("/api/system");
 
 export async function fetchPreview(key: FolderKey, path: string): Promise<Preview> {
   try {
