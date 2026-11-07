@@ -8,6 +8,7 @@
    6) 시스템 현황
    7) AI 분석관
    빨강(--high)은 HIGH·차단·암호화 의심 같은 위험 표시에만 쓴다.
+   초록·노랑은 PID 상세 진행 흐름과 최종 조치에서만 쓴다.
    ============================================================ */
 
 /* ── 1) 기본 틀 ── */
@@ -21,6 +22,11 @@
   --muted: #555;
   --sel: #cce8ff;         /* 표에서 선택된 행 */
   --high: #c00000;
+  /* PID 상세 진행 흐름 전용 (점 / 글씨) */
+  --low: #2e9e44;
+  --low-text: #1d7a31;
+  --mid: #f2c200;
+  --mid-text: #8a6a00;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: #f8f8f8; color: var(--text);
@@ -137,9 +143,14 @@ label.field { display: inline-flex; align-items: center; gap: 6px; }
   align-items: baseline; padding: 6px 0 6px 18px; border-left: 2px solid #000; }
 .pid-flow li::before { content: ""; position: absolute; left: -1px; top: 11px; width: 12px; height: 12px;
   transform: translateX(-50%); border-radius: 50%; background: #fff; border: 2px solid #000; }
+/* 점 색: 초록 LOW / 노랑 MEDIUM / 빨강 HIGH / 흰색 판정 전. 굵은 글씨도 같은 계열 (노랑·초록 글씨는 읽히게 진하게) */
+.pid-flow li.lv-LOW::before { background: var(--low); border-color: var(--low); }
+.pid-flow li.lv-MEDIUM::before { background: var(--mid); border-color: var(--mid-text); }
 .pid-flow li.lv-HIGH::before { background: var(--high); border-color: var(--high); }
-.pid-flow li.lv-MEDIUM::before { background: #000; }
-.pid-flow li.lv-HIGH b { color: var(--high); }
+.pid-flow li.lv-LOW b, .final.lv-LOW { color: var(--low-text); }
+.pid-flow li.lv-MEDIUM b, .final.lv-MEDIUM { color: var(--mid-text); }
+.pid-flow li.lv-HIGH b, .final.lv-HIGH { color: var(--high); }
+.final { font-weight: 700; }
 .pid-flow .why, .list td.why { color: var(--muted); white-space: normal; overflow-wrap: anywhere; }
 
 /* ── 5) 파일 현황 ── */

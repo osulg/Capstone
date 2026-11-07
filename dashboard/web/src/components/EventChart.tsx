@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { Bucket } from "../eventStats";
+import { highEscalateText, useThresholds } from "../reasonText";
 
 // 시간별 이벤트 수 꺾은선 그래프 (SVG, 외부 라이브러리 없음)
 // 그래프에는 선과 HIGH 점만 그리고, 설명은 빨간 점에 마우스를 올렸을 때만 띄운다.
@@ -10,6 +11,7 @@ const FONT = "inherit";
 
 export default function EventChart({ data }: { data: Bucket[] }) {
   const [hover, setHover] = useState<number | null>(null);
+  const th = useThresholds();
 
   if (data.length === 0) {
     return <div className="chart"><div className="empty" style={{ height: H - 20, border: 0 }}>표시할 이벤트가 없습니다.</div></div>;
@@ -71,7 +73,7 @@ export default function EventChart({ data }: { data: Bucket[] }) {
           {tip.highs.map((h) => (
             <div key={h.pid} className="chart-tip-row">
               <b>HIGH</b> {h.process} (PID {h.pid})
-              <span>{h.reason}</span>
+              <span>{h.action === "ESCALATE" ? highEscalateText(h.reason, th) : h.reason}</span>
             </div>
           ))}
         </div>

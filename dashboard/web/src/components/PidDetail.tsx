@@ -1,4 +1,7 @@
-import { LEVEL_RANK, shortPath } from "../eventStats";
+import { eventDate, LEVEL_RANK, shortPath } from "../eventStats";
+import {
+  causeText, highEscalateText, isHighCause, mediumEscalateText, useThresholds, type Thresholds,
+} from "../reasonText";
 import type { EdrEvent } from "../types";
 
 interface Props {
@@ -11,50 +14,89 @@ interface Props {
 
 const hms = (t: string) => t.slice(11);
 
-// 진행 흐름에 올릴 이벤트와 그 이름
-function stepLabel(e: EdrEvent): string | null {
-  if (e.action === "ESCALATE") return `${e.level} 격상`;
-  if (e.action === "RETURN") return "정상 복귀 (LOW)";
-  if (e.action === "SIGSTOP") return "프로세스 정지 (SIGSTOP)";
-  if (e.action === "DETECT") return "Stage1 탐지";
-  if (e.result === "BUFFER_DROPPED") return "보류 쓰기 폐기 · 원본 보존";
-  if (e.action === "COMMIT" && e.result === "DATA_APPLIED") return "보류 쓰기 반영 (정상 판정)";
-  if (e.action === "COMMIT" && (e.result === "APPLY_FAILED" || e.result === "IO_FAILED")) return "보류 쓰기 반영 실패";
-  if (e.result === "BLOCKED" && /honeypot/i.test(e.reason || "")) return "허니팟 접근 차단";
-  return null;
+// 진행 흐름의 점·글씨 색: 초록 LOW / 노랑 MEDIUM / 빨강 HIGH / 흰색 판정 전(SUSPICIOUS)
+type StepLevel = "LOW" | "MEDIUM" | "HIGH" | "PENDING";
+interface Step { e: EdrEvent; label: string; level: StepLevel; detail: string }
+
+const levelOf = (e: EdrEvent): StepLevel =>
+  e.level === "HIGH" || e.level === "MEDIUM" || e.level === "LOW" ? e.level : "PENDING";
+
+// 같은 초에 찍힌 이벤트는 실제로 일어나는 순서로 놓는다.
+// (로그 파일과 실행 출력에서 따로 오기 때문에 받은 순서가 뒤바뀔 수 있다)
+function tieRank(e: EdrEvent): number {
+  if (isHighCause(e)) return 0;                                  // 격상 원인
+  if (e.action === "ESCALATE" || e.action === "RETURN") return 1; // 격상 / 정상 복귀
+  if (e.action === "DROP" || e.action === "COMMIT") return 2;     // 보류 쓰기 폐기 / 반영
+  if (e.action === "SIGSTOP") return 3;                           // 정지
+  if (e.result === "BLOCKED") return 4;                           // 정지 이후 차단
+  return 2;
+}
+
+// 진행 흐름에 넣지 않는 첫 이벤트를 부를 이름
+function firstName(e: EdrEvent): string {
+  if (e.action === "MKDIR") return "폴더 생성";
+  if (e.result === "BUFFERED" && e.action === "SETATTR") return "권한 변경 보류";
+  if (e.result === "BUFFERED") return "쓰기 보류";
+  if (e.result === "STAGED") return "삭제 보관";
+  return "감시 시작";
+}
+
+function buildSteps(rows: EdrEvent[], th: Thresholds): Step[] {
+  const steps: Step[] = [];
+  rows.forEach((e, i) => {
+    const step = (label: string, level: StepLevel, detail = "") => steps.push({ e, label, level, detail });
+    if (e.action === "ESCALATE" && e.level === "HIGH") {
+      // 바로 앞(2초 이내)에 격상 원인 기록이 있으면 그걸 보여준다. 없으면 HIGH 사유 코드를 풀어 쓴다.
+      const t = eventDate(e).getTime();
+      const cause = rows.slice(0, i).reverse()
+        .find((c) => isHighCause(c) && t - eventDate(c).getTime() <= 2000);
+      step("HIGH 격상", "HIGH", cause ? causeText(cause) : highEscalateText(e.reason, th));
+    } else if (e.action === "ESCALATE") step(`${e.level} 격상`, levelOf(e), mediumEscalateText(e.reason));
+    else if (e.action === "RETURN") step("정상 복귀 (LOW)", "LOW");
+    else if (e.action === "SIGSTOP") step("프로세스 정지 (SIGSTOP)", "HIGH");
+    else if (e.action === "DETECT") step("Stage1 탐지", "PENDING", "허니팟 접근");
+    else if (e.result === "BUFFER_DROPPED") {
+      const n = Number((e.reason || "").match(/버퍼 (\d+)개/)?.[1] ?? 1);
+      if (n > 0) step("보류 쓰기 폐기 · 원본 보존", "HIGH", `보류 쓰기 ${n}건 폐기`);   // 0개면 버린 게 없으니 뺀다
+    } else if (e.action === "COMMIT" && e.result === "DATA_APPLIED") step("보류 쓰기 반영 (정상 판정)", "LOW");
+    else if (e.action === "COMMIT" && (e.result === "APPLY_FAILED" || e.result === "IO_FAILED")) {
+      step("보류 쓰기 반영 실패", "MEDIUM", (e.reason || "").split(";")[0]);
+    } else if (e.result === "BLOCKED" && /honeypot/i.test(e.reason || "")) {
+      step("허니팟 접근 차단", levelOf(e), e.target ? shortPath(e.target) : "");
+    }
+  });
+  if (rows.length && !steps.some((s) => s.e === rows[0])) {
+    steps.unshift({ e: rows[0], label: firstName(rows[0]), level: levelOf(rows[0]), detail: "" });
+  }
+  return steps;
 }
 
 // 보류 쓰기를 원본에 반영한 결과 (HoldFS medium.py의 COMMIT 로그)
-const APPLIED = new Set(["FILE_APPLIED", "DATA_APPLIED"]);
-const APPLY_FAILED = new Set(["APPLY_FAILED", "IO_FAILED", "NOT_COMPLETED"]);
+const COMMITTED = new Set(["FILE_APPLIED", "DATA_APPLIED", "APPLY_FAILED", "IO_FAILED", "NOT_COMPLETED"]);
 
-// 마지막으로 어떤 조치가 됐는지. 보류 쓰기가 반영됐는지 / 버려졌는지도 함께 보여준다.
-function finalAction(rows: EdrEvent[]): string {
-  const dropped = rows.some((e) => e.result === "BUFFER_DROPPED");
-  const dropNote = dropped ? " · 보류 쓰기 폐기" : "";
-  if (rows.some((e) => e.result === "SUSPENDED")) return "차단·정지됨" + dropNote;
-  if (rows.some((e) => e.result === "BLOCKED")) return "작업 차단됨" + dropNote;
-  if (dropped) return "보류 쓰기 폐기 · 원본 보존";
-
-  // 마지막 보류 쓰기 이후에 반영 기록이 있는지 본다
+// 최종 조치: 정지 / 정상 복귀 / 보류 / 관찰
+function finalAction(rows: EdrEvent[]): { text: string; level: StepLevel } {
+  if (rows.some((e) => e.level === "HIGH")) return { text: "정지", level: "HIGH" };
+  // 마지막 보류 쓰기 이후에 반영 기록이 있거나, 마지막이 정상 복귀면 정상 복귀
   const lastBuf = rows.map((e) => e.result === "BUFFERED").lastIndexOf(true);
-  const after = rows.slice(lastBuf + 1);
-  if (lastBuf >= 0 && after.some((e) => e.action === "COMMIT" && APPLY_FAILED.has(e.result))) return "정상 판정 · 반영 실패";
-  if (lastBuf >= 0 && after.some((e) => e.action === "COMMIT" && APPLIED.has(e.result))) return "정상 판정 · 쓰기 반영됨";
-
-  const last = rows[rows.length - 1];
-  if (last?.action === "RETURN") return "정상 복귀";
-  if (rows.some((e) => e.level === "MEDIUM")) return "감시 중 (쓰기 보류)";
-  return "관찰";
+  const committed = lastBuf >= 0 && rows.slice(lastBuf + 1).some((e) => e.action === "COMMIT" && COMMITTED.has(e.result));
+  const lastState = [...rows].reverse().find((e) => e.action === "RETURN" || e.action === "ESCALATE");
+  if (committed || (lastState?.action === "RETURN" && lastBuf < rows.indexOf(lastState))) {
+    return { text: "정상 복귀", level: "LOW" };
+  }
+  if (rows.some((e) => e.level === "MEDIUM")) return { text: "보류", level: "MEDIUM" };
+  return { text: "관찰", level: "PENDING" };
 }
 
 export default function PidDetail({ pid, events, onBack, onFile, onAskAi }: Props) {
-  const rows = events.filter((e) => e.pid === pid).sort((a, b) => a.time.localeCompare(b.time));
+  const th = useThresholds();
+  const rows = events.filter((e) => e.pid === pid)
+    .sort((a, b) => a.time.localeCompare(b.time) || tieRank(a) - tieRank(b));
   const process = [...rows].reverse().find((e) => e.process && e.process !== "-")?.process ?? "-";
   const level = rows.reduce((m, e) => ((LEVEL_RANK[e.level] ?? 0) > (LEVEL_RANK[m] ?? 0) ? e.level : m), "LOW");
   const files = new Set(rows.filter((e) => e.target).map((e) => e.target)).size;
-  const steps = rows.map((e) => ({ e, label: stepLabel(e) })).filter((s) => s.label);
-  if (rows.length && !steps.some((s) => s.e === rows[0])) steps.unshift({ e: rows[0], label: "첫 이벤트" });
+  const steps = buildSteps(rows, th);
+  const final = finalAction(rows);
 
   return (
     <>
@@ -76,7 +118,7 @@ export default function PidDetail({ pid, events, onBack, onFile, onAskAi }: Prop
               <tr>
                 <td>{process}</td>
                 <td className={level === "HIGH" ? "high" : ""}>{level}</td>
-                <td className={level === "HIGH" ? "high" : ""}>{finalAction(rows)}</td>
+                <td className={`final lv-${final.level}`}>{final.text}</td>
                 <td className="mono">{hms(rows[0].time)}</td>
                 <td className="mono">{hms(rows[rows.length - 1].time)}</td>
                 <td className="num">{rows.length}건</td>
@@ -91,11 +133,11 @@ export default function PidDetail({ pid, events, onBack, onFile, onAskAi }: Prop
         <fieldset>
           <legend>진행 흐름</legend>
           <ol className="pid-flow">
-            {steps.map(({ e, label }) => (
-              <li key={e.id} className={`lv-${e.level}`}>
+            {steps.map(({ e, label, level: lv, detail }) => (
+              <li key={`${e.id}-${label}`} className={`lv-${lv}`}>
                 <span className="mono">{hms(e.time)}</span>
                 <b>{label}</b>
-                <span className="why">{e.reason}</span>
+                <span className="why">{detail}</span>
               </li>
             ))}
           </ol>

@@ -229,7 +229,9 @@ def file_preview():
 def health():
     return jsonify({"ok": True, "llm": _llm_client is not None,
                     "model": OPENAI_MODEL if _llm_client else "local-rules",
-                    "medium_timeout_sec": STAGE2_MEDIUM_TIMEOUT_SEC})
+                    "medium_timeout_sec": STAGE2_MEDIUM_TIMEOUT_SEC,
+                    "high_threshold": STAGE2_HIGH_THRESHOLD,
+                    "dyn_only_threshold": STAGE2_DYN_ONLY_HIGH_THRESHOLD})
 
 
 @app.route("/api/system")
