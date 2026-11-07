@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 
-import { fetchSystem } from "../api";
-import { hhmmss } from "../fileStats";
+import { fetchHealth, fetchSystem } from "../api";
+import { hhmmss, pendingWrites } from "../fileStats";
 import { procSummary } from "../procStats";
 import type { EdrEvent, SystemStatus } from "../types";
 import FileDetail from "./FileDetail";
 import PidDetail from "./PidDetail";
 
 const SYSTEM_POLL_MS = 2000;
+const DEFAULT_MEDIUM_TIMEOUT_SEC = 10;   // 서버가 config 값을 못 줄 때만 쓴다
 
 interface Props {
   events: EdrEvent[];
@@ -30,6 +31,18 @@ export default function SystemView({ events, onAskAi }: Props) {
   const [updated, setUpdated] = useState("불러오는 중…");
   const [now, setNow] = useState(() => new Date());
   const [detail, setDetail] = useState<Detail>(null);
+  const [timeoutSec, setTimeoutSec] = useState(DEFAULT_MEDIUM_TIMEOUT_SEC);
+
+  // MEDIUM 관찰 시간 (config.STAGE2_MEDIUM_TIMEOUT_SEC): 보류 쓰기가 반영되기까지 남은 시간 계산용
+  useEffect(() => {
+    fetchHealth().then((h) => { if (h.medium_timeout_sec) setTimeoutSec(h.medium_timeout_sec); }).catch(() => {});
+  }, []);
+
+  // 보류 쓰기 남은 시간 표시를 위해 1초마다 다시 그린다
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -38,7 +51,6 @@ export default function SystemView({ events, onAskAi }: Props) {
         const s = await fetchSystem();
         if (!alive) return;
         setSys(s);
-        setNow(new Date());
         setUpdated(hhmmss(new Date()) + " 갱신");
       } catch {
         if (alive) { setSys(null); setUpdated("서버 연결 끊김"); }
@@ -59,6 +71,14 @@ export default function SystemView({ events, onAskAi }: Props) {
   }
 
   const p = procSummary(events, now);
+  // MEDIUM 프로세스가 원본에 반영하지 않고 잡아 둔 쓰기 (PID별)
+  const pending = new Map(pendingWrites(events, timeoutSec, now.getTime()).map((w) => [w.pid, w]));
+  const pendingText = (pid: number) => {
+    const w = pending.get(pid);
+    if (!w) return "-";
+    const left = Math.ceil((w.since + timeoutSec * 1000 - now.getTime()) / 1000);
+    return `${w.writes}건 · ${left > 0 ? `${left}초 후 반영` : "반영 대기"}`;
+  };
   return (
     <>
       <p className="crumb">시스템 현황<span>{updated}</span></p>
@@ -93,7 +113,7 @@ export default function SystemView({ events, onAskAi }: Props) {
         ) : (
           <div className="list" style={{ height: "auto", maxHeight: 320, marginTop: 12 }}>
             <table>
-              <thead><tr><th>PID</th><th>프로세스</th><th>상태</th><th>진입 시각</th><th className="num">마지막 점수</th><th>상세</th></tr></thead>
+              <thead><tr><th>PID</th><th>프로세스</th><th>상태</th><th>진입 시각</th><th>보류 쓰기</th><th>상세</th></tr></thead>
               <tbody>
                 {p.rows.map((r) => {
                   const high = r.state === "HIGH";
@@ -103,7 +123,8 @@ export default function SystemView({ events, onAskAi }: Props) {
                       <td>{r.process}</td>
                       <td className={high ? "high" : ""}>{high ? (r.suspended ? "HIGH · 정지됨" : "HIGH · 차단") : "MEDIUM · 감시 중"}</td>
                       <td className="mono">{r.since.slice(11)}</td>
-                      <td className={`num${high ? " high" : ""}`}>{r.score ? Number(r.score).toFixed(3) : "-"}</td>
+                      <td title="원본에 반영하지 않고 잡아 둔 쓰기. HIGH가 되면 버려지고 원본이 보존된다">
+                        {high ? "-" : pendingText(r.pid)}</td>
                       <td><button className="link-btn" onClick={() => showPid(r.pid)}>PID 상세 ›</button></td>
                     </tr>
                   );

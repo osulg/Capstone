@@ -1,10 +1,9 @@
 export type View = "events" | "files" | "system" | "ai";
-export type FilesSub = "compare" | "honeypot" | "pending";
+export type FilesSub = "compare" | "honeypot";
 
 export const FILES_SUBS: [FilesSub, string][] = [
   ["compare", "보호 결과 비교"],
   ["honeypot", "미끼 파일 상태"],
-  ["pending", "보류 중인 쓰기"],
 ];
 
 interface Props {
@@ -23,8 +22,9 @@ export default function Tabs({ view, onView, filesSub, onFilesSub, aiDot }: Prop
         보안 이벤트 현황
       </button>
 
-      {/* 파일 현황: 하위 메뉴는 항상 펼쳐 둔다 */}
-      <div className="tree">
+      {/* 파일 현황: 왼쪽 메뉴에서는 하위 메뉴를 항상 펼쳐 둔다.
+          좁은 화면(위쪽 가로 메뉴)에서는 파일 현황을 볼 때만 보인다 (styles.css의 .tree.open) */}
+      <div className={`tree${filesOpen ? " open" : ""}`}>
         <button className="tab" role="tab" aria-selected={filesOpen} onClick={() => onView("files")}>
           파일 현황
         </button>

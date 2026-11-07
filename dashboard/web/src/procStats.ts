@@ -12,7 +12,6 @@ export interface ProcRow {
   process: string;
   state: "MEDIUM" | "HIGH";
   since: string;          // 지금 상태로 들어온 시각
-  score: string | null;   // 마지막 점수
   suspended: boolean;     // SIGSTOP 정지됨
 }
 
@@ -48,7 +47,6 @@ export function procSummary(events: EdrEvent[], now: Date): ProcSummary {
     let since = "";
     let suspended = false;
     let didReturn = false;
-    let score: string | null = null;
     let prev = 0;
     for (const e of list) {
       // MEDIUM 중 이벤트가 오래 끊겼으면 그 사이 끝난 것으로 보고 새로 센다
@@ -56,8 +54,6 @@ export function procSummary(events: EdrEvent[], now: Date): ProcSummary {
       if (state === "MEDIUM" && t - prev > MEDIUM_STALE_SEC * 1000) state = "LOW";
       prev = t;
       if (isHoneypotBlock(e)) honeypotPids.add(pid);
-      const m = [...(e.reason || "").matchAll(/score=([\d.]+)/g)].pop();
-      if (m) score = m[1];
       if (e.level === "HIGH") {
         if (state !== "HIGH") { state = "HIGH"; since = e.time; }
         if (e.result === "SUSPENDED") suspended = true;
@@ -74,7 +70,7 @@ export function procSummary(events: EdrEvent[], now: Date): ProcSummary {
     if (state === "MEDIUM" && now.getTime() - ms(last.time) > MEDIUM_STALE_SEC * 1000) continue;
     if (state === "LOW") continue;
     rows.push({
-      pid, state, since, score, suspended,
+      pid, state, since, suspended,
       process: [...list].reverse().find((e) => e.process && e.process !== "-")?.process ?? "-",
     });
   }

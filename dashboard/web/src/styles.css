@@ -66,7 +66,6 @@ input, button { font: inherit; color: inherit; }
 .sub[aria-current="true"] { font-weight: 700; color: #000; }
 .sub[aria-current="true"]::before { background: #000; border-color: #000; }
 
-/* AI 분석관: 위 메뉴와 굵은 선으로 구분 */
 .ai-dot { margin-left: 6px; font-size: 10px; vertical-align: middle; }
 
 /* ── 3) 공통 부품 ── */
@@ -156,19 +155,12 @@ label.field { display: inline-flex; align-items: center; gap: 6px; }
 .result-sub { margin-top: 6px; font-size: 13px; color: var(--muted); }
 .result-empty { margin-top: 10px; color: #888; }
 
-/* 폴더 비교 표 + 미리보기 */
+/* 폴더 비교 표 */
 .cmp { margin-bottom: 14px; }
 .cmp table { font-size: 12.5px; }
 .cmp th, .cmp td { padding: 5px 6px; }
-.cmp tbody tr { cursor: pointer; }
 .folder-hint { height: auto; padding: 24px 12px; text-align: center; line-height: 1.8; }
 .folder-hint code { font-size: 12px; word-break: break-all; }
-.preview-box { margin-top: 10px; border: 1px solid #000; border-radius: 6px; background: #fafafa; padding: 8px 10px; }
-.preview-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-.preview-head b { color: #000; }
-.preview-box pre { margin: 0; font-family: Consolas, "D2Coding", monospace; font-size: 12px; line-height: 1.5;
-  white-space: pre-wrap; word-break: break-all; max-height: 90px; overflow: auto; }
-.preview-box pre.hex { color: var(--high); }
 
 /* ── 6) 시스템 현황 ── */
 .sys-head { padding: 2px 2px 12px; }
@@ -231,6 +223,7 @@ label.field { display: inline-flex; align-items: center; gap: 6px; }
   .tab { width: auto; flex: 1; text-align: center; border-bottom: 0; border-right: 1px solid var(--border-soft); }
   .tree { display: contents; }
   .tree-sub { order: 10; flex-basis: 100%; display: flex; border-top: 1px solid var(--border-soft); }
+  .tree:not(.open) .tree-sub { display: none; }   /* 파일 현황을 볼 때만 하위 메뉴 줄을 보인다 */
   .tree-sub li { flex: 1; }
   .sub { text-align: center; padding: 8px 4px; font-size: 13px; }
   .sub::before { display: none; }
