@@ -163,8 +163,12 @@ RE_SUSPECT = re.compile(r"\[STATE\] pid=(\d+) LOW -> SUSPICIOUS reason=(\S*)")
 RE_SCORE = re.compile(r"\[(?:STAGE2|WATCH|REEVAL)\] pid=(\d+) dyn=([\d.]+) stat=([\d.]+) "
                       r"(?:final|score)=([\d.]+)")
 RE_TO_MEDIUM = re.compile(r"\[(STAGE2|WATCH)\] pid=(\d+) → MEDIUM \(score=([\d.]+)\)")
-# 비신뢰 실행 경로 프로세스가 판정 전에 선제 MEDIUM이 될 때 (Stage2 격상은 SUSPICIOUS → MEDIUM)
-RE_TRUST = re.compile(r"\[STATE\] pid=(\d+) ProcState\.LOW → ProcState\.MEDIUM")
+# 상태가 MEDIUM 으로 바뀐 줄. 비신뢰 실행 경로라서 판정 전에 먼저 MEDIUM 이 되면 LOW 또는
+# SUSPICIOUS(stage1_sampling 등으로 먼저 의심 대상이 된 경우)에서 바뀐다.
+# Stage2/관찰 창 판정으로 MEDIUM 이 될 때도 SUSPICIOUS → MEDIUM 이 찍히는데, 그때는 같은 PID 의
+# 점수 줄([STAGE2]/[WATCH] … dyn= stat=) 바로 다음에 나오고 이어서 '→ MEDIUM (score=…)' 줄이 나온다.
+RE_TRUST = re.compile(r"\[STATE\] pid=(\d+) ProcState\.(LOW|SUSPICIOUS) → ProcState\.MEDIUM")
+RE_LINE_PID = re.compile(r"\bpid=(\d+)")
 RE_HIGH = re.compile(r"\[TRIGGER HIGH\] pid=(\d+) reason=(.*)$")
 RE_SUSPEND = re.compile(r"\[HIGH\] pid=(\d+) suspend 완료")
 RE_LOW_REEVAL = re.compile(r"\[REEVAL\] pid=(\d+) (?:관찰 시간 종료 → LOW|10초 경과 → Low) 복귀")
@@ -187,6 +191,7 @@ class StdoutParser:
         self.level = {}           # pid -> 마지막으로 보낸 상태
         self.honeypot_seen = {}   # (pid, op, path) -> 마지막 전송 시각 (같은 접근 반복 표시 방지)
         self.line_time = None     # 지금 읽는 줄에 붙은 HoldFS 출력 시각 (없으면 agent가 읽은 시각)
+        self.prev_was_score = {}  # pid -> 이 PID 의 바로 앞 줄이 Stage2/관찰 창 점수 줄이었는지
 
     def _ev(self, pid, level, result, reason, action="ESCALATE"):
         if level != "SUSPICIOUS":  # 허니팟 표시 행이 MEDIUM/HIGH 추적을 덮어쓰지 않도록
@@ -207,6 +212,15 @@ class StdoutParser:
         # (실행 출력에는 HoldFS 자체 시각이 없어서, agent가 읽은 시각을 쓰면 최대 1초쯤 늦어진다)
         t = RE_LINE_TIME.match(line)
         self.line_time, line = (t.group(1), t.group(2)) if t else (None, line)
+        p = RE_LINE_PID.search(line)
+        if not p:
+            return self._parse(line, None)
+        pid = int(p.group(1))
+        prev_score = self.prev_was_score.get(pid, False)
+        self.prev_was_score[pid] = bool(re.match(r"\[(?:STAGE2|WATCH)\] pid=\d+ dyn=", line))
+        return self._parse(line, prev_score)
+
+    def _parse(self, line: str, prev_score):
         m = RE_HONEYPOT.search(line)
         if m:
             pid, op, path, new_path = int(m.group(1)), m.group(2), m.group(3), m.group(4)
@@ -234,6 +248,8 @@ class StdoutParser:
         m = RE_TO_MEDIUM.search(line)
         if m:
             pid = int(m.group(2))
+            if self.level.get(pid) == "MEDIUM":
+                return None  # 이미 비신뢰 경로로 MEDIUM 기록을 보냄
             stage = "Stage2 최초 평가" if m.group(1) == "STAGE2" else "관찰 창 재채점"
             s1 = self.stage1_reason.get(pid)
             return self._ev(pid, "MEDIUM", "MEDIUM", self._join(
@@ -243,8 +259,12 @@ class StdoutParser:
             pid = int(m.group(1))
             if self.level.get(pid) in ("MEDIUM", "HIGH"):
                 return None
-            return self._ev(pid, "MEDIUM", "MEDIUM",
-                            "untrusted_origin (비신뢰 실행 경로 → 선제 MEDIUM, 또는 강제 상태 파일)")
+            if m.group(2) == "SUSPICIOUS" and prev_score:
+                return None  # Stage2/관찰 창 판정: 다음 '→ MEDIUM (score=…)' 줄에서 기록한다
+            s1 = self.stage1_reason.get(pid)
+            return self._ev(pid, "MEDIUM", "MEDIUM", self._join(
+                "untrusted_origin (비신뢰 실행 경로 → 선제 MEDIUM, 또는 강제 상태 파일)",
+                f"stage1={s1}" if s1 else ""))
         m = RE_HIGH.search(line)
         if m:
             pid = int(m.group(1))

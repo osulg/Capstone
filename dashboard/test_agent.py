@@ -76,3 +76,39 @@ def test_line_without_time_prefix_uses_read_time():
     # 시각이 안 붙은 로그(직접 실행한 HoldFS 출력)도 예전처럼 읽는다
     evs = feed_all(["[TRIGGER HIGH] pid=4243 reason=ml_score=0.900"])
     assert len(evs) == 1 and len(evs[0]["time"]) == 19
+
+
+def test_sampling_then_untrusted_medium_is_reported():
+    # stage1_sampling 으로 먼저 SUSPICIOUS 가 된 비신뢰 프로세스가 신뢰 검사에서 MEDIUM 이 된 경우
+    evs = feed_all([
+        "[STATE] pid=5310 LOW -> SUSPICIOUS reason=stage1_sampling",
+        "[STATE] pid=5310 ProcState.SUSPICIOUS → ProcState.MEDIUM",
+        "[TRIGGER HIGH] pid=5310 reason=high_entropy_write(ext=PLAIN_TEXT)",
+    ])
+    assert [(e["level"], e["action"]) for e in evs] == [("MEDIUM", "ESCALATE"), ("HIGH", "ESCALATE")]
+    assert evs[0]["reason"].startswith("untrusted_origin")
+    assert "stage1=stage1_sampling" in evs[0]["reason"]
+
+
+def test_untrusted_medium_then_stage2_medium_is_not_reported_twice():
+    evs = feed_all([
+        "[STATE] pid=5320 LOW -> SUSPICIOUS reason=stage1_sampling",
+        "[STATE] pid=5320 ProcState.SUSPICIOUS → ProcState.MEDIUM",
+        "[STAGE2] pid=5320 dyn=0.450 stat=0.295 final=0.372",
+        "[STATE] pid=5320 ProcState.MEDIUM → ProcState.MEDIUM",
+        "[STAGE2] pid=5320 → MEDIUM (score=0.372)",
+    ])
+    assert [(e["level"], e["action"]) for e in evs] == [("MEDIUM", "ESCALATE")]
+
+
+def test_other_pid_line_between_score_and_state_does_not_confuse():
+    # 다른 PID 의 줄이 끼어들어도 같은 PID 기준으로 '바로 앞 줄'을 본다
+    evs = feed_all([
+        "[STATE] pid=5330 LOW -> SUSPICIOUS reason=EntropyDetector",
+        "[STAGE2] pid=5330 dyn=0.450 stat=0.295 final=0.372",
+        "[MEDIUM] pid=9999 path=/x truncate size=0 → 지연 작업 보관",
+        "[STATE] pid=5330 ProcState.SUSPICIOUS → ProcState.MEDIUM",
+        "[STAGE2] pid=5330 → MEDIUM (score=0.372)",
+    ])
+    assert [(e["level"], e["action"]) for e in evs] == [("MEDIUM", "ESCALATE")]
+    assert "Stage2 최초 평가" in evs[0]["reason"]

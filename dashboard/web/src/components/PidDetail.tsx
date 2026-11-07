@@ -24,6 +24,7 @@ const levelOf = (e: EdrEvent): StepLevel =>
 // 같은 초에 찍힌 이벤트는 실제로 일어나는 순서로 놓는다.
 // (로그 파일과 실행 출력에서 따로 오기 때문에 받은 순서가 뒤바뀔 수 있다)
 function tieRank(e: EdrEvent): number {
+  if (e.action === "ESCALATE" && e.level === "MEDIUM") return -1; // MEDIUM 진입이 가장 먼저
   if (isHighCause(e)) return 0;                                  // 격상 원인
   if (e.action === "ESCALATE" || e.action === "RETURN") return 1; // 격상 / 정상 복귀
   if (e.action === "DROP" || e.action === "COMMIT") return 2;     // 보류 쓰기 폐기 / 반영
