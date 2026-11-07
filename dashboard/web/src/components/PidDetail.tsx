@@ -23,14 +23,17 @@ const levelOf = (e: EdrEvent): StepLevel =>
 
 // 같은 초에 찍힌 이벤트는 실제로 일어나는 순서로 놓는다.
 // (로그 파일과 실행 출력에서 따로 오기 때문에 받은 순서가 뒤바뀔 수 있다)
+//   MEDIUM 격상 → MEDIUM 중 작업(보류·지연·보관) → 격상 원인 → HIGH 격상 / 정상 복귀
+//   → 판정 뒤 정리(폐기·반영·복원·확정) → 차단 → 정지 (high.py: 차단 기록 직후 suspend)
+const MEDIUM_WORK = new Set(["BUFFERED", "ALLOWED", "STAGED", "REMOVED_PENDING"]);
 function tieRank(e: EdrEvent): number {
-  if (e.action === "ESCALATE" && e.level === "MEDIUM") return -1; // MEDIUM 진입이 가장 먼저
-  if (isHighCause(e)) return 0;                                  // 격상 원인
-  if (e.action === "ESCALATE" || e.action === "RETURN") return 1; // 격상 / 정상 복귀
-  if (e.action === "DROP" || e.action === "COMMIT") return 2;     // 보류 쓰기 폐기 / 반영
-  if (e.result === "BLOCKED") return 3;                           // HIGH 이후 첫 차단
-  if (e.action === "SIGSTOP") return 4;                           // 정지 (high.py: 차단 기록 직후 suspend)
-  return 2;
+  if (e.action === "ESCALATE" && e.level === "MEDIUM") return 0;
+  if (MEDIUM_WORK.has(e.result)) return 1;
+  if (isHighCause(e)) return 2;
+  if (e.action === "ESCALATE" || e.action === "RETURN") return 3;
+  if (e.result === "BLOCKED") return 5;
+  if (e.action === "SIGSTOP") return 6;
+  return 4;
 }
 
 // HIGH 격상 바로 앞(2초 이내)의 격상 원인 기록. 전체 로그에서는 HIGH 격상 줄에 합친다.

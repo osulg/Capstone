@@ -112,3 +112,39 @@ def test_other_pid_line_between_score_and_state_does_not_confuse():
     ])
     assert [(e["level"], e["action"]) for e in evs] == [("MEDIUM", "ESCALATE")]
     assert "Stage2 최초 평가" in evs[0]["reason"]
+
+
+def test_medium_entry_from_policy_record():
+    # stage1_sampling 으로 SUSPICIOUS 가 된 비신뢰 프로세스: 실행 출력에는 MEDIUM 진입 줄이 없고
+    # filesecurity.log 의 MEDIUM 정책 기록(폴더 생성 등)만 남는다
+    p = StdoutParser()
+    assert p.feed("2026-11-07 18:22:35 [STATE] pid=6100 LOW -> SUSPICIOUS reason=stage1_sampling") is None
+    sec = {"time": "2026-11-07 18:22:35", "pid": 6100, "level": "MEDIUM", "action": "MKDIR", "result": "ALLOWED"}
+    ev = p.medium_entry(sec)
+    assert ev and (ev["level"], ev["action"], ev["time"]) == ("MEDIUM", "ESCALATE", "2026-11-07 18:22:35")
+    assert "stage1=stage1_sampling" in ev["reason"]
+    assert p.medium_entry(dict(sec, result="BUFFERED")) is None   # 두 번 보내지 않음
+
+
+def test_medium_entry_skipped_after_stage2_medium_or_for_commit():
+    p = StdoutParser()
+    p.feed("[STATE] pid=6200 LOW -> SUSPICIOUS reason=EntropyDetector")
+    p.feed("[STAGE2] pid=6200 dyn=0.450 stat=0.295 final=0.372")
+    p.feed("[STATE] pid=6200 ProcState.SUSPICIOUS → ProcState.MEDIUM")
+    assert p.feed("[STAGE2] pid=6200 → MEDIUM (score=0.372)")["level"] == "MEDIUM"
+    assert p.medium_entry({"pid": 6200, "level": "MEDIUM", "result": "BUFFERED"}) is None
+    # 판정 뒤에 남는 반영 기록으로는 MEDIUM 격상을 만들지 않는다
+    q = StdoutParser()
+    assert q.medium_entry({"pid": 6300, "level": "MEDIUM", "action": "COMMIT", "result": "FILE_APPLIED"}) is None
+
+
+def test_medium_entry_even_if_high_was_read_first():
+    # 같은 초에 HIGH 격상까지 끝나 실행 출력을 먼저 읽은 경우에도 MEDIUM 진입을 남긴다
+    p = StdoutParser()
+    p.feed("[STATE] pid=6400 LOW -> SUSPICIOUS reason=stage1_sampling")
+    p.feed("[TRIGGER HIGH] pid=6400 reason=high_entropy_write(ext=PLAIN_TEXT)")
+    ev = p.medium_entry({"time": "2026-11-07 18:22:35", "pid": 6400, "level": "MEDIUM",
+                         "action": "MKDIR", "result": "ALLOWED"})
+    assert ev and ev["level"] == "MEDIUM"
+    assert p.level[6400] == "HIGH"
+    assert p.medium_entry({"pid": 6400, "level": "MEDIUM", "result": "ESCALATED_TO_HIGH"}) is None

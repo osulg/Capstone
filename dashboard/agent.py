@@ -192,13 +192,47 @@ class StdoutParser:
         self.honeypot_seen = {}   # (pid, op, path) -> 마지막 전송 시각 (같은 접근 반복 표시 방지)
         self.line_time = None     # 지금 읽는 줄에 붙은 HoldFS 출력 시각 (없으면 agent가 읽은 시각)
         self.prev_was_score = {}  # pid -> 이 PID 의 바로 앞 줄이 Stage2/관찰 창 점수 줄이었는지
+        self.medium_sent = set()  # 이번 감시 구간에 MEDIUM 격상 이벤트를 이미 보낸 PID (정상 복귀 시 해제)
 
     def _ev(self, pid, level, result, reason, action="ESCALATE"):
         if level != "SUSPICIOUS":  # 허니팟 표시 행이 MEDIUM/HIGH 추적을 덮어쓰지 않도록
             self.level[pid] = level
+        if action == "ESCALATE" and level == "MEDIUM":
+            self.medium_sent.add(pid)
+        elif action == "RETURN":
+            self.medium_sent.discard(pid)
         return {"time": self.line_time or now_str(), "level": level, "pid": pid, "process": process_name(pid),
                 "target": "", "action": action, "result": result, "reason": reason,
                 "source": "stdout"}
+
+    # MEDIUM 상태에서만 남는 정책 기록 (보류/지연/보관). 반영·폐기·복원처럼 판정 뒤에 남는 기록은 제외.
+    MEDIUM_ENTRY_RESULTS = {"BUFFERED", "ALLOWED", "STAGED", "REMOVED_PENDING", "ESCALATED_TO_HIGH"}
+
+    def medium_entry(self, sec_ev: dict):
+        """filesecurity.log 의 MEDIUM 정책 기록을 보고, 아직 MEDIUM 기록을 보내지 않은 PID 면
+        MEDIUM 격상 이벤트를 만든다.
+
+        비신뢰 경로 프로세스가 Stage1 에서 먼저 SUSPICIOUS 가 되면, HoldFS 는 상태를 바꾸지 않고
+        실행할 때만 MEDIUM 으로 취급한다(passthrough.py _resolve_suspicious_state). 이때는 실행
+        출력에 MEDIUM 진입 줄이 없으므로 정책 기록이 MEDIUM 진입의 유일한 신호다.
+        """
+        pid = sec_ev.get("pid", 0)
+        if sec_ev.get("level") != "MEDIUM" or sec_ev.get("result") not in self.MEDIUM_ENTRY_RESULTS:
+            return None
+        # 실행 출력을 먼저 읽기 때문에 같은 순간의 HIGH 격상이 이미 처리됐을 수 있다.
+        # 그래서 '지금 상태'가 아니라 'MEDIUM 격상을 보낸 적이 있는지'로 판단한다.
+        if not pid or pid in self.medium_sent or self.level.get(pid) == "MEDIUM":
+            return None
+        s1 = self.stage1_reason.get(pid)
+        was = self.level.get(pid)
+        saved, self.line_time = self.line_time, sec_ev.get("time")
+        ev = self._ev(pid, "MEDIUM", "MEDIUM", self._join(
+            "untrusted_origin (비신뢰 실행 경로 → 선제 MEDIUM, 또는 강제 상태 파일)",
+            f"stage1={s1}" if s1 else ""))
+        self.line_time = saved
+        if was == "HIGH":
+            self.level[pid] = "HIGH"  # 이미 HIGH 면 상태 추적은 HIGH 로 둔다
+        return ev
 
     def _score_text(self, pid):
         s = self.scores.get(pid)
@@ -343,9 +377,14 @@ def main() -> None:
         run_demo(sender, args.demo_delay)
         return
 
-    sources = [(Tail(args.security_log, args.from_start), SecurityLogParser())]
+    # 실행 출력을 먼저 읽는다: 상태 변화 줄(Stage2 MEDIUM 판정 등)을 정책 기록보다 먼저 반영해야
+    # medium_entry() 가 Stage2 MEDIUM 을 비신뢰 경로 MEDIUM 으로 잘못 보내지 않는다.
+    sources = []
+    stdout_parser = None
     if args.stdout_log:
-        sources.append((Tail(args.stdout_log, args.from_start), StdoutParser()))
+        stdout_parser = StdoutParser()
+        sources.append((Tail(args.stdout_log, args.from_start), stdout_parser))
+    sources.append((Tail(args.security_log, args.from_start), SecurityLogParser()))
 
     print(f"[AGENT] server={args.server}")
     for tail, _ in sources:
@@ -356,8 +395,13 @@ def main() -> None:
             for tail, parser in sources:
                 for line in tail.lines():
                     ev = parser.feed(line)
-                    if ev:
-                        sender.push(ev)
+                    if not ev:
+                        continue
+                    if stdout_parser and parser is not stdout_parser:
+                        entry = stdout_parser.medium_entry(ev)
+                        if entry:
+                            sender.push(entry)
+                    sender.push(ev)
             sender.flush()
             time.sleep(args.interval)
     except KeyboardInterrupt:
