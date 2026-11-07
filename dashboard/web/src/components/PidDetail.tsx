@@ -18,14 +18,30 @@ function stepLabel(e: EdrEvent): string | null {
   if (e.action === "SIGSTOP") return "프로세스 정지 (SIGSTOP)";
   if (e.action === "DETECT") return "Stage1 탐지";
   if (e.result === "BUFFER_DROPPED") return "보류 쓰기 폐기 · 원본 보존";
+  if (e.action === "COMMIT" && e.result === "DATA_APPLIED") return "보류 쓰기 반영 (정상 판정)";
+  if (e.action === "COMMIT" && (e.result === "APPLY_FAILED" || e.result === "IO_FAILED")) return "보류 쓰기 반영 실패";
   if (e.result === "BLOCKED" && /honeypot/i.test(e.reason || "")) return "허니팟 접근 차단";
   return null;
 }
 
-// 마지막으로 어떤 조치가 됐는지
+// 보류 쓰기를 원본에 반영한 결과 (HoldFS medium.py의 COMMIT 로그)
+const APPLIED = new Set(["FILE_APPLIED", "DATA_APPLIED"]);
+const APPLY_FAILED = new Set(["APPLY_FAILED", "IO_FAILED", "NOT_COMPLETED"]);
+
+// 마지막으로 어떤 조치가 됐는지. 보류 쓰기가 반영됐는지 / 버려졌는지도 함께 보여준다.
 function finalAction(rows: EdrEvent[]): string {
-  if (rows.some((e) => e.result === "SUSPENDED")) return "차단·정지됨";
-  if (rows.some((e) => e.result === "BLOCKED")) return "작업 차단됨";
+  const dropped = rows.some((e) => e.result === "BUFFER_DROPPED");
+  const dropNote = dropped ? " · 보류 쓰기 폐기" : "";
+  if (rows.some((e) => e.result === "SUSPENDED")) return "차단·정지됨" + dropNote;
+  if (rows.some((e) => e.result === "BLOCKED")) return "작업 차단됨" + dropNote;
+  if (dropped) return "보류 쓰기 폐기 · 원본 보존";
+
+  // 마지막 보류 쓰기 이후에 반영 기록이 있는지 본다
+  const lastBuf = rows.map((e) => e.result === "BUFFERED").lastIndexOf(true);
+  const after = rows.slice(lastBuf + 1);
+  if (lastBuf >= 0 && after.some((e) => e.action === "COMMIT" && APPLY_FAILED.has(e.result))) return "정상 판정 · 반영 실패";
+  if (lastBuf >= 0 && after.some((e) => e.action === "COMMIT" && APPLIED.has(e.result))) return "정상 판정 · 쓰기 반영됨";
+
   const last = rows[rows.length - 1];
   if (last?.action === "RETURN") return "정상 복귀";
   if (rows.some((e) => e.level === "MEDIUM")) return "감시 중 (쓰기 보류)";
