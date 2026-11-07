@@ -27,8 +27,8 @@ function tieRank(e: EdrEvent): number {
   if (isHighCause(e)) return 0;                                  // 격상 원인
   if (e.action === "ESCALATE" || e.action === "RETURN") return 1; // 격상 / 정상 복귀
   if (e.action === "DROP" || e.action === "COMMIT") return 2;     // 보류 쓰기 폐기 / 반영
-  if (e.action === "SIGSTOP") return 3;                           // 정지
-  if (e.result === "BLOCKED") return 4;                           // 정지 이후 차단
+  if (e.result === "BLOCKED") return 3;                           // HIGH 이후 첫 차단
+  if (e.action === "SIGSTOP") return 4;                           // 정지 (high.py: 차단 기록 직후 suspend)
   return 2;
 }
 
