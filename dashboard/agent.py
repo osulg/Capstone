@@ -34,12 +34,31 @@ def now_str() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def process_name(pid: int) -> str:
+def _read_comm(pid: int) -> str | None:
     try:
         with open(f"/proc/{pid}/comm", "r", encoding="utf-8") as f:
-            return f.read().strip()
+            return f.read().strip() or None
     except OSError:
-        return "-"
+        return None
+
+
+def process_name(pid: int) -> str:
+    """PID 의 프로세스 이름.
+
+    FUSE 가 넘겨주는 pid 는 요청을 보낸 '스레드' 번호라서 comm 을 그대로 읽으면
+    'pool' 같은 작업 스레드 이름이 나올 수 있다. /proc/<pid>/status 의 Tgid(스레드가 속한
+    프로세스 번호)로 실제 프로세스 이름(예: nautilus)을 읽는다. 이미 끝난 프로세스면 '-'.
+    """
+    tgid = pid
+    try:
+        with open(f"/proc/{pid}/status", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("Tgid:"):
+                    tgid = int(line.split()[1])
+                    break
+    except (OSError, ValueError):
+        pass
+    return _read_comm(tgid) or _read_comm(pid) or "-"
 
 
 # --------------------------------------------------------------------------- #
@@ -149,8 +168,10 @@ class SecurityLogParser:
         if not ev or "pid" not in ev:
             return None
         ev["pid"] = int(ev["pid"]) if ev["pid"].isdigit() else 0
-        if not ev.get("process"):
-            ev["process"] = process_name(ev["pid"])
+        # HoldFS 가 적은 Process 도 스레드 이름일 수 있어, 읽을 수 있으면 실제 프로세스 이름을 쓴다
+        name = process_name(ev["pid"])
+        if name != "-" or not ev.get("process"):
+            ev["process"] = name
         ev["source"] = "filesecurity"
         return ev
 

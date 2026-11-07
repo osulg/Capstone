@@ -148,3 +148,30 @@ def test_medium_entry_even_if_high_was_read_first():
     assert ev and ev["level"] == "MEDIUM"
     assert p.level[6400] == "HIGH"
     assert p.medium_entry({"pid": 6400, "level": "MEDIUM", "result": "ESCALATED_TO_HIGH"}) is None
+
+
+def test_process_name_uses_thread_group_leader():
+    # FUSE 가 넘겨주는 스레드 번호를 넣어도, 스레드 이름('pool')이 아니라 프로세스 이름이 나온다
+    import threading
+    from agent import _read_comm, process_name
+
+    ready, done, out = threading.Event(), threading.Event(), {}
+
+    def worker():
+        tid = threading.get_native_id()
+        with open(f"/proc/self/task/{tid}/comm", "w") as f:
+            f.write("pool")
+        out["tid"] = tid
+        ready.set()
+        done.wait(2)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    ready.wait(2)
+    try:
+        assert _read_comm(out["tid"]) == "pool"
+        assert process_name(out["tid"]) == _read_comm(os.getpid())
+    finally:
+        done.set()
+        t.join()
+    assert process_name(999999999) == "-"
