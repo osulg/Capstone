@@ -71,7 +71,9 @@ export interface FileRow {
 }
 
 // underlay 기준 상대 경로로 줄인다
-export const shortPath = (p: string) => p.replace(/^.*\/underlay\//, "");
+// 이름 변경처럼 "원래 경로 -> 새 경로" 형태면 양쪽을 줄여 "a → b" 로 보여준다
+export const shortPath = (p: string) =>
+  p.split(/ (?:->|→) /).map((x) => x.replace(/^.*\/underlay\//, "")).join(" → ");
 
 // 파일 입장에서 본 결과 이름 (파일별 목록과 파일 상세가 같이 쓴다)
 export function fileResult(e: EdrEvent, dropped: Set<number>): string {

@@ -1,4 +1,5 @@
 import { droppedPids, fileResult, LEVEL_RANK, shortPath } from "../eventStats";
+import { describeEvent, isHiddenEvent, rawText, setattrSources, useThresholds } from "../reasonText";
 import type { EdrEvent } from "../types";
 
 interface Props {
@@ -20,8 +21,11 @@ interface Accessor {
 }
 
 export default function FileDetail({ target, events, onBack, onPid }: Props) {
+  const th = useThresholds();
   const dropped = droppedPids(events);
-  const rows = events.filter((e) => e.target === target).sort((a, b) => a.time.localeCompare(b.time));
+  const rows = events.filter((e) => e.target === target && !isHiddenEvent(e))
+    .sort((a, b) => a.time.localeCompare(b.time));
+  const setattr = setattrSources(rows);
   const last = rows[rows.length - 1];
 
   // 이 파일에 접근한 프로세스별로 묶는다 (위험도 높은 순)
@@ -94,18 +98,20 @@ export default function FileDetail({ target, events, onBack, onPid }: Props) {
           <legend>파일 이력 ({rows.length}건)</legend>
           <div className="list" style={{ height: 320 }}>
             <table>
-              <thead><tr><th>시각</th><th>프로세스</th><th>위험도</th><th>동작</th><th>결과</th><th>사유</th></tr></thead>
+              <thead><tr><th>시각</th><th>프로세스</th><th>위험도</th><th>동작</th><th>상세</th></tr></thead>
               <tbody>
-                {rows.map((e) => (
-                  <tr key={e.id}>
-                    <td className="mono">{hms(e.time)}</td>
-                    <td>{e.process} ({e.pid})</td>
-                    <td className={e.level === "HIGH" ? "high" : ""}>{e.level}</td>
-                    <td>{e.action}</td>
-                    <td className={danger(fileResult(e, dropped))}>{fileResult(e, dropped)}</td>
-                    <td className="why" title={e.reason}>{e.reason}</td>
-                  </tr>
-                ))}
+                {rows.map((e) => {
+                  const d = describeEvent(e, th, setattr.get(e.id));
+                  return (
+                    <tr key={e.id} title={rawText(e)}>
+                      <td className="mono">{hms(e.time)}</td>
+                      <td>{e.process} ({e.pid})</td>
+                      <td className={e.level === "HIGH" ? "high" : ""}>{e.level}</td>
+                      <td className={e.level === "HIGH" ? "high" : ""}>{d.action}</td>
+                      <td className="why">{d.detail}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
