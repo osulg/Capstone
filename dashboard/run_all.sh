@@ -66,6 +66,14 @@ cleanup_previous() {
     sleep 1
 }
 
+# 표준입력 각 줄 앞에 지금 시각("YYYY-MM-DD HH:MM:SS ")을 붙인다
+stamp_lines() {
+    local line
+    while IFS= read -r line || [ -n "$line" ]; do
+        printf '%(%Y-%m-%d %H:%M:%S)T %s\n' -1 "$line"
+    done
+}
+
 shutdown_all() {
     trap - INT TERM EXIT
     echo ""
@@ -159,7 +167,10 @@ say "서버 준비 완료: $HEALTH"
 AGENT_ARGS=( --server "http://127.0.0.1:$PORT" )
 if [ "$NO_GUARDFS" -eq 0 ]; then
     say "HoldFS 시작 (mount: $MOUNT_DIR)"
-    PYTHONUNBUFFERED=1 bash "$PROJECT_ROOT/scripts/run_guardfs.sh" > "$GUARDFS_LOG" 2>&1 &
+    # 실행 출력 각 줄 앞에 출력된 시각을 붙여 기록한다. 에이전트가 이 시각을 이벤트 시각으로 쓴다
+    # (filesecurity.log 의 시각과 같은 기준이 되어 대시보드에서 순서가 뒤바뀌지 않는다).
+    # 프로세스 치환을 써서 $! 는 그대로 HoldFS 실행 스크립트의 PID 가 된다.
+    PYTHONUNBUFFERED=1 bash "$PROJECT_ROOT/scripts/run_guardfs.sh" > >(stamp_lines > "$GUARDFS_LOG") 2>&1 &
     GUARDFS_PID=$!
 
     for _ in $(seq 1 40); do

@@ -59,3 +59,20 @@ def test_low_return_without_escalation_is_hidden():
         "[WATCH] pid=6586 관찰 종료 → 현재 상태=ProcState.LOW (score=0.016)",
     ])
     assert evs == []
+
+
+def test_line_time_prefix_is_used_as_event_time():
+    # run_all.sh 가 실행 출력 각 줄 앞에 붙이는 출력 시각을 이벤트 시각으로 쓴다
+    evs = feed_all([
+        "2026-11-07 18:04:27 [TRIGGER HIGH] pid=4242 reason=high_entropy_write(ext=PLAIN_TEXT)",
+        "2026-11-07 18:04:27 [HIGH] pid=4242 suspend 완료",
+    ])
+    assert [(e["time"], e["result"]) for e in evs] == [
+        ("2026-11-07 18:04:27", "HIGH"), ("2026-11-07 18:04:27", "SUSPENDED")]
+    assert evs[0]["reason"].startswith("high_entropy_write")
+
+
+def test_line_without_time_prefix_uses_read_time():
+    # 시각이 안 붙은 로그(직접 실행한 HoldFS 출력)도 예전처럼 읽는다
+    evs = feed_all(["[TRIGGER HIGH] pid=4243 reason=ml_score=0.900"])
+    assert len(evs) == 1 and len(evs[0]["time"]) == 19

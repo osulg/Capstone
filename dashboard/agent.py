@@ -176,17 +176,22 @@ HONEYPOT_REASON = "HoneypotDetector: 허니팟(미끼) 파일 접근 차단"
 HONEYPOT_DEDUP_SEC = 2.0
 
 
+# run_all.sh 가 HoldFS 실행 출력 각 줄 앞에 붙이는 출력 시각 ("YYYY-MM-DD HH:MM:SS ")
+RE_LINE_TIME = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (.*)$")
+
+
 class StdoutParser:
     def __init__(self):
         self.stage1_reason = {}   # pid -> Stage1 탐지기
         self.scores = {}          # pid -> (dyn, stat, score)
         self.level = {}           # pid -> 마지막으로 보낸 상태
         self.honeypot_seen = {}   # (pid, op, path) -> 마지막 전송 시각 (같은 접근 반복 표시 방지)
+        self.line_time = None     # 지금 읽는 줄에 붙은 HoldFS 출력 시각 (없으면 agent가 읽은 시각)
 
     def _ev(self, pid, level, result, reason, action="ESCALATE"):
         if level != "SUSPICIOUS":  # 허니팟 표시 행이 MEDIUM/HIGH 추적을 덮어쓰지 않도록
             self.level[pid] = level
-        return {"time": now_str(), "level": level, "pid": pid, "process": process_name(pid),
+        return {"time": self.line_time or now_str(), "level": level, "pid": pid, "process": process_name(pid),
                 "target": "", "action": action, "result": result, "reason": reason,
                 "source": "stdout"}
 
@@ -198,6 +203,10 @@ class StdoutParser:
         return ", ".join(p for p in parts if p)
 
     def feed(self, line: str):
+        # 줄 앞에 출력 시각이 붙어 있으면 그 시각을 이벤트 시각으로 쓴다.
+        # (실행 출력에는 HoldFS 자체 시각이 없어서, agent가 읽은 시각을 쓰면 최대 1초쯤 늦어진다)
+        t = RE_LINE_TIME.match(line)
+        self.line_time, line = (t.group(1), t.group(2)) if t else (None, line)
         m = RE_HONEYPOT.search(line)
         if m:
             pid, op, path, new_path = int(m.group(1)), m.group(2), m.group(3), m.group(4)
