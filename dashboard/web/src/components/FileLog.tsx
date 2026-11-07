@@ -25,7 +25,7 @@ export default function FileLog({ rows, onDetail }: Props) {
       </div>
       <div className="list">
         <table>
-          <thead><tr><th>파일</th><th>시각</th><th>결과</th><th>상세</th></tr></thead>
+          <thead><tr><th>파일</th><th>시각</th><th>상태</th><th>상세</th></tr></thead>
           <tbody>
             {shown.map((r) => (
               <tr key={r.target} title={r.target}>

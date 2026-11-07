@@ -1,4 +1,5 @@
 // 시스템 현황 › 프로세스 상태: 오늘 이벤트로 PID별 현재 상태를 계산한다
+import { displayLevel } from "./eventStats";
 import { isHoneypotBlock } from "./fileStats";
 import type { EdrEvent } from "./types";
 
@@ -61,7 +62,7 @@ export function procSummary(events: EdrEvent[], now: Date): ProcSummary {
         continue;   // HIGH는 다시 내려오지 않는다
       } else if (e.action === "RETURN") {
         state = "LOW"; didReturn = true;
-      } else if (e.level === "MEDIUM" && state === "LOW") {
+      } else if (displayLevel(e) === "MEDIUM" && state === "LOW") {   // 정상 복귀 뒤 반영 기록은 LOW
         state = "MEDIUM"; since = e.time;
       }
     }

@@ -75,26 +75,68 @@ export interface FileRow {
 export const shortPath = (p: string) =>
   p.split(/ (?:->|→) /).map((x) => x.replace(/^.*\/underlay\//, "")).join(" → ");
 
-// 파일 입장에서 본 결과 이름 (파일별 목록과 파일 상세가 같이 쓴다)
-export function fileResult(e: EdrEvent, dropped: Set<number>): string {
-  if (/honeypot/i.test(e.reason || "")) return "미끼 접근";
-  if (e.result === "BLOCKED") return "차단";
-  if (e.result === "BUFFERED") return dropped.has(e.pid) ? "원본 보존" : "보류";
-  return e.result;
+// 화면에서 아예 숨기는 기록 (원본에 영향 없음)
+//  - MEDIUM 중 새로 만든 파일을 반영 전에 다시 지운 것
+//  - HIGH 진입 때 버릴 보류 쓰기가 없어 남는 '버퍼 0개 드롭'
+export const isHiddenEvent = (e: EdrEvent) =>
+  e.result === "REMOVED_PENDING" || (e.result === "BUFFER_DROPPED" && /버퍼 0개/.test(e.reason || ""));
+
+// 화면에 보여줄 위험도. HoldFS 는 판정 뒤 정리 기록도 MEDIUM 정책 코드에서 남겨 [MEDIUM] 으로 적는다.
+// 실제 그때 상태로 바꿔 보여준다: HIGH 때문에 정리된 것(폐기·복원) → HIGH,
+// 정상 판정 뒤 반영·확정된 것 → LOW. (격상 원인인 VALIDATION_FAILED 는 그때 MEDIUM 이므로 그대로)
+const AFTER_HIGH = new Set(["BUFFER_DROPPED", "RESTORED", "RESTORE_CONFLICT", "RESTORE_FAILED", "RESTORE_CLEANUP_FAILED"]);
+const AFTER_LOW = new Set(["FILE_APPLIED", "DATA_APPLIED", "STAGING_PRESERVED", "APPLY_FAILED", "IO_FAILED",
+  "NOT_COMPLETED", "HANDLE_CLEANUP_FAILED", "CONFIRMED", "FINALIZE_FAILED"]);
+export function displayLevel(e: EdrEvent): string {
+  if (e.level !== "MEDIUM") return e.level;
+  if (e.action === "DROP" || AFTER_HIGH.has(e.result)) return "HIGH";
+  if (AFTER_LOW.has(e.result) || (e.action === "COMMIT" && e.result === "CLEANUP_FAILED")) return "LOW";
+  return e.level;
 }
+
+// 파일 입장의 현재 상태: 그 파일 기록을 시간순으로 보며 마지막 상태를 정한다.
+//  원본 보존 / 차단 / 판정 대기 / 반영됨 / 삭제됨 / 미끼 접근 / 확인 필요, 폴더는 "-"
+export type FileStatus = "원본 보존" | "차단" | "판정 대기" | "반영됨" | "삭제됨" | "미끼 접근" | "확인 필요" | "-";
+const NEEDS_CHECK = new Set(["RESTORE_CONFLICT", "STAGING_PRESERVED", "RESTORE_FAILED", "RESTORE_CLEANUP_FAILED",
+  "APPLY_FAILED", "IO_FAILED", "NOT_COMPLETED", "FINALIZE_FAILED"]);
+export function fileStatus(rows: EdrEvent[], dropped: Set<number>): FileStatus {
+  let st: FileStatus = "-";
+  for (const e of rows) {
+    if (e.action === "MKDIR" || e.action === "RMDIR") continue;           // 폴더는 상태를 매기지 않는다
+    if (/honeypot/i.test(e.reason || "")) st = "미끼 접근";
+    else if (e.result === "BLOCKED") st = "차단";
+    else if (e.result === "ESCALATED_TO_HIGH" || e.result === "VALIDATION_FAILED" || e.result === "RESTORED") st = "원본 보존";
+    else if (e.result === "BUFFERED" || e.result === "STAGED") st = dropped.has(e.pid) ? "원본 보존" : "판정 대기";
+    else if (e.result === "FILE_APPLIED" || (e.action === "SETATTR" && e.result === "CONFIRMED")) st = "반영됨";
+    else if (e.action === "UNLINK" && e.result === "CONFIRMED") st = "삭제됨";
+    else if (NEEDS_CHECK.has(e.result)) st = "확인 필요";
+  }
+  return st;
+}
+
+// 파일 단위로 묶을 때 쓰는 열쇠. 이름 변경 기록("원래 경로 -> 새 경로")은 원래 파일의 기록으로 본다.
+export const fileKey = (target: string) => target.split(/ (?:->|→) /)[0];
 
 export function byFile(events: EdrEvent[]): FileRow[] {
   const dropped = droppedPids(events);
-  const map = new Map<string, FileRow>();
+  const byTarget = new Map<string, EdrEvent[]>();
   for (const e of events) {
-    if (!e.target) continue;
-    const result = fileResult(e, dropped);
-    map.set(e.target, {
-      target: e.target, short: shortPath(e.target), process: `${e.process} (${e.pid})`,
-      action: e.action, result, danger: e.result === "BLOCKED", time: e.time,
+    if (!e.target || isHiddenEvent(e)) continue;
+    const key = fileKey(e.target);
+    const list = byTarget.get(key);
+    if (list) list.push(e); else byTarget.set(key, [e]);
+  }
+  const rows: FileRow[] = [];
+  for (const [target, list] of byTarget) {
+    const sorted = [...list].sort((a, b) => a.time.localeCompare(b.time));
+    const last = sorted[sorted.length - 1];
+    const result = fileStatus(sorted, dropped);
+    rows.push({
+      target, short: shortPath(target), process: `${last.process} (${last.pid})`,
+      action: last.action, result, danger: result === "차단", time: last.time,
     });
   }
-  return [...map.values()].sort((a, b) => b.time.localeCompare(a.time));
+  return rows.sort((a, b) => b.time.localeCompare(a.time));
 }
 
 export interface Bucket { label: string; count: number; highs: EdrEvent[] }

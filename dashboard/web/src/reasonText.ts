@@ -75,11 +75,8 @@ export function causeText(e: EdrEvent): string {
   return r;
 }
 
-// 화면에서 아예 숨기는 기록 (원본에 영향 없음)
-//  - MEDIUM 중 새로 만든 파일을 반영 전에 다시 지운 것
-//  - HIGH 진입 때 버릴 보류 쓰기가 없어 남는 '버퍼 0개 드롭'
-export const isHiddenEvent = (e: EdrEvent) =>
-  e.result === "REMOVED_PENDING" || (e.result === "BUFFER_DROPPED" && /버퍼 0개/.test(e.reason || ""));
+// 숨기는 기록 판단은 eventStats 에 있다 (파일별 목록도 같이 쓰기 때문)
+export { isHiddenEvent } from "./eventStats";
 
 // SETATTR 사유(CHMOD(...),CHOWN(uid),UTIME(mtime) …)에서 바뀐 종류를 뽑는다
 function attrKinds(reason: string): string[] {

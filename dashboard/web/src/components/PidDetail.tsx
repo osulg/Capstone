@@ -1,4 +1,4 @@
-import { eventDate, LEVEL_RANK, shortPath } from "../eventStats";
+import { displayLevel, eventDate, LEVEL_RANK, shortPath } from "../eventStats";
 import {
   causeText, describeEvent, isHiddenEvent, isHighCause, rawText, setattrSources, useThresholds,
 } from "../reasonText";
@@ -179,8 +179,8 @@ export default function PidDetail({ pid, events, onBack, onFile, onAskAi }: Prop
                 {log.map(({ e, action, detail, target, raw }) => (
                   <tr key={e.id} title={raw}>
                     <td className="mono">{hms(e.time)}</td>
-                    <td className={e.level === "HIGH" ? "high" : ""}>{e.level}</td>
-                    <td className={e.level === "HIGH" ? "high" : ""}>{action}</td>
+                    <td className={displayLevel(e) === "HIGH" ? "high" : ""}>{displayLevel(e)}</td>
+                    <td className={displayLevel(e) === "HIGH" ? "high" : ""}>{action}</td>
                     <td className="mono">
                       {!target ? "-" : onFile
                         ? <button className="link-btn mono" onClick={() => onFile(target)}>{shortPath(target)}</button>

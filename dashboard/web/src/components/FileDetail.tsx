@@ -1,4 +1,4 @@
-import { droppedPids, fileResult, LEVEL_RANK, shortPath } from "../eventStats";
+import { displayLevel, droppedPids, fileKey, fileStatus, LEVEL_RANK, shortPath } from "../eventStats";
 import { describeEvent, isHiddenEvent, rawText, setattrSources, useThresholds } from "../reasonText";
 import type { EdrEvent } from "../types";
 
@@ -16,14 +16,16 @@ interface Accessor {
   process: string;
   level: string;
   count: number;
-  result: string;   // 이 파일에 대한 마지막 결과
+  result: string;   // 이 프로세스 기록 기준 이 파일 상태
   last: string;
 }
 
 export default function FileDetail({ target, events, onBack, onPid }: Props) {
   const th = useThresholds();
   const dropped = droppedPids(events);
-  const rows = events.filter((e) => e.target === target && !isHiddenEvent(e))
+  // 이름 변경 기록도 원래 파일의 이력으로 함께 보여준다
+  const key = fileKey(target);
+  const rows = events.filter((e) => e.target && fileKey(e.target) === key && !isHiddenEvent(e))
     .sort((a, b) => a.time.localeCompare(b.time));
   const setattr = setattrSources(rows);
   const last = rows[rows.length - 1];
@@ -33,23 +35,24 @@ export default function FileDetail({ target, events, onBack, onPid }: Props) {
   for (const e of rows) {
     const a = map.get(e.pid) ?? { pid: e.pid, process: e.process, level: "LOW", count: 0, result: "", last: "" };
     a.count += 1;
-    if ((LEVEL_RANK[e.level] ?? 0) > (LEVEL_RANK[a.level] ?? 0)) a.level = e.level;
-    a.result = fileResult(e, dropped);
+    if ((LEVEL_RANK[displayLevel(e)] ?? 0) > (LEVEL_RANK[a.level] ?? 0)) a.level = displayLevel(e);
     a.last = e.time;
     map.set(e.pid, a);
   }
+  // 접근한 프로세스별 '이 파일 상태'는 그 프로세스의 기록만으로 계산한다
+  for (const a of map.values()) a.result = fileStatus(rows.filter((e) => e.pid === a.pid), dropped);
   const accessors = [...map.values()].sort((a, b) =>
     (LEVEL_RANK[b.level] ?? 0) - (LEVEL_RANK[a.level] ?? 0) || b.last.localeCompare(a.last));
-  const state = last ? fileResult(last, dropped) : "-";
-  const danger = (s: string) => (s === "차단" || s === "미끼 접근" ? "high" : "");
+  const state = fileStatus(rows, dropped);
+  const danger = (s: string) => (s === "차단" ? "high" : "");
 
   return (
     <>
       <fieldset>
-        <legend>파일 상세 · {shortPath(target)}</legend>
+        <legend>파일 상세 · {shortPath(key)}</legend>
         <div className="row-line">
           <button className="btn" onClick={onBack}>‹ 목록으로</button>
-          <span className="mono hint" title={target}>{target}</span>
+          <span className="mono hint" title={key}>{key}</span>
         </div>
         {rows.length === 0 ? (
           <div className="empty" style={{ height: 120 }}>이 파일의 이벤트가 없습니다.</div>
@@ -77,7 +80,7 @@ export default function FileDetail({ target, events, onBack, onPid }: Props) {
           <legend>접근한 프로세스</legend>
           <div className="list" style={{ height: "auto", maxHeight: 220 }}>
             <table>
-              <thead><tr><th>PID</th><th>프로세스</th><th>최고 위험도</th><th className="num">이 파일 작업</th><th>결과</th><th>상세</th></tr></thead>
+              <thead><tr><th>PID</th><th>프로세스</th><th>최고 위험도</th><th className="num">이 파일 작업</th><th>이 파일 상태</th><th>상세</th></tr></thead>
               <tbody>
                 {accessors.map((a) => (
                   <tr key={a.pid}>
@@ -106,8 +109,8 @@ export default function FileDetail({ target, events, onBack, onPid }: Props) {
                     <tr key={e.id} title={rawText(e)}>
                       <td className="mono">{hms(e.time)}</td>
                       <td>{e.process} ({e.pid})</td>
-                      <td className={e.level === "HIGH" ? "high" : ""}>{e.level}</td>
-                      <td className={e.level === "HIGH" ? "high" : ""}>{d.action}</td>
+                      <td className={displayLevel(e) === "HIGH" ? "high" : ""}>{displayLevel(e)}</td>
+                      <td className={displayLevel(e) === "HIGH" ? "high" : ""}>{d.action}</td>
                       <td className="why">{d.detail}</td>
                     </tr>
                   );
