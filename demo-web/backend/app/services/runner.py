@@ -39,6 +39,11 @@ from ..schemas.run import (
     RunStepResponse,
     RunWorkspace,
 )
+from .akira_results import (
+    observe_akira_files,
+    validate_akira_success,
+    verify_akira_protection,
+)
 from .holdfs_events import (
     EventScope,
     LogCheckpoint,
@@ -136,21 +141,18 @@ class ScenarioRunner:
                 scenario.disabled_reason or "실행할 수 없는 시나리오입니다."
             )
 
-        if scenario.id == "S03":
+        if scenario.id in ("S03", "S04"):
             selected_mode = next(
                 (item for item in scenario.modes if item.id == mode),
                 None,
             )
 
             if selected_mode is None:
-                raise ScenarioUnavailableError(
-                    "등록되지 않은 Huntress 실행 모드입니다."
-                )
+                raise ScenarioUnavailableError("등록되지 않은 실행 모드입니다.")
 
             if not selected_mode.enabled:
                 raise ScenarioUnavailableError(
-                    selected_mode.disabled_reason
-                    or "아직 실행할 수 없는 Huntress 모드입니다."
+                    selected_mode.disabled_reason or "아직 실행할 수 없는 모드입니다."
                 )
 
             # 실행별 정의만 교체하고 공용 catalog는 변경하지 않는다.
@@ -1194,6 +1196,71 @@ class ScenarioRunner:
                                 "issues": [f"{type(error).__name__}: {error}"],
                             }
 
+                    elif scenario.module == "scenarios.s04_akira":
+                        try:
+                            # 공격 차단·시간 초과·중단도 정리 후 파일 상태를 조회한다.
+                            record.akira_observation = await asyncio.to_thread(
+                                observe_akira_files,
+                                record.model_copy(deep=True),
+                                cleanup_confirmed=(
+                                    process is not None
+                                    and not self._cleanup_blocked
+                                    and communication is not None
+                                    and communication.done()
+                                ),
+                            )
+                        except Exception as error:
+                            logger.exception(
+                                "Akira 사후 파일 조회 실패: %s",
+                                record.run_id,
+                            )
+                            record.akira_observation = {
+                                "status": "unknown",
+                                "files": [],
+                                "issues": [f"{type(error).__name__}: {error}"],
+                            }
+
+                        try:
+                            record.protection_verification = verify_akira_protection(
+                                record
+                            )
+                        except Exception as error:
+                            logger.exception("Akira 보호 판정 실패: %s", record.run_id)
+                            record.protection_verification = {
+                                "status": "unknown",
+                                "reason": (
+                                    "보호 판정 중 오류가 발생했습니다: "
+                                    f"{type(error).__name__}: {error}"
+                                ),
+                            }
+
+                        if record.status != "cancelled":
+                            verdict = record.protection_verification
+                            for step in record.steps:
+                                if step.id == "action":
+                                    step.status = {
+                                        "passed": "passed",
+                                        "failed": "failed",
+                                        "unknown": "skipped",
+                                    }[verdict["status"]]
+                                    step.error = (
+                                        None
+                                        if verdict["status"] == "passed"
+                                        else verdict["reason"]
+                                    )
+                                elif step.id == "inspect":
+                                    observation = record.akira_observation
+                                    observed = (
+                                        isinstance(observation, dict)
+                                        and observation.get("status") == "observed"
+                                    )
+                                    step.status = "passed" if observed else "skipped"
+                                    step.error = (
+                                        None
+                                        if observed
+                                        else "종료 후 파일 상태를 모두 확인하지 못했습니다."
+                                    )
+
                     # 모든 시나리오의 정리·이벤트 수집·사후 확인이 끝난 뒤
                     # 조회 응답에서 최종 상태를 공개한다.
                     record.finished_at = now()
@@ -1225,6 +1292,17 @@ class ScenarioRunner:
             raise ValueError("잘못된 테스트 상태입니다.")
 
         validate_result_details(result)
+
+        if scenario.module == "scenarios.s04_akira":
+            if (
+                result.get("result_version") != 2
+                or record.mode not in ("head", "tail")
+                or result.get("mode") != record.mode
+            ):
+                raise ValueError("Akira 결과 버전 또는 모드가 다릅니다.")
+
+            if result["status"] == "passed":
+                validate_akira_success(result, record)
 
         if scenario.module == "scenarios.s03_huntress":
             if result.get("result_version") != 2:

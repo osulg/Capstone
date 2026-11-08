@@ -4,13 +4,27 @@ export interface ScenarioStep {
 }
 
 export type HuntressMode = "read" | "honeypot" | "delete";
+export type AkiraMode = "head" | "tail";
+
+export type ScenarioRunMode = HuntressMode | AkiraMode;
+
+export function isModeForScenario(
+  scenarioId: string,
+  value: unknown,
+): value is ScenarioRunMode {
+  if (scenarioId === "S03") {
+    return isHuntressMode(value);
+  }
+
+  return scenarioId === "S04" && (value === "head" || value === "tail");
+}
 
 export function isHuntressMode(value: unknown): value is HuntressMode {
   return value === "read" || value === "honeypot" || value === "delete";
 }
 
 export interface ScenarioMode {
-  id: HuntressMode;
+  id: ScenarioRunMode;
   name: string;
   enabled: boolean;
   disabled_reason: string | null;
@@ -49,7 +63,7 @@ export interface RunCreated {
   run_id: string;
   scenario_id: string;
   status: RunStatus;
-  mode: HuntressMode | null;
+  mode: ScenarioRunMode | null;
 }
 
 export interface RunStep extends ScenarioStep {
@@ -106,4 +120,21 @@ export interface Run extends RunCreated {
   } | null;
   error: string | null;
   deletion_observation?: DeletionObservation | null;
+  akira_observation?: {
+    status: "observed" | "unknown";
+    observed_at?: string | null;
+    cleanup_confirmed?: boolean;
+    files: {
+      name: string;
+      mount: {
+        original: FileObservationState;
+        renamed: FileObservationState;
+      };
+      underlay: {
+        original: FileObservationState;
+        renamed: FileObservationState;
+      };
+    }[];
+    issues: string[];
+  } | null;
 }

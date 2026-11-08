@@ -29,6 +29,18 @@ export default function RunResult({ run }: RunResultProps) {
     run.scenario_id === "S03" && run.mode === "honeypot";
   const isDelete = run.scenario_id === "S03" && run.mode === "delete";
   const deletion = run.deletion_observation;
+  const isAkira = run.scenario_id === "S04";
+  const akira = run.akira_observation;
+  const protectedIcefireTimeout =
+    run.scenario_id === "S01" && protectedFiles && run.status === "timed_out";
+  const policyBlock = run.result?.policy_block;
+  // 차단 확인과 자식 회수가 모두 기록된 경우에만 정책 차단 종료로 표시한다.
+  const policyBlocked =
+    (run.scenario_id === "S01" || isAkira) &&
+    policyBlock !== null &&
+    typeof policyBlock === "object" &&
+    "confirmed" in policyBlock && policyBlock.confirmed === true &&
+    "process_reaped" in policyBlock && policyBlock.process_reaped === true;
 
   // 접근 관찰 완료와 보호 검증 성공을 구분한다.
   const resultSuccess = !cancelled && (
@@ -37,6 +49,16 @@ export default function RunResult({ run }: RunResultProps) {
 
   const title = cancelled
     ? "테스트 프로세스 실행을 중단했습니다"
+    : policyBlocked
+      ? protectedFiles
+        ? "공격 차단과 원본 보존을 확인했습니다"
+        : "정책 차단을 확인해 공격 실행을 종료했습니다"
+    : isAkira
+      ? passed
+        ? "Akira 파일 작업 관찰을 완료했습니다"
+        : run.status === "timed_out"
+          ? "Akira 작업 제한 시간을 초과했습니다"
+          : "Akira 작업이 완료되기 전에 종료됐습니다"
     : isDelete
       ? passed
         ? "로그 삭제 시도와 파일 상태 관찰을 완료했습니다"
@@ -63,6 +85,10 @@ export default function RunResult({ run }: RunResultProps) {
 
   const statusLabel = cancelled
     ? "프로세스 종료"
+    : policyBlocked
+      ? protectedFiles ? "보호 검증 완료" : "정책 차단 종료"
+    : isAkira
+      ? passed ? "작업 관찰 완료" : run.status === "timed_out" ? "시간 초과" : "작업 종료"
     : isDelete
       ? passed
         ? "작업 관찰 완료"
@@ -86,14 +112,14 @@ export default function RunResult({ run }: RunResultProps) {
   return (
     <section
       className={`actual-result ${
-        cancelled ? "is-cancelled" : resultSuccess ? "is-passed" : "is-failed"
+        cancelled ? "is-cancelled" : resultSuccess ? "is-passed" : policyBlocked ? "is-cancelled" : "is-failed"
       }`}
       aria-labelledby="result-heading"
     >
       <header className="result-heading">
         <div className="result-heading-copy">
           <span className="result-icon" aria-hidden="true">
-            {cancelled ? "−" : resultSuccess ? "✓" : "!"}
+            {cancelled ? "−" : resultSuccess ? "✓" : policyBlocked ? "−" : "!"}
           </span>
           <div>
             <p className="result-eyebrow">실제 검증 결과</p>
@@ -123,6 +149,58 @@ export default function RunResult({ run }: RunResultProps) {
           </dd>
         </div>
       </dl>
+
+      {isAkira && (
+        <div className="result-policy-note">
+          <strong>
+            Akira {run.mode === "tail" ? "뒷부분" : "앞부분"} 20%
+            {" · 종료 후 파일 상태 "}
+            {akira?.status === "observed" ? "확인 완료" : "전체 확인 불가"}
+          </strong>
+          <p>
+            원본과 .akiranew 파일을 각각 확인합니다.
+            작업 완료나 시간 초과만으로 보호 성공을 판정하지 않습니다.
+          </p>
+          {(["mount", "underlay"] as const).map((side) => (
+            <p key={side}>
+              <strong>{side}</strong>
+              {" · 원본 내용 일치 "}
+              {akira ? akira.files.filter((file) => file[side].original === "matched").length : "—"}개
+              {" · 원본 내용 변경 "}
+              {akira ? akira.files.filter((file) => file[side].original === "changed").length : "—"}개
+              {" · 이름 변경 파일 발견 "}
+              {akira ? akira.files.filter((file) => file[side].renamed === "matched" || file[side].renamed === "changed").length : "—"}개
+            </p>
+          ))}
+          {akira?.issues.map((issue, index) => (
+            <p key={`${index}-${issue}`}>{issue}</p>
+          ))}
+          {akira && akira.files.length > 0 && (
+            <details>
+              <summary>파일별 상태 보기</summary>
+              <ul>
+                {akira.files.map((file) => {
+                  const labels = {
+                    matched: "내용 일치", changed: "내용 변경",
+                    missing: "파일 없음", unreadable: "확인 불가",
+                  };
+                  return (
+                    <li key={file.name}>
+                      <strong>{file.name}</strong>
+                      {(["mount", "underlay"] as const).map((side) => (
+                        <p key={side}>
+                          {side}{" · 원본: "}{labels[file[side].original]}
+                          {" · .akiranew: "}{labels[file[side].renamed]}
+                        </p>
+                      ))}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
 
       {isDelete && (
         <div className="result-policy-note">
@@ -183,6 +261,8 @@ export default function RunResult({ run }: RunResultProps) {
           <p>
             {isHoneypot
               ? "등록된 접근 PID와 허니팟 경로의 접근 거부·차단 근거를 확인한 결과입니다. 미끼 내용 보존과 Stage 2 상태 판정은 검증 범위에 포함하지 않습니다."
+              : isAkira
+                ? "등록된 공격 PID의 차단·회수와 mount·underlay 원본 VM 더미 파일 8개의 내용 일치를 확인한 결과입니다."
               : "관찰 시점의 문서 내용과 차단 근거를 확인한 결과입니다. 후속 지연 작업 완료나 일반적인 탐지·오탐 성능을 보장하지 않습니다."}
           </p>
         </div>
@@ -216,6 +296,24 @@ export default function RunResult({ run }: RunResultProps) {
             이 중단 요청은 대기 작업을 폐기하거나 파일 변경을 되돌리지 않습니다.
           </p>
           <p>최종 반영 내역은 대시보드에서 해당 작업 PID로 확인하세요.</p>
+        </div>
+      ) : policyBlocked ? (
+        <div className="result-policy-note">
+          <strong>공격 프로세스 종료·회수 완료</strong>
+          <p>
+            정지된 공격 PID와 이번 실행 경로의 HIGH 차단 기록을 확인했습니다.
+            원본 보존 여부는 별도 파일 상태 결과로 확인하세요.
+          </p>
+          <p>원래 실행 상태와 차단 근거는 상세 JSON에 유지됩니다.</p>
+        </div>
+      ) : protectedIcefireTimeout ? (
+        <div className="result-policy-note">
+          <strong>공격 작업 응답 대기 종료</strong>
+          <p>
+            공격 작업은 제한 시간 안에 완료 응답을 반환하지 못했습니다.
+            별도 보호 검증에서는 차단 근거와 원본 보존을 확인했습니다.
+          </p>
+          <p>실행 상태와 원래 오류는 상세 JSON에 유지됩니다.</p>
         </div>
       ) : run.error ? (
         <div className="result-error" role="alert">

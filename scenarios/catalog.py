@@ -200,11 +200,36 @@ SCENARIOS = (
         name="Akira",
         category="부분 덮어쓰기",
         description=(
-            "더미 VM 파일의 일부를 덮어쓰고 확장자 변경과 모의 노트 생성을 시도합니다."
+            "더미 VM 파일의 앞부분 또는 뒷부분 20% 덮어쓰기와 "
+            "확장자 변경을 시도하고 실제 파일 상태를 확인합니다."
         ),
-        expected_result=("부분 변경 결과와 HoldFS 탐지·보호 이벤트를 관찰합니다."),
-        enabled=False,
-        disabled_reason="웹 실행 연결 및 Ubuntu 검증 예정입니다.",
+        expected_result=(
+            "head·tail의 파일 변경 결과와 HoldFS 탐지·보호 이벤트를 비교합니다."
+        ),
+        enabled=True,
+        disabled_reason=None,
+        module="scenarios.s04_akira",
+        modes=(
+            ScenarioMode(
+                id="head",
+                name="앞부분 20%",
+                enabled=True,
+                disabled_reason=None,
+            ),
+            ScenarioMode(
+                id="tail",
+                name="뒷부분 20%",
+                enabled=True,
+                disabled_reason=None,
+            ),
+        ),
+        steps=(
+            ScenarioStep("precheck", "실행 환경 확인", ("PRECHECK",)),
+            ScenarioStep("prepare", "더미 VM 파일 준비", ("PREPARE",)),
+            ScenarioStep("verify_ready", "파일 공개 확인", ("VERIFY_READY",)),
+            ScenarioStep("action", "부분 덮어쓰기 시도", ("ACTION",)),
+            ScenarioStep("inspect", "파일 상태 확인", ("INSPECT",)),
+        ),
     ),
 )
 

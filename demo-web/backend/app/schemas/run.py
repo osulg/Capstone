@@ -28,21 +28,29 @@ StepStatus = Literal[
 ]
 
 HuntressMode = Literal["read", "honeypot", "delete"]
+AkiraMode = Literal["head", "tail"]
+
+ScenarioRunMode = HuntressMode | AkiraMode
 
 
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scenario_id: str = Field(pattern=r"^S0[1-4]$")
-    mode: HuntressMode | None = None
+    mode: ScenarioRunMode | None = None
 
     @model_validator(mode="after")
     def validate_mode(self):
-        if self.scenario_id == "S03":
-            if self.mode is None:
-                raise ValueError("S03은 실행 모드를 선택해야 합니다.")
+        allowed_modes = {
+            "S03": {"read", "honeypot", "delete"},
+            "S04": {"head", "tail"},
+        }
+
+        if self.scenario_id in allowed_modes:
+            if self.mode not in allowed_modes[self.scenario_id]:
+                raise ValueError("시나리오에 맞는 실행 모드를 선택해야 합니다.")
         elif self.mode is not None:
-            raise ValueError("실행 모드는 S03에서만 지정할 수 있습니다.")
+            raise ValueError("이 시나리오는 실행 모드를 지원하지 않습니다.")
 
         return self
 
@@ -53,7 +61,7 @@ class RunCreatedResponse(BaseModel):
     run_id: str
     scenario_id: str
     status: RunStatus
-    mode: HuntressMode | None = None
+    mode: ScenarioRunMode | None = None
 
 
 class RunStepResponse(BaseModel):
@@ -116,7 +124,7 @@ class RunResponse(BaseModel):
 
     run_id: str
     scenario_id: str
-    mode: HuntressMode | None = None
+    mode: ScenarioRunMode | None = None
     status: RunStatus = Field(
         description=(
             "cancelling은 테스트 프로세스 종료 처리 중, "
@@ -149,3 +157,5 @@ class RunResponse(BaseModel):
     event_collection: RunEventCollection | None = None
     protection_verification: dict[str, Any] | None = None
     deletion_observation: dict[str, Any] | None = None
+
+    akira_observation: dict[str, Any] | None = None

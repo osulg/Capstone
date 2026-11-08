@@ -10,7 +10,7 @@ import {
 } from "../api/clients";
 
 import type {
-  HuntressMode,
+  ScenarioRunMode,
   Run,
   RunStatus,
   RunStep,
@@ -18,7 +18,8 @@ import type {
   StepStatus,
 } from "../types/api";
 
-import { isHuntressMode } from "../types/api";
+import { isModeForScenario } from "../types/api";
+import { getRunPresentation } from "../utils/runPresentation";
 
 import {
   clearSavedRun,
@@ -37,16 +38,6 @@ const TERMINAL_STATUSES: RunStatus[] = [
   "cancelled",
 ];
 
-const RUN_LABELS: Record<RunStatus, string> = {
-  queued: "실행 대기",
-  running: "실행 중",
-  cancelling: "프로세스 종료 중",
-  passed: "파일 작업 검증 성공",
-  failed: "검증 실패",
-  timed_out: "시간 초과",
-  cancelled: "테스트 프로세스 종료됨",
-};
-
 const STEP_LABELS: Record<StepStatus, string> = {
   pending: "대기",
   running: "실행 중",
@@ -55,16 +46,20 @@ const STEP_LABELS: Record<StepStatus, string> = {
   skipped: "검증하지 못함",
 };
 
-const MODE_DESCRIPTIONS: Record<HuntressMode, string> = {
+const MODE_DESCRIPTIONS: Record<ScenarioRunMode, string> = {
   read: "더미 자격 파일 6개를 읽고 내용 변화를 확인합니다.",
   honeypot: "미리 배치한 미끼에 접근하고 차단 근거를 확인합니다.",
   delete: "더미 로그 12개 삭제를 시도하고 남은 파일을 확인합니다.",
+  head: "더미 VM 파일 앞부분 20%를 덮어쓰고 확장자 변경을 시도합니다.",
+  tail: "더미 VM 파일 뒷부분 20%를 덮어쓰고 확장자 변경을 시도합니다.",
 };
 
-const MODE_CONDITIONS: Record<HuntressMode, string> = {
+const MODE_CONDITIONS: Record<ScenarioRunMode, string> = {
   read: "더미 자격 파일 6개 · 전체 1회 읽기",
   honeypot: "미끼 5개 사전 준비 · 경로별 접근 시도",
   delete: "더미 로그 12개 · 삭제 간격 0.1초",
+  head: "VM 더미 8개 × 64KB · 앞부분 20% · 작업 제한 30초",
+  tail: "VM 더미 8개 × 64KB · 뒷부분 20% · 작업 제한 30초",
 };
 
 function isFinished(status: RunStatus): boolean {
@@ -92,7 +87,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
   const [selectedId, setSelectedId] = useState(
     savedRun?.scenarioId ?? "S01",
   );
-  const [selectedMode, setSelectedMode] = useState<HuntressMode>(
+  const [selectedMode, setSelectedMode] = useState<ScenarioRunMode>(
     savedRun?.mode ?? "read",
   );
   const [loading, setLoading] = useState(true);
@@ -135,12 +130,13 @@ export default function Demo({ onReplayIntro }: DemoProps) {
     run?.status === "cancelling";
 
   const selected = scenarios.find((item) => item.id === selectedId);
+  const hasModes = selected?.id === "S03" || selected?.id === "S04";
   const selectedModeDefinition =
-    selected?.id === "S03"
+    hasModes
       ? (selected.modes ?? []).find((mode) => mode.id === selectedMode)
       : undefined;
   const modeUnavailable =
-    selected?.id === "S03" && selectedModeDefinition?.enabled !== true;
+    hasModes && selectedModeDefinition?.enabled !== true;
 
   // 조회가 실패해도 실제 테스트가 종료됐다고 가정하지 않는다.
   const awaitingResult =
@@ -205,14 +201,14 @@ export default function Demo({ onReplayIntro }: DemoProps) {
 
         // 저장값보다 서버가 반환한 실제 실행 정보를 우선한다.
         setSelectedId(result.scenario_id);
-        if (result.scenario_id === "S03" && isHuntressMode(result.mode)) {
+        if (isModeForScenario(result.scenario_id, result.mode)) {
           setSelectedMode(result.mode);
         }
         saveRun({
           runId: result.run_id,
           scenarioId: result.scenario_id,
           mode:
-            result.scenario_id === "S03" && isHuntressMode(result.mode)
+            isModeForScenario(result.scenario_id, result.mode)
               ? result.mode
               : null,
         });
@@ -260,7 +256,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
 
     clearSavedRun();
     setSelectedId(id);
-    setSelectedMode("read");
+    setSelectedMode(id === "S04" ? "head" : "read");
     setRunId(null);
     setRun(null);
     setStartError("");
@@ -273,8 +269,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
   function selectMode(value: string) {
     if (
       busy ||
-      selectedId !== "S03" ||
-      !isHuntressMode(value) ||
+      !isModeForScenario(selectedId, value) ||
       value === selectedMode
     ) return;
 
@@ -298,7 +293,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
     setStartError("");
 
     try {
-      const mode = selected.id === "S03" ? selectedMode : null;
+      const mode = selected.id === "S03" || selected.id === "S04" ? selectedMode : null;
       const created = await startRun(selected.id, mode);
 
       const stored = saveRun({
@@ -393,26 +388,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
   const completed = steps.filter((step) => step.status === "passed").length;
   const progress = steps.length > 0 ? (completed / steps.length) * 100 : 0;
 
-  const isHoneypotRun =
-    run?.scenario_id === "S03" && run.mode === "honeypot";
-  const protectionStatus = run?.protection_verification?.status;
-
-  // 허니팟 접근 관찰 완료를 보호 검증 성공으로 표시하지 않는다.
-  const runBadgeText = run
-    ? run.status === "cancelled"
-      ? RUN_LABELS[run.status]
-      : isHoneypotRun && protectionStatus
-        ? protectionStatus === "passed"
-          ? "접근 차단 확인"
-          : protectionStatus === "failed"
-            ? "보호 검증 실패"
-            : "보호 판정 불가"
-        : protectionStatus === "passed"
-          ? "보호 검증 완료"
-          : isHoneypotRun && run.status === "passed"
-            ? "접근 관찰 완료"
-            : RUN_LABELS[run.status]
-    : "";
+  const presentation = run ? getRunPresentation(run) : null;
 
   const badgeText = startUncertain
     ? "서버 확인 필요"
@@ -420,29 +396,15 @@ export default function Demo({ onReplayIntro }: DemoProps) {
       ? "요청 중"
       : pollError
         ? "조회 확인 필요"
-        : run
-          ? runBadgeText
+        : presentation
+          ? presentation.label
           : runId
             ? "상태 확인 중"
             : selected?.enabled
               ? "준비됨"
               : "준비 중";
 
-  const badgeTone =
-    run?.status === "cancelled"
-      ? "neutral"
-      : isHoneypotRun
-        ? protectionStatus === "passed"
-          ? "success"
-          : protectionStatus === "failed" ||
-              run?.status === "failed" || run?.status === "timed_out"
-            ? "error"
-            : "neutral"
-        : run?.status === "passed" || protectionStatus === "passed"
-          ? "success"
-          : run?.status === "failed" || run?.status === "timed_out"
-            ? "error"
-            : "neutral";
+  const badgeTone = presentation?.tone ?? "neutral";
 
   return (
     <main className="demo-page">
@@ -526,7 +488,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
               {scenarios.map((scenario) => (
                 <div
                   key={scenario.id}
-                  className={`scenario-group ${scenario.id === "S03" && selectedId === "S03" ? "is-expanded" : ""}`}
+                  className={`scenario-group ${(scenario.id === "S03" || scenario.id === "S04") && selectedId === scenario.id ? "is-expanded" : ""}`}
                 >
                 <label
                   className={`scenario-option ${
@@ -556,10 +518,10 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                     {selectedId === scenario.id ? "✓" : ""}
                   </span>
                 </label>
-                {scenario.id === "S03" && selectedId === "S03" && (
+                {(scenario.id === "S03" || scenario.id === "S04") && selectedId === scenario.id && (
                   <div className="huntress-panel">
                     <fieldset className="huntress-tabs">
-                      <legend className="sr-only">Huntress 실행 모드</legend>
+                      <legend className="sr-only">{scenario.name} 실행 모드</legend>
                       {(scenario.modes ?? []).filter((mode) => mode.id !== "delete").map((mode) => (
                         <label
                           key={mode.id}
@@ -567,12 +529,12 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                         >
                           <input
                             type="radio"
-                            name="huntress-mode"
+                            name={`scenario-mode-${scenario.id}`}
                             value={mode.id}
                             checked={selectedMode === mode.id}
                             onChange={() => selectMode(mode.id)}
                           />
-                          <span>{mode.id === "read" ? "일반 읽기" : mode.id === "honeypot" ? "허니팟 접근" : "로그 삭제"}</span>
+                          <span>{mode.id === "read" ? "일반 읽기" : mode.id === "honeypot" ? "허니팟 접근" : mode.name}</span>
                         </label>
                       ))}
                     </fieldset>
@@ -586,7 +548,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                         </div>
                         <div>
                           <dt>확인 범위</dt>
-                          <dd>{selectedMode === "read" ? "읽기 결과와 내용 불변" : selectedMode === "honeypot" ? "접근 결과와 차단 근거" : "삭제 결과와 실제 파일 보존"}</dd>
+                          <dd>{selectedMode === "read" ? "읽기 결과와 내용 불변" : selectedMode === "honeypot" ? "접근 결과와 차단 근거" : selectedMode === "delete" ? "삭제 결과와 실제 파일 상태" : "원본·이름 변경 파일의 내용과 탐지 이벤트"}</dd>
                         </div>
                       </dl>
                     </div>

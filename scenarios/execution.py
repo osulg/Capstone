@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
+from scenarios.akira_config import TOTAL_TIMEOUT_SECONDS as AKIRA_TIMEOUT_SECONDS
 from scenarios.huntress_config import TOTAL_TIMEOUT_SECONDS
 
 
@@ -63,6 +64,15 @@ _EXECUTIONS = MappingProxyType(
                 str(TOTAL_TIMEOUT_SECONDS),
             ),
             timeout_seconds=TOTAL_TIMEOUT_SECONDS,
+        ),
+        "scenarios.s04_akira": ExecutionSpec(
+            scenario_id="S04",
+            module="scenarios.s04_akira",
+            extra_args=(
+                "--total-timeout",
+                str(AKIRA_TIMEOUT_SECONDS),
+            ),
+            timeout_seconds=AKIRA_TIMEOUT_SECONDS,
         ),
     }
 )

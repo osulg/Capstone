@@ -14,17 +14,26 @@ import sys
 import uuid
 from pathlib import Path
 
+from scenarios.blocked_worker import (
+    PolicyBlockedError,
+    capture_policy_position,
+    communicate_with_policy_watch,
+)
 from scenarios.common import (
     emit_progress,
     get_runtime_paths,
     register_process_and_wait,
     timestamp,
 )
-from scenarios.results import validate_result_details
 from scenarios.icefire_config import (
-    FILE_COUNT, FILE_SIZE_KIB, PREPARE_TIMEOUT_SECONDS,
-    ATTACK_TIMEOUT_SECONDS, WORKER_PYTHON, expected_operations,
+    ATTACK_TIMEOUT_SECONDS,
+    FILE_COUNT,
+    FILE_SIZE_KIB,
+    PREPARE_TIMEOUT_SECONDS,
+    WORKER_PYTHON,
+    expected_operations,
 )
+from scenarios.results import validate_result_details
 from scenarios.s01_normal import check_health, find_guardfs_pid
 from scenarios.workers import registered_worker
 
@@ -87,12 +96,17 @@ def parse_args():
         "--work-dir-name",
         default=f"s01_{uuid.uuid4().hex}",
     )
-    parser.add_argument("--prepare-timeout", type=float, default=PREPARE_TIMEOUT_SECONDS)
+    parser.add_argument(
+        "--prepare-timeout", type=float, default=PREPARE_TIMEOUT_SECONDS
+    )
     parser.add_argument("--attack-timeout", type=float, default=ATTACK_TIMEOUT_SECONDS)
     parser.add_argument("--worker-python", type=Path, default=WORKER_PYTHON)
     parser.add_argument("--wait-registration-ack", action="store_true")
-    parser.add_argument("--run-attack", action="store_true",
-                        help="준비·공개 확인 성공 후 공격 모의 작업을 실행합니다.")
+    parser.add_argument(
+        "--run-attack",
+        action="store_true",
+        help="준비·공개 확인 성공 후 공격 모의 작업을 실행합니다.",
+    )
     args = parser.parse_args()
 
     if not args.wait_registration_ack:
@@ -118,7 +132,9 @@ def run(args):
     underlay = args.underlay.expanduser().resolve()
     workdir = mount / args.work_dir_name
     run_attack = getattr(args, "run_attack", False)
-    worker_python = Path(getattr(args, "worker_python", WORKER_PYTHON)).expanduser().absolute()
+    worker_python = (
+        Path(getattr(args, "worker_python", WORKER_PYTHON)).expanduser().absolute()
+    )
     attack_timeout = getattr(args, "attack_timeout", ATTACK_TIMEOUT_SECONDS)
 
     report = {
@@ -194,6 +210,8 @@ def run(args):
             str(timeout),
         ]
 
+        checkpoint = capture_policy_position() if action == "attack" else None
+
         # 관리자가 등록 응답을 받은 다음에만 자식에게 START를 보낸다.
         with registered_worker(
             SCENARIO_ID,
@@ -208,7 +226,20 @@ def run(args):
             # START 전송 후 닫힌 stdin을 communicate가 다시 flush하지 않게 한다.
             if process.stdin is not None and process.stdin.closed:
                 process.stdin = None
-            stdout, _ = process.communicate(timeout=timeout + 1.0)
+            if action == "attack":
+                try:
+                    stdout, _ = communicate_with_policy_watch(
+                        process,
+                        metadata,
+                        timeout=timeout + 1.0,
+                        checkpoint=checkpoint,
+                        workspace=underlay / args.work_dir_name,
+                    )
+                except PolicyBlockedError as error:
+                    report["policy_block"] = error.evidence
+                    raise
+            else:
+                stdout, _ = process.communicate(timeout=timeout + 1.0)
             try:
                 payload = json.loads(stdout.decode("utf-8"))
                 payload = validate_task_result(payload, action, process.returncode)

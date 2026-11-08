@@ -1,4 +1,5 @@
-import type { Run, RunStatus } from "../types/api";
+import type { Run } from "../types/api";
+import { getRunPresentation } from "../utils/runPresentation";
 
 interface RunInfoProps {
   runId: string;
@@ -7,16 +8,6 @@ interface RunInfoProps {
   /** 조회 실패 시 현재 표시가 마지막으로 받은 정보임을 안내한다. */
   stale: boolean;
 }
-
-const STATUS_LABELS: Record<RunStatus, string> = {
-  queued: "실행 대기",
-  running: "실행 중",
-  cancelling: "프로세스 종료 중",
-  passed: "성공",
-  failed: "실패",
-  timed_out: "시간 초과",
-  cancelled: "테스트 프로세스 종료됨",
-};
 
 const ROLE_LABELS: Record<string, string> = {
   normal_worker: "정상 작업",
@@ -47,7 +38,7 @@ export default function RunInfo({
       <div className="run-info-heading">
         <h3 id="run-info-heading">실행 정보</h3>
         <span>
-          {run ? STATUS_LABELS[run.status] : "상태 확인 중"}
+          {run ? getRunPresentation(run).label : "상태 확인 중"}
         </span>
       </div>
 

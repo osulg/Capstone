@@ -1,11 +1,11 @@
-import { isHuntressMode } from "../types/api";
-import type { HuntressMode } from "../types/api";
+import { isModeForScenario } from "../types/api";
+import type { ScenarioRunMode } from "../types/api";
 
 /** 같은 탭에서 새로고침 후 복구할 실행 정보 */
 export interface SavedRun {
   runId: string;
   scenarioId: string;
-  mode: HuntressMode | null;
+  mode: ScenarioRunMode | null;
 }
 
 const STORAGE_KEY = "holdfs.demo.savedRun.v1";
@@ -35,10 +35,9 @@ export function readSavedRun(): SavedRun | null {
     return {
       runId: value.runId,
       scenarioId: value.scenarioId,
-      mode:
-        value.scenarioId === "S03" && isHuntressMode(storedMode)
-          ? storedMode
-          : null,
+      mode: isModeForScenario(value.scenarioId, storedMode)
+        ? storedMode
+        : null,
     };
   } catch {
     return null;

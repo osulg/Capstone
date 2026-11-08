@@ -1,4 +1,4 @@
-import type { HuntressMode, Run, RunCreated, Scenario, } from "../types/api";
+import type { ScenarioRunMode, Run, RunCreated, Scenario, } from "../types/api";
 
 /** 서버가 HTTP 오류 응답을 반환한 경우 */
 export class ApiError extends Error {
@@ -59,10 +59,10 @@ export function getScenarios(): Promise<Scenario[]> {
 
 export function startRun(
   scenarioId: string,
-  mode: HuntressMode | null = null,
+  mode: ScenarioRunMode | null = null,
 ): Promise<RunCreated> {
   const payload =
-    scenarioId === "S03"
+    scenarioId === "S03" || scenarioId === "S04"
       ? { scenario_id: scenarioId, mode }
       : { scenario_id: scenarioId };
 
