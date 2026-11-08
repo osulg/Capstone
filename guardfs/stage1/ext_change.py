@@ -19,6 +19,10 @@ from guardfs.common.config import (
 )
 
 # 랜섬웨어 및 악성코드에서 자주 관찰되는 확장자
+#
+# 주의: 이 집합은 Stage 1 ExtChangeDetector(즉시 탐지)만 사용한다. Stage 2 동적
+# ML 피처의 확장자 변경 판정은 guardfs/common/ext_rule.py 가 전담하며 이 집합을
+# 참조하지 않으므로, 여기에 확장자를 추가해도 학습 모델/피처 스키마에는 영향이 없다.
 SUSPICIOUS_EXTENSIONS = {
     ".locked",
     ".enc",
@@ -38,6 +42,12 @@ SUSPICIOUS_EXTENSIONS = {
     ".evil",
     ".malware",
     ".payload",
+    # 본 프로젝트가 재현하는 Linux 랜섬웨어 계열의 확장자(공개 사고 보고서 관찰치).
+    # 추가 전에는 이 계열들이 즉시 탐지 목록에 없어 '정상→unknown' 5개 누적에만
+    # 의존했다(단일 파일/소수 파일 변조는 놓침). 계열 특정 확장자이므로 추가한다.
+    ".ifire",     # IceFire (SentinelLABS 2023-03). 보고서의 .iFire 는 소문자 비교로 포함
+    ".akira",     # Akira (FBI/CISA AA24-109A, 안랩)
+    ".akiranew",  # Akira_v2 (Unit 42 Howling Scorpius)
 }
 
 # 정상 확장자

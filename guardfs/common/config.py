@@ -238,3 +238,22 @@ INTERPRETER_BASENAMES = {
     "zsh",
     "php",
 }
+
+# ========== Stage 2 - Lineage(계보) 집계 ========== #
+# 신뢰 시스템 도구를 파일당 one-shot으로 호출하는 공격(openssl 루프 = 실제
+# DarkRadiation bash 웜 방식)은 각 PID가 Stage2 재평가 전에 죽어 per-PID 추적을
+# 우회한다. 신뢰 writer의 행동을 부모(lineage) 단위로 누적해 Stage2가 재평가하게
+# 한다. 격상 결정은 lineage가 아니라 기존 Stage2 임계(STAGE2_DYN_ONLY_HIGH_THRESHOLD/
+# STAGE2_HIGH_THRESHOLD)가 그대로 내린다 — lineage는 입력만 공급한다.
+LINEAGE_AGGREGATION_ENABLED = True
+
+# lineage 트랙을 Stage2로 올리기 위한 최소 폭(노이즈/단발 배제).
+#   - 서로 다른 자식 PID 수: one-shot 루프 형태의 식별자(단일 지속 프로세스는 기존
+#     per-PID 경로가 처리하므로 lineage 불필요)
+#   - 고엔트로피 write된 서로 다른 파일 수: 기존 ENTROPY_BURST_MIN_FILES(3)와 정렬
+LINEAGE_MIN_CHILD_PIDS = 2
+LINEAGE_MIN_FILES = 3
+
+# lineage 부모가 세션 리더(로그인/대화형 셸일 가능성)면 탐지·격상은 하되 SIGSTOP은
+# 보류하고 로그만 남긴다(대화형 셸을 얼리는 것을 피함). 잔여 위험은 문서화된 한계.
+LINEAGE_SKIP_SIGSTOP_FOR_SESSION_LEADER = True
