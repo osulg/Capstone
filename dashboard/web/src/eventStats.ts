@@ -58,19 +58,30 @@ export function dropEmptyCommit(rows: EdrEvent[]): EdrEvent[] {
   });
 }
 
-// PID 별 목록. PID 상세와 같은 기준으로 숨길 기록을 빼고 세며(숨길 기록만 있는 PID 는 목록에 없음),
-// 마지막 활동이 최근인 순으로 정렬한다.
-export function byPid(events: EdrEvent[]): PidRow[] {
+// 화면에 보여줄 기록만 남긴다. 그래프·PID 목록·파일 목록·상세가 모두 이 기준을 쓴다.
+//  - isHiddenEvent (반영 전 다시 지운 새 파일, '버퍼 0개 드롭')
+//  - PID 별로 dropEmptyCommit (반영한 파일이 없는 '반영 완료')
+export function shownEvents(events: EdrEvent[]): EdrEvent[] {
   const perPid = new Map<number, EdrEvent[]>();
   for (const e of events) {
     if (isHiddenEvent(e)) continue;
     const list = perPid.get(e.pid);
     if (list) list.push(e); else perPid.set(e.pid, [e]);
   }
+  const out: EdrEvent[] = [];
+  for (const list of perPid.values()) out.push(...dropEmptyCommit([...list].sort((a, b) => a.time.localeCompare(b.time))));
+  return out;
+}
+
+// PID 별 목록 (shownEvents 를 거친 기록을 넣는다). 마지막 활동이 최근인 순으로 정렬한다.
+export function byPid(events: EdrEvent[]): PidRow[] {
+  const perPid = new Map<number, EdrEvent[]>();
+  for (const e of shownEvents(events)) {
+    const list = perPid.get(e.pid);
+    if (list) list.push(e); else perPid.set(e.pid, [e]);
+  }
   const rows: PidRow[] = [];
-  for (const [pid, list] of perPid) {
-    const shown = dropEmptyCommit([...list].sort((a, b) => a.time.localeCompare(b.time)));
-    if (!shown.length) continue;
+  for (const [pid, shown] of perPid) {
     const r: PidRow = { pid, process: shown[0].process, level: "LOW", count: shown.length, last: "", lastTime: "" };
     for (const e of shown) {
       if ((LEVEL_RANK[e.level] ?? 0) > (LEVEL_RANK[r.level] ?? 0)) r.level = e.level;

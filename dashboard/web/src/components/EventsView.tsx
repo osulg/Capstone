@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import { byFile, byPid, buckets, inPeriod, periodStart, PERIODS, type Period } from "../eventStats";
+import { byFile, byPid, buckets, inPeriod, periodStart, PERIODS, shownEvents, type Period } from "../eventStats";
 import type { EdrEvent } from "../types";
 import EventChart from "./EventChart";
 import FileDetail from "./FileDetail";
@@ -20,7 +20,8 @@ type Detail = { kind: "pid"; pid: number } | { kind: "file"; target: string } | 
 export default function EventsView({ events, onAskAi }: Props) {
   const [period, setPeriod] = useState<Period>("1h");
   const [detail, setDetail] = useState<Detail>(null);
-  const scoped = useMemo(() => inPeriod(events, period), [events, period]);
+  // 그래프·목록이 같은 기록을 세도록 화면에 보여줄 기록만 남긴다 (상세 화면과 같은 기준)
+  const scoped = useMemo(() => shownEvents(inPeriod(events, period)), [events, period]);
 
   // 차단 작업이 수행된 프로세스: 쓰기·이름 변경 등이 차단됐거나(BLOCKED) HIGH로 정지된 PID
   const blockedPids = new Set(scoped
