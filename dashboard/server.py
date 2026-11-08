@@ -62,6 +62,26 @@ _next_id = 1
 _generation = int(time.time() * 1000)
 
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+# AI 분석관 남용 방지 (외부 LLM 호출 = API 요금). 환경변수로 바꿀 수 있다.
+CHAT_MAX_QUESTION_CHARS = int(os.environ.get("DASH_CHAT_MAX_CHARS", "2000"))   # 질문 최대 길이
+CHAT_MAX_HISTORY_CHARS = 4000        # 이전 대화 한 턴의 최대 길이 (최근 8턴만 보냄)
+CHAT_MAX_TOKENS = int(os.environ.get("DASH_CHAT_MAX_TOKENS", "1000"))           # 답변 최대 길이(토큰)
+CHAT_RATE_PER_MIN = int(os.environ.get("DASH_CHAT_RATE_PER_MIN", "10"))         # LLM 호출 분당 최대 횟수(서버 전체)
+_chat_calls: list[float] = []
+_chat_lock = threading.Lock()
+
+
+def _chat_rate_ok() -> bool:
+    """최근 60초 동안의 LLM 호출 수가 한도 미만이면 이번 호출을 기록하고 True."""
+    now = time.time()
+    with _chat_lock:
+        while _chat_calls and now - _chat_calls[0] > 60:
+            _chat_calls.pop(0)
+        if len(_chat_calls) >= CHAT_RATE_PER_MIN:
+            return False
+        _chat_calls.append(now)
+        return True
 _llm_client = None
 if OpenAI is not None and os.environ.get("OPENAI_API_KEY"):
     _llm_client = OpenAI()
@@ -253,6 +273,10 @@ def chat():
     history = body.get("history") or []
     if not question:
         return jsonify({"error": "message required"}), 400
+    if len(question) > CHAT_MAX_QUESTION_CHARS:
+        return jsonify({"error": f"질문은 {CHAT_MAX_QUESTION_CHARS}자 이하로 입력하세요."}), 413
+    if not isinstance(history, list):
+        history = []
 
     evs = _snapshot()
     context, summaries, docs = build_context(question, evs)
@@ -265,15 +289,20 @@ def chat():
     if _llm_client is None:
         return jsonify({"reply": local_analysis(question, evs), "mode": "local", "sources": sources})
 
+    if not _chat_rate_ok():
+        return jsonify({"error": f"AI 분석관 요청이 너무 많습니다 (분당 {CHAT_RATE_PER_MIN}회). 잠시 후 다시 시도하세요."}), 429
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": RAG_INSTRUCTION.format(context=context)},
     ]
     for turn in history[-8:]:
+        if not isinstance(turn, dict):
+            continue
         role = turn.get("role")
         content = turn.get("content")
         if role in ("user", "assistant") and isinstance(content, str):
-            messages.append({"role": role, "content": content[:4000]})
+            messages.append({"role": role, "content": content[:CHAT_MAX_HISTORY_CHARS]})
     messages.append({"role": "user", "content": question})
 
     try:
@@ -281,6 +310,7 @@ def chat():
             model=OPENAI_MODEL,
             messages=messages,
             temperature=0.3,
+            max_tokens=CHAT_MAX_TOKENS,
         )
         reply = resp.choices[0].message.content or ""
         return jsonify({"reply": reply, "mode": "llm", "sources": sources})

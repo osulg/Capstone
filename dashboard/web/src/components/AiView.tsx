@@ -65,7 +65,7 @@ export default function AiView({ messages, busy, status, onAsk }: Props) {
       </div>
 
       <div className="ai-composer">
-        <textarea ref={inputRef} rows={2} placeholder="질문을 입력하세요"
+        <textarea ref={inputRef} rows={2} maxLength={2000} placeholder="질문을 입력하세요"
           value={input} onChange={(e) => { typed.current = true; setInput(e.target.value); }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
