@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { Run } from "../types/api";
 
 interface RunResultProps {
@@ -19,6 +20,31 @@ function durationLabel(run: Run): string {
 
 /** 파일 작업 검증, 프로세스 실행 중단, 탐지 검증 결과를 구분해 표시한다. */
 export default function RunResult({ run }: RunResultProps) {
+  const [copyStatus, setCopyStatus] = useState<{
+    runId: string;
+    state: "copying" | "copied" | "failed";
+  } | null>(null);
+  const currentCopyStatus =
+    copyStatus?.runId === run.run_id ? copyStatus.state : null;
+
+  useEffect(() => {
+    if (copyStatus?.state !== "copied") return;
+    const timer = window.setTimeout(() => setCopyStatus(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copyStatus]);
+
+  async function copyJson() {
+    const runId = run.run_id;
+    setCopyStatus({ runId, state: "copying" });
+    try {
+      // 화면에 표시하는 전체 실행 응답을 복사한다.
+      await navigator.clipboard.writeText(JSON.stringify(run, null, 2));
+      setCopyStatus({ runId, state: "copied" });
+    } catch {
+      setCopyStatus({ runId, state: "failed" });
+    }
+  }
+
   const passed = run.status === "passed";
   const cancelled = run.status === "cancelled";
   const completed = run.steps.filter((step) => step.status === "passed").length;
@@ -334,7 +360,35 @@ export default function RunResult({ run }: RunResultProps) {
             <span className="result-chevron" aria-hidden="true">⌄</span>
           </span>
         </summary>
-        <div className="result-json-header">시나리오 실행 결과</div>
+        <div className="result-json-header">
+          <span>시나리오 실행 결과</span>
+          <button
+            className="result-copy-button"
+            type="button"
+            onClick={() => void copyJson()}
+            disabled={currentCopyStatus === "copying"}
+            aria-label={currentCopyStatus === "copied" ? "JSON 복사 완료" : "JSON 복사"}
+            title={currentCopyStatus === "copied" ? "복사 완료" : "JSON 복사"}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              {currentCopyStatus === "copied" ? (
+                <path d="m5 12 4 4L19 6" />
+              ) : (
+                <>
+                  <rect x="8" y="8" width="12" height="12" rx="2" />
+                  <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+                </>
+              )}
+            </svg>
+          </button>
+          <span className={currentCopyStatus === "failed" ? "result-copy-status" : "sr-only"} role="status" aria-live="polite">
+            {currentCopyStatus === "copied"
+              ? "JSON 복사 완료"
+              : currentCopyStatus === "failed"
+                ? "복사하지 못했습니다. 아래 JSON을 직접 선택해 복사해주세요."
+                : ""}
+          </span>
+        </div>
         <pre tabIndex={0} aria-label="시나리오 실행 결과 JSON">
           <code>{JSON.stringify(run, null, 2)}</code>
         </pre>

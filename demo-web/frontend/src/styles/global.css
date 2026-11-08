@@ -673,6 +673,10 @@ summary:focus-visible {
 .result-details[open] .result-chevron { transform: rotate(180deg); }
 
 .result-json-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   padding: 11px 18px;
   border-top: 1px solid #e8e8e8;
   border-bottom: 1px solid #e8e8e8;
@@ -680,6 +684,28 @@ summary:focus-visible {
   color: #737373;
   font-size: 11px;
 }
+
+.result-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  padding: 6px;
+  border: 1px solid #d8d8d8;
+  border-radius: 999px;
+  background: #fff;
+  color: #404040;
+  font: inherit;
+  cursor: pointer;
+}
+
+.result-copy-button:hover { background: #eaeaea; }
+.result-copy-button:focus-visible { outline: 2px solid #737373; outline-offset: 2px; }
+.result-copy-button:disabled { opacity: 0.6; cursor: wait; }
+.result-copy-status { flex-basis: 100%; }
+.result-copy-status:empty { display: none; }
 
 .actual-result .result-details pre {
   max-height: 360px;
