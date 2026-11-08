@@ -1,4 +1,4 @@
-import { displayLevel, eventDate, LEVEL_RANK, shortPath } from "../eventStats";
+import { displayLevel, dropEmptyCommit, eventDate, LEVEL_RANK, shortPath } from "../eventStats";
 import {
   causeText, describeEvent, isHiddenEvent, isHighCause, rawText, setattrSources, useThresholds,
 } from "../reasonText";
@@ -36,16 +36,28 @@ function tieRank(e: EdrEvent): number {
   return 4;
 }
 
-// HoldFS 는 정상 복귀 때마다 반영 단계를 돌고, 반영할 쓰기가 없어도 '반영 완료(DATA_APPLIED)'를 남긴다.
-// 그 감시 구간(마지막 MEDIUM 격상 이후)에 실제로 반영된 파일(FILE_APPLIED)이 없으면 빼고 보여준다.
-function dropEmptyCommit(rows: EdrEvent[]): EdrEvent[] {
-  let applied = false;
-  return rows.filter((e) => {
-    if (e.action === "ESCALATE" && e.level === "MEDIUM") applied = false;
-    if (e.result === "FILE_APPLIED") applied = true;
-    if (e.result === "DATA_APPLIED") { const keep = applied; applied = false; return keep; }
-    return true;
-  });
+// HIGH 때문에 생기는 기록(폐기·복원·차단·정지)이 HIGH 격상보다 앞에 찍혀 있으면 HIGH 격상 바로 뒤로 옮긴다.
+// HIGH 격상은 HoldFS 실행 출력에서, 나머지는 filesecurity.log 에서 오기 때문에 시각이 조금 어긋날 수 있다.
+const AFTER_HIGH_RESULTS = new Set(["BUFFER_DROPPED", "RESTORED", "RESTORE_CONFLICT", "RESTORE_FAILED", "RESTORE_CLEANUP_FAILED"]);
+const isAfterHigh = (e: EdrEvent) =>
+  e.action === "SIGSTOP" || AFTER_HIGH_RESULTS.has(e.result) || (e.result === "BLOCKED" && e.level === "HIGH");
+function fixHighOrder(rows: EdrEvent[]): EdrEvent[] {
+  const out = [...rows];
+  for (let i = 0; i < out.length; i++) {
+    const h = out[i];
+    if (!(h.action === "ESCALATE" && h.level === "HIGH")) continue;
+    const t = eventDate(h).getTime();
+    const moved: EdrEvent[] = [];
+    for (let j = i - 1; j >= 0 && t - eventDate(out[j]).getTime() <= 1500; j--) {
+      if (isAfterHigh(out[j])) moved.unshift(...out.splice(j, 1));
+    }
+    if (moved.length) {
+      const at = out.indexOf(h);
+      out.splice(at + 1, 0, ...moved);
+      i = at + moved.length;
+    }
+  }
+  return out;
 }
 
 // HIGH 격상 바로 앞(2초 이내)의 격상 원인 기록. 전체 로그에서는 HIGH 격상 줄에 합친다.
@@ -129,8 +141,8 @@ function buildLog(rows: EdrEvent[], th: ReturnType<typeof useThresholds>): LogRo
 
 export default function PidDetail({ pid, events, onBack, onFile, onAskAi }: Props) {
   const th = useThresholds();
-  const rows = dropEmptyCommit(events.filter((e) => e.pid === pid && !isHiddenEvent(e))
-    .sort((a, b) => a.time.localeCompare(b.time) || tieRank(a) - tieRank(b)));
+  const rows = fixHighOrder(dropEmptyCommit(events.filter((e) => e.pid === pid && !isHiddenEvent(e))
+    .sort((a, b) => a.time.localeCompare(b.time) || tieRank(a) - tieRank(b))));
   const process = [...rows].reverse().find((e) => e.process && e.process !== "-")?.process ?? "-";
   const level = rows.reduce((m, e) => ((LEVEL_RANK[e.level] ?? 0) > (LEVEL_RANK[m] ?? 0) ? e.level : m), "LOW");
   const files = new Set(rows.filter((e) => e.target).map((e) => e.target)).size;

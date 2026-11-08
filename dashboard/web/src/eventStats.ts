@@ -45,19 +45,43 @@ export interface PidRow {
   lastTime: string;
 }
 
+// HoldFS 는 감시가 끝날 때마다 반영 단계를 돌고, 반영할 쓰기가 없어도 '반영 완료(DATA_APPLIED)'를 남긴다.
+// 그 감시 구간(마지막 MEDIUM 격상 이후)에 실제로 반영된 파일(FILE_APPLIED)이 없으면 뺀다.
+// rows 는 한 PID 의 기록을 시간순으로 넣는다.
+export function dropEmptyCommit(rows: EdrEvent[]): EdrEvent[] {
+  let applied = false;
+  return rows.filter((e) => {
+    if (e.action === "ESCALATE" && e.level === "MEDIUM") applied = false;
+    if (e.result === "FILE_APPLIED") applied = true;
+    if (e.result === "DATA_APPLIED") { const keep = applied; applied = false; return keep; }
+    return true;
+  });
+}
+
+// PID 별 목록. PID 상세와 같은 기준으로 숨길 기록을 빼고 세며(숨길 기록만 있는 PID 는 목록에 없음),
+// 마지막 활동이 최근인 순으로 정렬한다.
 export function byPid(events: EdrEvent[]): PidRow[] {
-  const map = new Map<number, PidRow>();
+  const perPid = new Map<number, EdrEvent[]>();
   for (const e of events) {
-    const r = map.get(e.pid) ?? { pid: e.pid, process: e.process, level: "LOW", count: 0, last: "", lastTime: "" };
-    r.count += 1;
-    if ((LEVEL_RANK[e.level] ?? 0) > (LEVEL_RANK[r.level] ?? 0)) r.level = e.level;
-    if (e.process && e.process !== "-") r.process = e.process;
-    r.last = `${e.action} ${e.result}`.trim();
-    r.lastTime = e.time;
-    map.set(e.pid, r);
+    if (isHiddenEvent(e)) continue;
+    const list = perPid.get(e.pid);
+    if (list) list.push(e); else perPid.set(e.pid, [e]);
   }
-  return [...map.values()].sort((a, b) =>
-    (LEVEL_RANK[b.level] ?? 0) - (LEVEL_RANK[a.level] ?? 0) || b.lastTime.localeCompare(a.lastTime));
+  const rows: PidRow[] = [];
+  for (const [pid, list] of perPid) {
+    const shown = dropEmptyCommit([...list].sort((a, b) => a.time.localeCompare(b.time)));
+    if (!shown.length) continue;
+    const r: PidRow = { pid, process: shown[0].process, level: "LOW", count: shown.length, last: "", lastTime: "" };
+    for (const e of shown) {
+      if ((LEVEL_RANK[e.level] ?? 0) > (LEVEL_RANK[r.level] ?? 0)) r.level = e.level;
+      if (e.process && e.process !== "-") r.process = e.process;
+    }
+    const last = shown[shown.length - 1];
+    r.last = `${last.action} ${last.result}`.trim();
+    r.lastTime = last.time;
+    rows.push(r);
+  }
+  return rows.sort((a, b) => b.lastTime.localeCompare(a.lastTime));
 }
 
 export interface FileRow {

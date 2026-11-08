@@ -105,7 +105,7 @@ export default function SystemView({ events, onAskAi }: Props) {
         <div className="num-grid">
           <div className="num-box"><div className="sys-title">감시 중 (MEDIUM)</div><b>{p.medium}</b></div>
           <div className="num-box"><div className="sys-title">차단·정지 (HIGH)</div><b className={p.high ? "bad" : ""}>{p.high}</b></div>
-          <div className="num-box"><div className="sys-title">정상 복귀</div><b>{p.returned}</b></div>
+          <div className="num-box"><div className="sys-title">정상 복귀 (LOW)</div><b>{p.returned}</b></div>
           <div className="num-box"><div className="sys-title">허니팟 차단</div><b>{p.honeypot}</b></div>
         </div>
         {p.rows.length === 0 ? (

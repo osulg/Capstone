@@ -66,7 +66,12 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 # AI 분석관 남용 방지 (외부 LLM 호출 = API 요금). 환경변수로 바꿀 수 있다.
 CHAT_MAX_QUESTION_CHARS = int(os.environ.get("DASH_CHAT_MAX_CHARS", "2000"))   # 질문 최대 길이
 CHAT_MAX_HISTORY_CHARS = 4000        # 이전 대화 한 턴의 최대 길이 (최근 8턴만 보냄)
-CHAT_MAX_TOKENS = int(os.environ.get("DASH_CHAT_MAX_TOKENS", "1000"))           # 답변 최대 길이(토큰)
+CHAT_MAX_TOKENS = int(os.environ.get("DASH_CHAT_MAX_TOKENS", "2048"))           # 답변 최대 길이(토큰)
+# Gemini 2.5 같은 '생각(thinking)' 모델은 생각 토큰도 max_tokens 에 포함돼, 그대로 두면 답이 첫 문장에서
+# 잘린다. OpenAI 호환 API 의 reasoning_effort 로 생각 단계를 끈다(Gemini 2.5 Flash: "none").
+# 다른 제공자에는 보내지 않는다. 값은 DASH_CHAT_REASONING 로 바꿀 수 있다("" = 보내지 않음).
+_IS_GEMINI = "generativelanguage.googleapis.com" in os.environ.get("OPENAI_BASE_URL", "")
+CHAT_REASONING = os.environ.get("DASH_CHAT_REASONING", "none" if _IS_GEMINI else "")
 CHAT_RATE_PER_MIN = int(os.environ.get("DASH_CHAT_RATE_PER_MIN", "10"))         # LLM 호출 분당 최대 횟수(서버 전체)
 _chat_calls: list[float] = []
 _chat_lock = threading.Lock()
@@ -306,13 +311,20 @@ def chat():
     messages.append({"role": "user", "content": question})
 
     try:
-        resp = _llm_client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            temperature=0.3,
-            max_tokens=CHAT_MAX_TOKENS,
-        )
-        reply = resp.choices[0].message.content or ""
+        params = dict(model=OPENAI_MODEL, messages=messages, temperature=0.3, max_tokens=CHAT_MAX_TOKENS)
+        try:
+            resp = _llm_client.chat.completions.create(
+                **params, **({"reasoning_effort": CHAT_REASONING} if CHAT_REASONING else {}))
+        except Exception as e:  # 모델이 reasoning_effort 값을 지원하지 않으면 빼고 한 번 더
+            if not CHAT_REASONING or "reasoning" not in str(e).lower():
+                raise
+            app.logger.warning("reasoning_effort=%s 미지원, 빼고 재시도: %s", CHAT_REASONING, e)
+            resp = _llm_client.chat.completions.create(**params)
+        choice = resp.choices[0]
+        reply = choice.message.content or ""
+        if choice.finish_reason == "length":
+            reply += ("\n\n> 답변이 길이 제한(DASH_CHAT_MAX_TOKENS)에 걸려 잘렸습니다. "
+                      "질문을 나누어 다시 물어보세요.")
         return jsonify({"reply": reply, "mode": "llm", "sources": sources})
     except Exception as e:  # LLM 장애 시에도 대시보드는 답을 주도록 로컬 분석으로 대체
         app.logger.warning("LLM 호출 실패: %s", e)
