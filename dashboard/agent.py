@@ -192,6 +192,9 @@ RE_TRUST = re.compile(r"\[STATE\] pid=(\d+) ProcState\.(LOW|SUSPICIOUS) → Proc
 RE_LINE_PID = re.compile(r"\bpid=(\d+)")
 RE_HIGH = re.compile(r"\[TRIGGER HIGH\] pid=(\d+) reason=(.*)$")
 RE_SUSPEND = re.compile(r"\[HIGH\] pid=(\d+) suspend 완료")
+# lineage(계보) 격상인데 부모가 세션 리더(대화형 셸 등)라 정지를 보류한 경우 (passthrough.py trigger_high).
+# 정지한 경우는 이어서 '[HIGH] pid=… suspend 완료'가 찍히므로 RE_SUSPEND 로 기록된다.
+RE_LINEAGE_SKIP = re.compile(r"\[LINEAGE\] pid=(\d+) 세션 리더 → SIGSTOP 보류")
 RE_LOW_REEVAL = re.compile(r"\[REEVAL\] pid=(\d+) (?:관찰 시간 종료 → LOW|10초 경과 → Low) 복귀")
 RE_LOW_WATCH = re.compile(r"\[WATCH\] pid=(\d+) 관찰 종료")
 # passthrough.py: 허니팟 경로에 대한 open/read/write/truncate/unlink/rmdir/rename 차단
@@ -295,6 +298,12 @@ class StdoutParser:
             if reason == "HoneypotDetector":
                 return self._ev(pid, "SUSPICIOUS", "SUSPICIOUS",
                                 "HoneypotDetector: 허니팟 접근 탐지 → Stage2 평가 요청", action="DETECT")
+            # 신뢰 도구를 파일마다 새로 띄우는 공격(openssl 루프 등)은 부모 단위로 묶여 의심 대상이 된다.
+            # 신뢰 도구라 MEDIUM 감시 없이 끝날 수 있어, 탐지된 사실을 따로 보이게 한다.
+            if reason == "lineage_burst":
+                return self._ev(pid, "SUSPICIOUS", "SUSPICIOUS",
+                                "lineage_burst: 신뢰 도구 반복 실행(부모 단위 집계) → Stage2 평가 요청",
+                                action="DETECT")
             return None
         m = RE_SCORE.search(line)
         if m:
@@ -330,6 +339,11 @@ class StdoutParser:
         if m:
             pid = int(m.group(1))
             return self._ev(pid, "HIGH", "SUSPENDED", "SIGSTOP 일시정지", action="SIGSTOP")
+        m = RE_LINEAGE_SKIP.search(line)
+        if m:
+            pid = int(m.group(1))
+            return self._ev(pid, "HIGH", "SKIPPED",
+                            "세션 리더(대화형 셸 등)라 정지 보류, 자식 프로세스의 새 쓰기는 차단", action="SIGSTOP")
         m = RE_LOW_REEVAL.search(line) or RE_LOW_WATCH.search(line)
         if m:
             pid = int(m.group(1))

@@ -30,6 +30,7 @@ const STAGE1: Record<string, string> = {
   EntropyDeltaDetector: "파일 엔트로피 급변",
   stat_anomaly: "파일 작업 급증",
   stage1_sampling: "비신뢰 경로 신규 프로세스",
+  lineage_burst: "신뢰 도구 반복 실행 (계보 집계)",
 };
 
 const score = (v: string) => Number(v).toFixed(3);
@@ -121,7 +122,9 @@ export function describeEvent(e: EdrEvent, th: Thresholds, setattrFrom?: EdrEven
         return { action: `${e.level} 격상`, detail: sc ? `ML 점수 ${score(sc[1])}` : r };
       }
     case "RETURN": return { action: "정상 복귀", detail: "재평가 결과 정상" };
-    case "SIGSTOP": return { action: "프로세스 정지", detail: "프로세스 일시정지" };
+    case "SIGSTOP":
+      if (e.result === "SKIPPED") return { action: "프로세스 정지 보류", detail: "세션 리더라 정지하지 않음, 자식 프로세스의 새 쓰기는 차단" };
+      return { action: "프로세스 정지", detail: "프로세스 일시정지" };
     case "DETECT": {
       const det = r.split(":")[0].trim();
       return { action: "Stage 1 탐지", detail: STAGE1[det] ?? r };

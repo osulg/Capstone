@@ -180,3 +180,26 @@ def test_process_name_uses_thread_group_leader():
 def test_line_time_with_milliseconds():
     evs = feed_all(["2026-11-08 12:04:45.212 [TRIGGER HIGH] pid=4250 reason=ml_score=0.900"])
     assert evs[0]["time"] == "2026-11-08 12:04:45.212"
+
+
+def test_lineage_burst_detect_and_parent_stop():
+    # 신뢰 도구 반복 실행(lineage) → 부모 PID 탐지 → HIGH → 부모 정지
+    evs = feed_all([
+        "[STATE] pid=7000 LOW -> SUSPICIOUS reason=lineage_burst",
+        "[TRIGGER HIGH] pid=7000 reason=reeval_dyn_only=0.712",
+        "[HIGH] pid=7000 진입 정리 완료 (reason=reeval_dyn_only=0.712)",
+        "[LINEAGE] pid=7000 lineage 격상 → 부모 프로세스 정지",
+        "[HIGH] pid=7000 suspend 완료",
+    ])
+    assert [(e["action"], e["result"]) for e in evs] == [
+        ("DETECT", "SUSPICIOUS"), ("ESCALATE", "HIGH"), ("SIGSTOP", "SUSPENDED")]   # 정지는 한 번만
+    assert evs[0]["reason"].startswith("lineage_burst")
+    assert "stage1=lineage_burst" in evs[1]["reason"]
+
+
+def test_lineage_session_leader_stop_skipped():
+    evs = feed_all([
+        "[TRIGGER HIGH] pid=7100 reason=reeval_dyn_only=0.700",
+        "[LINEAGE] pid=7100 세션 리더 → SIGSTOP 보류(로그만). 자식 신규 write는 차단됨.",
+    ])
+    assert [(e["action"], e["result"]) for e in evs] == [("ESCALATE", "HIGH"), ("SIGSTOP", "SKIPPED")]

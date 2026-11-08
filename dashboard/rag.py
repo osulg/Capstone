@@ -47,7 +47,8 @@ KNOWLEDGE_BASE = [
             "ExtChangeDetector(짧은 시간 내 확장자 변경 반복), EntropyDetector / EntropyBurstDetector "
             "(고엔트로피 write, 5초 창 안에 서로 다른 파일 3개 이상·5회 이상의 고엔트로피 write), "
             "EntropyDeltaDetector(원본 대비 엔트로피 급증), stat_anomaly(1초 창의 write·삭제 빈도 이상), "
-            "stage1_sampling(비신뢰 경로 신규 PID 15% 확률 샘플링) 중 하나라도 걸리면 PID는 "
+            "stage1_sampling(비신뢰 경로 신규 PID 15% 확률 샘플링), lineage_burst(신뢰 도구를 파일마다 새로 "
+            "띄우는 반복 실행을 부모 프로세스 단위로 묶은 것) 중 하나라도 걸리면 PID는 "
             "LOW → SUSPICIOUS가 되고 Stage2 ML 평가 큐에 들어간다."
         ),
     },
@@ -360,6 +361,7 @@ _REASON_TABLE = {
     "EntropyDetector": "Stage1 고엔트로피 write 탐지",
     "stat_anomaly": "Stage1 write/삭제 빈도 통계 이상",
     "stage1_sampling": "Stage1 비신뢰 경로 신규 프로세스 샘플링",
+    "lineage_burst": "신뢰 도구 반복 실행을 부모(계보) 단위로 묶어 탐지",
 }
 
 

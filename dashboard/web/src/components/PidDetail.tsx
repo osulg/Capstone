@@ -70,7 +70,7 @@ function buildSteps(rows: EdrEvent[]): Step[] {
     if (e.action === "ESCALATE" && e.level === "HIGH") step("HIGH 격상", "HIGH");
     else if (e.action === "ESCALATE") step(`${e.level} 격상`, levelOf(e));
     else if (e.action === "RETURN") step("정상 복귀 (LOW)", "LOW");
-    else if (e.action === "SIGSTOP") step("프로세스 정지 (SIGSTOP)", "HIGH");
+    else if (e.action === "SIGSTOP") step(e.result === "SKIPPED" ? "프로세스 정지 보류" : "프로세스 정지 (SIGSTOP)", "HIGH");
     else if (e.action === "DETECT") step("Stage1 탐지", "PENDING");
     else if (e.result === "BUFFER_DROPPED") {
       // 0개면 버린 게 없으니 뺀다
