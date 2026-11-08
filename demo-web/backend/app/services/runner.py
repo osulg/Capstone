@@ -24,6 +24,7 @@ from guardfs.common.paths import (
 from scenarios.catalog import Scenario, get_scenario
 from scenarios.common import get_runtime_paths
 from scenarios.execution import get_execution
+from scenarios.results import validate_result_details
 
 from ..schemas.run import (
     RunCreatedResponse,
@@ -839,7 +840,13 @@ class ScenarioRunner:
 
             all_steps_passed = all(step.status == "passed" for step in record.steps)
 
-            if (
+            if result["status"] == "timed_out":
+                record.status = "timed_out"
+                record.error = next(
+                    (step.error for step in record.steps if step.error),
+                    "시나리오 작업 제한 시간을 초과했습니다.",
+                )
+            elif (
                 process.returncode == 0
                 and result["status"] == "passed"
                 and all_steps_passed
@@ -1029,8 +1036,10 @@ class ScenarioRunner:
         if result.get("pid") != record.pid:
             raise ValueError("테스트 PID가 일치하지 않습니다.")
 
-        if result.get("status") not in ("passed", "failed"):
+        if result.get("status") not in ("passed", "failed", "timed_out"):
             raise ValueError("잘못된 테스트 상태입니다.")
+
+        validate_result_details(result)
 
         operations = result.get("steps")
 
