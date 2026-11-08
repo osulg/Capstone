@@ -171,6 +171,7 @@ export function describeEvent(e: EdrEvent, th: Thresholds, setattrFrom?: EdrEven
       return { action: "정리 실패", detail: osError(r) };
     case "BLOCKED":
       if (e.level === "HIGH") return { action: blockedName(e.action), detail: "HIGH 판정, 차단" };
+      if (r.startsWith("ExtChangeDetector")) return { action: blockedName(e.action), detail: "랜섬웨어 확장자로 이름 변경, 사전 차단" };
   }
   return { action: `${e.action} ${e.result}`.trim(), detail: r };
 }
