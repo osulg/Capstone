@@ -966,6 +966,22 @@ class ExtensionChangeDetectorTests(unittest.TestCase):
         detector = ExtChangeDetector(threshold=999)
         self.assertTrue(detector.check(self.rename_event("a.txt", "a.ENC")))
 
+    def test_reproduced_family_extensions_detected_immediately(self):
+        """재현 대상 Linux 랜섬웨어 계열 확장자가 단일 rename 으로 즉시 탐지된다."""
+        detector = ExtChangeDetector(threshold=999)
+        for old, new in (
+            ("doc.txt", "doc.txt.ifire"),   # IceFire
+            ("doc.txt", "doc.ifire"),
+            ("vm.vmdk", "vm.vmdk.akiranew"),  # Akira_v2
+            ("report.txt", "report.akira"),   # Akira
+        ):
+            with self.subTest(old=old, new=new):
+                self.assertTrue(detector.check(self.rename_event(old, new)))
+
+    def test_family_extensions_case_insensitive(self):
+        detector = ExtChangeDetector(threshold=999)
+        self.assertTrue(detector.check(self.rename_event("a.txt", "a.iFire")))
+
     def test_suspicious_double_extension_is_detected_immediately(self):
         detector = ExtChangeDetector(threshold=999)
         self.assertTrue(
