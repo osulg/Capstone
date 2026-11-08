@@ -42,11 +42,17 @@ class EventScope:
     started_at_ns: int
     observed_until_ns: int
 
+    # 하위 경로를 포함하지 않고 정확히 일치하는 경로만 허용한다.
+    exact_paths: tuple[str, ...] = ()
+
     def __post_init__(self):
         if not self.pids or any(type(pid) is not int or pid <= 0 for pid in self.pids):
             raise ValueError("수집 대상 PID가 필요합니다.")
 
-        if not self.roots or any(not posixpath.isabs(root) for root in self.roots):
+        if not self.roots and not self.exact_paths:
+            raise ValueError("수집할 작업 경로가 필요합니다.")
+
+        if any(not posixpath.isabs(path) for path in (*self.roots, *self.exact_paths)):
             raise ValueError("작업 경로는 Linux 절대 경로여야 합니다.")
 
         if self.started_at_ns > self.observed_until_ns:
@@ -191,7 +197,14 @@ def _add_event(
         result.pid_only_events.append(record)
         return
 
-    if any(_matches_path(path, scope.roots) for path in paths):
+    normalized_exact_paths = {
+        posixpath.normpath(path) for path in scope.exact_paths
+    }
+    if any(
+        _matches_path(path, scope.roots)
+        or (posixpath.isabs(path) and posixpath.normpath(path) in normalized_exact_paths)
+        for path in paths
+    ):
         result.events.append(record)
 
 

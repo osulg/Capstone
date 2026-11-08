@@ -340,7 +340,7 @@ class HuntressReadTests(unittest.TestCase):
         self.assertEqual(report["task_results"], [])
 
     def test_other_modes_are_not_executed(self):
-        for mode in ("honeypot", "delete"):
+        for mode in ("delete",):
             with self.subTest(mode=mode):
                 report, _, children = self.run_case(mode=mode)
 

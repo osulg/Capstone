@@ -13,6 +13,7 @@ import signal
 import sys
 import time
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,10 +21,12 @@ from guardfs.common.paths import (
     FILESECURITY_LOG_PATH,
     PROJECT_ROOT as HOLDFS_PROJECT_ROOT,
     get_event_log_path,
+    get_honeypot_dir,
 )
 from scenarios.catalog import Scenario, get_scenario
 from scenarios.common import get_runtime_paths
 from scenarios.execution import get_execution
+from scenarios.huntress_config import HONEYPOT_FILES
 from scenarios.icefire_config import expected_operations
 from scenarios.results import validate_result_details
 
@@ -42,6 +45,8 @@ from .holdfs_events import (
     capture_log,
     collect_events,
 )
+from .huntress_validation import validate_honeypot_success
+from .huntress_verification import verify_honeypot_protection
 from .icefire_verification import verify_protection
 
 logger = logging.getLogger(__name__)
@@ -144,6 +149,13 @@ class ScenarioRunner:
                 raise ScenarioUnavailableError(
                     selected_mode.disabled_reason
                     or "아직 실행할 수 없는 Huntress 모드입니다."
+                )
+
+            # 실행별 정의만 교체하고 공용 catalog는 변경하지 않는다.
+            if selected_mode.steps:
+                scenario = replace(
+                    scenario,
+                    steps=selected_mode.steps,
                 )
 
         execution = get_execution(scenario.id, scenario.module)
@@ -707,15 +719,43 @@ class ScenarioRunner:
             report.issues.append("등록된 작업 프로세스가 없어 수집하지 않았습니다.")
             return report
 
-        scope = EventScope(
-            pids=pids,
-            roots=(
-                record.workspace.mount_path,
-                record.workspace.underlay_path,
-            ),
-            started_at_ns=started_at_ns,
-            observed_until_ns=observed_until_ns,
-        )
+        if record.scenario_id == "S03" and record.mode == "honeypot":
+            # 사전 확인 PID와 실제 접근 PID를 구분한다.
+            access_processes = [
+                process
+                for process in record.processes
+                if process.role == "huntress_honeypot_access"
+                and process.start_time_ticks is not None
+            ]
+            if len(access_processes) != 1:
+                report.issues.append(
+                    "허니팟 접근 PID가 등록되지 않아 접근 이벤트를 수집하지 않았습니다."
+                )
+                return report
+
+            underlay_honeypot = Path(get_honeypot_dir(str(self.underlay_path)))
+            relative_honeypot = underlay_honeypot.relative_to(self.underlay_path)
+            mount_honeypot = self.mount_path / relative_honeypot
+            exact_paths = []
+            for directory in (mount_honeypot, underlay_honeypot):
+                # 미끼에 도달하기 전 디렉터리 lookup에서 차단될 수도 있다.
+                exact_paths.append(str(directory))
+                exact_paths.extend(str(directory / name) for name in HONEYPOT_FILES)
+
+            scope = EventScope(
+                pids=frozenset({access_processes[0].pid}),
+                roots=(),
+                exact_paths=tuple(exact_paths),
+                started_at_ns=started_at_ns,
+                observed_until_ns=observed_until_ns,
+            )
+        else:
+            scope = EventScope(
+                pids=pids,
+                roots=(record.workspace.mount_path, record.workspace.underlay_path),
+                started_at_ns=started_at_ns,
+                observed_until_ns=observed_until_ns,
+            )
 
         for checkpoint in checkpoints:
             try:
@@ -1083,14 +1123,48 @@ class ScenarioRunner:
                                         if verdict["status"] == "passed"
                                         else verdict["reason"]
                                     )
-                        except Exception as error:
+                        except Exception:
                             logger.exception(
                                 "IceFire 보호 검증 실패: %s", record.run_id
                             )
+
+                    elif (
+                        scenario.module == "scenarios.s03_huntress"
+                        and record.mode == "honeypot"
+                    ):
+                        try:
+                            # 프로세스 정리와 이벤트 수집 이후에 판정한다.
+                            # 접근 작업 완료와 보호 성공은 별도 결과로 유지한다.
+                            record.protection_verification = await asyncio.to_thread(
+                                verify_honeypot_protection,
+                                record.model_copy(deep=True),
+                                cleanup_confirmed=(
+                                    process is not None
+                                    and not self._cleanup_blocked
+                                    and communication is not None
+                                    and communication.done()
+                                ),
+                            )
+                        except Exception as error:
+                            # 검증 오류 때문에 보호 성공으로 표시하지 않는다.
+                            logger.exception(
+                                "Huntress 허니팟 보호 검증 실패: %s",
+                                record.run_id,
+                            )
                             record.protection_verification = {
                                 "status": "unknown",
-                                "reason": str(error),
+                                "reason": (
+                                    "허니팟 보호 검증 중 오류가 발생했습니다: "
+                                    f"{type(error).__name__}: {error}"
+                                ),
+                                "observed_at": now().isoformat(),
+                                "cleanup_confirmed": False,
+                                "blocking_events": [],
+                                "scope": "이번 실행의 허니팟 읽기 접근 차단",
                             }
+
+                    # 모든 시나리오의 정리·이벤트 수집·보호 검증이 끝난 뒤
+                    # 조회 응답에서 최종 상태를 공개한다.
                     record.finished_at = now()
 
     def _cleanup_done(self, task):
@@ -1124,10 +1198,16 @@ class ScenarioRunner:
         if scenario.module == "scenarios.s03_huntress":
             if result.get("result_version") != 2:
                 raise ValueError("Huntress는 상세 결과 버전 2가 필요합니다.")
-            if record.mode != "read" or result.get("mode") != record.mode:
+            if (
+                record.mode not in ("read", "honeypot")
+                or result.get("mode") != record.mode
+            ):
                 raise ValueError("Huntress 실행 모드가 일치하지 않습니다.")
 
-            if result["status"] == "passed":
+            if result["status"] == "passed" and record.mode == "honeypot":
+                validate_honeypot_success(result, record)
+
+            if result["status"] == "passed" and record.mode == "read":
                 from scenarios.s03_huntress import validate_task_result
 
                 tasks = result.get("task_results")

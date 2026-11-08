@@ -372,20 +372,47 @@ export default function Demo({ onReplayIntro }: DemoProps) {
     }
   }
 
-  // 실행 전에는 카탈로그 단계, 실행 후에는 서버 결과 단계를 표시한다.
+  // 실행 전에는 선택 모드의 단계를 표시한다.
+  // 모드 전용 단계가 없으면 기존 시나리오 단계를 사용한다.
+  const previewSteps =
+    selectedModeDefinition?.steps?.length
+      ? selectedModeDefinition.steps
+      : selected?.steps ?? [];
+
+  // 실행 후에는 서버에 기록된 실제 단계가 기준이다.
   const steps: RunStep[] =
     run?.steps ??
-    selected?.steps.map((step) => ({
+    previewSteps.map((step) => ({
       ...step,
       status: "pending" as StepStatus,
       error: null,
-    })) ??
-    [];
+    }));
 
   // 서버가 완료했다고 확인한 단계만 진행률에 반영한다.
   // 네 단계라면 완료 시 25% → 50% → 75% → 100%가 된다.
   const completed = steps.filter((step) => step.status === "passed").length;
   const progress = steps.length > 0 ? (completed / steps.length) * 100 : 0;
+
+  const isHoneypotRun =
+    run?.scenario_id === "S03" && run.mode === "honeypot";
+  const protectionStatus = run?.protection_verification?.status;
+
+  // 허니팟 접근 관찰 완료를 보호 검증 성공으로 표시하지 않는다.
+  const runBadgeText = run
+    ? run.status === "cancelled"
+      ? RUN_LABELS[run.status]
+      : isHoneypotRun && protectionStatus
+        ? protectionStatus === "passed"
+          ? "접근 차단 확인"
+          : protectionStatus === "failed"
+            ? "보호 검증 실패"
+            : "보호 판정 불가"
+        : protectionStatus === "passed"
+          ? "보호 검증 완료"
+          : isHoneypotRun && run.status === "passed"
+            ? "접근 관찰 완료"
+            : RUN_LABELS[run.status]
+    : "";
 
   const badgeText = startUncertain
     ? "서버 확인 필요"
@@ -394,7 +421,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
       : pollError
         ? "조회 확인 필요"
         : run
-          ? (run.protection_verification?.status === "passed" ? "보호 검증 완료" : RUN_LABELS[run.status])
+          ? runBadgeText
           : runId
             ? "상태 확인 중"
             : selected?.enabled
@@ -402,11 +429,20 @@ export default function Demo({ onReplayIntro }: DemoProps) {
               : "준비 중";
 
   const badgeTone =
-    run?.status === "passed" || run?.protection_verification?.status === "passed"
-      ? "success"
-      : run?.status === "failed" || run?.status === "timed_out"
-        ? "error"
-        : "neutral";
+    run?.status === "cancelled"
+      ? "neutral"
+      : isHoneypotRun
+        ? protectionStatus === "passed"
+          ? "success"
+          : protectionStatus === "failed" ||
+              run?.status === "failed" || run?.status === "timed_out"
+            ? "error"
+            : "neutral"
+        : run?.status === "passed" || protectionStatus === "passed"
+          ? "success"
+          : run?.status === "failed" || run?.status === "timed_out"
+            ? "error"
+            : "neutral";
 
   return (
     <main className="demo-page">

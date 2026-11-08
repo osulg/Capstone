@@ -97,7 +97,11 @@ class HuntressModeAvailabilityTests(unittest.IsolatedAsyncioTestCase):
 
                         self.assertEqual(
                             str(caught.exception),
-                            "실행 연결 및 검증 예정입니다.",
+                            next(
+                                item.disabled_reason
+                                for item in scenario.modes
+                                if item.id == mode
+                            ),
                         )
 
             self.assertIsNone(runner._active_task)

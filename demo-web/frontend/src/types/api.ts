@@ -14,6 +14,7 @@ export interface ScenarioMode {
   name: string;
   enabled: boolean;
   disabled_reason: string | null;
+  steps: ScenarioStep[];
 }
 
 export interface Scenario {

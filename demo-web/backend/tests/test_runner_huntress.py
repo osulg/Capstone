@@ -19,7 +19,7 @@ from app.services.runner import ScenarioRunner, now
 from scenarios.catalog import get_scenario
 from scenarios.huntress_config import READ_FILES
 
-작업목록 = (
+TASK_DEFINITIONS = (
     ("huntress_prepare", "prepare", "PREPARE"),
     ("huntress_verify_ready", "verify", "VERIFY_READY"),
     ("huntress_read", "read", "READ"),
@@ -29,20 +29,20 @@ from scenarios.huntress_config import READ_FILES
 
 
 class HuntressRunnerTests(unittest.IsolatedAsyncioTestCase):
-    def 결과생성(self, 상태="passed"):
+    def make_result(self, status="passed"):
         """관리자가 반환하는 형식의 최종 결과를 만든다."""
-        실패정보 = {
+        failure = {
             "operation": "read",
             "path": "/runtime/mount/test/.ssh/id_rsa",
-            "errno": 13 if 상태 == "failed" else None,
+            "errno": 13 if status == "failed" else None,
             "message": (
                 "읽기 제한 시간을 초과했습니다."
-                if 상태 == "timed_out"
+                if status == "timed_out"
                 else "테스트용 읽기 접근 거절"
             ),
         }
 
-        단계결과 = [
+        step_results = [
             {
                 "name": "PRECHECK",
                 "status": "passed",
@@ -52,55 +52,55 @@ class HuntressRunnerTests(unittest.IsolatedAsyncioTestCase):
                 "failure": None,
             }
         ]
-        자식결과 = []
+        task_results = []
 
-        for 순서, (역할, 작업, 단계명) in enumerate(작업목록):
-            실패 = 단계명 == "READ" and 상태 != "passed"
+        for index, (role, action, step_name) in enumerate(TASK_DEFINITIONS):
+            failed = step_name == "READ" and status != "passed"
 
-            단계 = {
-                "name": 단계명,
-                "status": "failed" if 실패 else "passed",
+            step = {
+                "name": step_name,
+                "status": "failed" if failed else "passed",
                 "planned": 1,
                 "attempted": 1,
-                "completed": 0 if 실패 else 1,
-                "failure": 실패정보.copy() if 실패 else None,
+                "completed": 0 if failed else 1,
+                "failure": failure.copy() if failed else None,
             }
-            if 실패:
-                단계["error"] = 실패정보["message"]
+            if failed:
+                step["error"] = failure["message"]
 
-            단계결과.append(단계)
+            step_results.append(step)
 
-            파일결과 = []
-            for 번호, 파일명 in enumerate(READ_FILES):
-                파일실패 = 실패 and 번호 == 0
+            file_results = []
+            for file_index, filename in enumerate(READ_FILES):
+                file_failed = failed and file_index == 0
 
-                항목 = {
-                    "name": 파일명,
-                    "path": f"/runtime/mount/test/{파일명}",
-                    "status": "failed" if 파일실패 else "passed",
+                item = {
+                    "name": filename,
+                    "path": f"/runtime/mount/test/{filename}",
+                    "status": "failed" if file_failed else "passed",
                 }
 
-                if 작업 in ("read", "verify"):
-                    항목["content_matched"] = True
+                if action in ("read", "verify"):
+                    item["content_matched"] = True
 
-                파일결과.append(항목)
+                file_results.append(item)
 
-            자식결과.append(
+            task_results.append(
                 {
-                    "role": 역할,
-                    "pid": 200 + 순서,
-                    "action": 작업,
-                    "status": 상태 if 실패 else "passed",
+                    "role": role,
+                    "pid": 200 + index,
+                    "action": action,
+                    "status": status if failed else "passed",
                     "planned": 6,
                     "attempted": 6,
-                    "completed": 5 if 실패 else 6,
-                    "failure": 실패정보.copy() if 실패 else None,
-                    "operations": 파일결과,
+                    "completed": 5 if failed else 6,
+                    "failure": failure.copy() if failed else None,
+                    "operations": file_results,
                 }
             )
 
             # 실패한 읽기 뒤의 내용 검증은 실행하지 않는다.
-            if 실패:
+            if failed:
                 break
 
         return {
@@ -109,264 +109,264 @@ class HuntressRunnerTests(unittest.IsolatedAsyncioTestCase):
             "mode": "read",
             "pid": 123,
             "holdfs_pid": 999,
-            "status": 상태,
+            "status": status,
             "termination_reason": {
                 "passed": "completed",
                 "failed": "operation_failed",
                 "timed_out": "deadline_exceeded",
-            }[상태],
-            "steps": 단계결과,
-            "task_results": 자식결과,
+            }[status],
+            "steps": step_results,
+            "task_results": task_results,
             "content_verification": (
                 {
                     "status": "passed",
                     "files": 6,
                     "observed_at": now().isoformat(),
                 }
-                if 상태 == "passed"
+                if status == "passed"
                 else {"status": "not_checked"}
             ),
             "detection_verification": "not_checked",
         }
 
-    async def 실행검사(
+    async def run_result(
         self,
-        결과,
+        result,
         *,
-        잘못된결과=False,
-        등록누락역할=None,
+        invalid_result=False,
+        missing_role=None,
     ):
         """실제 runner를 실행하고 외부 프로세스만 대체한다."""
-        시나리오 = get_scenario("S03")
-        self.assertIsNotNone(시나리오)
-        self.assertTrue(시나리오.enabled)
+        scenario = get_scenario("S03")
+        self.assertIsNotNone(scenario)
+        self.assertTrue(scenario.enabled)
         self.assertEqual(
-            시나리오.module,
+            scenario.module,
             "scenarios.s03_huntress",
         )
 
-        실행관리자 = ScenarioRunner()
-        가짜프로세스 = SimpleNamespace(
+        runner = ScenarioRunner()
+        process = SimpleNamespace(
             pid=123,
-            returncode=0 if 결과["status"] == "passed" else 1,
+            returncode=0 if result["status"] == "passed" else 1,
         )
 
-        처리순서 = []
-        적용제한시간 = []
-        원래대기함수 = asyncio.wait
+        operation_order = []
+        applied_timeouts = []
+        original_wait = asyncio.wait
 
-        async def 결과수집(프로세스, 기록, 정의):
+        async def collect_output(child_process, record, definition):
             # 실제 실행에서는 등록 이벤트를 받아 채워지는 정보다.
-            for 순서, (역할, _, _) in enumerate(작업목록):
-                if 역할 == 등록누락역할:
+            for index, (role, _, _) in enumerate(TASK_DEFINITIONS):
+                if role == missing_role:
                     continue
 
-                기록.processes.append(
+                record.processes.append(
                     RunProcess(
-                        role=역할,
-                        pid=200 + 순서,
-                        start_time_ticks=1000 + 순서,
+                        role=role,
+                        pid=200 + index,
+                        start_time_ticks=1000 + index,
                         registered_at=now(),
                     )
                 )
 
-            return json.dumps(결과).encode("utf-8")
+            return json.dumps(result).encode("utf-8")
 
-        async def 프로세스정리(*인자):
-            처리순서.append("프로세스 정리")
+        async def cleanup_process(*args):
+            operation_order.append("프로세스 정리")
 
-        def 이벤트수집(*인자):
-            처리순서.append("이벤트 수집")
+        def collect_events(*args):
+            operation_order.append("이벤트 수집")
             return RunEventCollection(issues=[])
 
-        async def 제한시간확인(대상, **옵션):
-            적용제한시간.append(옵션.get("timeout"))
-            return await 원래대기함수(대상, **옵션)
+        async def check_timeout(tasks, **options):
+            applied_timeouts.append(options.get("timeout"))
+            return await original_wait(tasks, **options)
 
         try:
             with (
                 patch.object(
-                    실행관리자,
+                    runner,
                     "_capture_event_logs",
                     return_value=([], []),
                 ),
                 patch(
                     "app.services.runner.asyncio.create_subprocess_exec",
-                    new=AsyncMock(return_value=가짜프로세스),
-                ) as 프로세스생성,
+                    new=AsyncMock(return_value=process),
+                ) as spawn,
                 patch.object(
-                    실행관리자,
+                    runner,
                     "_collect_output",
-                    new=AsyncMock(side_effect=결과수집),
+                    new=AsyncMock(side_effect=collect_output),
                 ),
                 patch.object(
-                    실행관리자,
+                    runner,
                     "_terminate_process_group",
-                    new=AsyncMock(side_effect=프로세스정리),
-                ) as 정리호출,
+                    new=AsyncMock(side_effect=cleanup_process),
+                ) as cleanup_mock,
                 patch.object(
-                    실행관리자,
+                    runner,
                     "_collect_run_events",
-                    side_effect=이벤트수집,
-                ) as 이벤트호출,
+                    side_effect=collect_events,
+                ) as events_mock,
                 patch(
                     "app.services.runner.asyncio.wait",
-                    side_effect=제한시간확인,
+                    side_effect=check_timeout,
                 ),
             ):
-                if 잘못된결과:
+                if invalid_result:
                     with self.assertLogs(
                         "app.services.runner",
                         level="ERROR",
                     ):
-                        생성응답 = 실행관리자.start(
+                        created = runner.start(
                             "S03",
                             mode="read",
                         )
                         await asyncio.wait_for(
-                            실행관리자._active_task,
+                            runner._active_task,
                             timeout=5,
                         )
                 else:
-                    생성응답 = 실행관리자.start(
+                    created = runner.start(
                         "S03",
                         mode="read",
                     )
                     await asyncio.wait_for(
-                        실행관리자._active_task,
+                        runner._active_task,
                         timeout=5,
                     )
 
-                기록 = 실행관리자.get(생성응답.run_id)
-                명령 = 프로세스생성.call_args.args
+                record = runner.get(created.run_id)
+                command = spawn.call_args.args
 
-                self.assertEqual(생성응답.mode, "read")
-                self.assertEqual(기록.mode, "read")
+                self.assertEqual(created.mode, "read")
+                self.assertEqual(record.mode, "read")
 
                 self.assertEqual(
-                    명령[명령.index("-m") + 1],
+                    command[command.index("-m") + 1],
                     "scenarios.s03_huntress",
                 )
-                self.assertEqual(명령.count("--mode"), 1)
+                self.assertEqual(command.count("--mode"), 1)
                 self.assertEqual(
-                    명령[명령.index("--mode") + 1],
+                    command[command.index("--mode") + 1],
                     "read",
                 )
                 self.assertEqual(
-                    명령[명령.index("--work-dir-name") + 1],
-                    기록.workspace.name,
+                    command[command.index("--work-dir-name") + 1],
+                    record.workspace.name,
                 )
                 self.assertEqual(
-                    기록.workspace.name,
-                    f"s03_{생성응답.run_id}",
+                    record.workspace.name,
+                    f"s03_{created.run_id}",
                 )
                 self.assertEqual(
-                    float(명령[명령.index("--total-timeout") + 1]),
+                    float(command[command.index("--total-timeout") + 1]),
                     120.0,
                 )
-                self.assertEqual(적용제한시간, [120.0])
+                self.assertEqual(applied_timeouts, [120.0])
 
-                정리호출.assert_awaited_once_with(가짜프로세스)
-                이벤트호출.assert_called_once()
+                cleanup_mock.assert_awaited_once_with(process)
+                events_mock.assert_called_once()
 
             self.assertEqual(
-                처리순서,
+                operation_order,
                 ["프로세스 정리", "이벤트 수집"],
             )
-            self.assertIsNotNone(기록.finished_at)
+            self.assertIsNotNone(record.finished_at)
             self.assertEqual(
-                기록.detection_verification,
+                record.detection_verification,
                 "not_checked",
             )
 
-            return 기록
+            return record
         finally:
-            await 실행관리자.close()
+            await runner.close()
 
-    async def test_일반읽기_전체완료(self):
-        결과 = self.결과생성()
-        기록 = await self.실행검사(결과)
+    async def test_read_completes_all_steps(self):
+        result = self.make_result()
+        record = await self.run_result(result)
 
-        self.assertEqual(기록.status, "passed")
-        self.assertEqual(기록.result, 결과)
-        self.assertTrue(all(단계.status == "passed" for 단계 in 기록.steps))
+        self.assertEqual(record.status, "passed")
+        self.assertEqual(record.result, result)
+        self.assertTrue(all(step.status == "passed" for step in record.steps))
 
         # 읽기 완료를 공격 차단 성공으로 판정하지 않는다.
-        self.assertIsNone(기록.protection_verification)
+        self.assertIsNone(record.protection_verification)
         self.assertEqual(
-            기록.result["content_verification"]["status"],
+            record.result["content_verification"]["status"],
             "passed",
         )
 
-    async def test_읽기실패와_시간초과의_부분결과보존(self):
-        for 상태 in ("failed", "timed_out"):
-            with self.subTest(상태=상태):
-                결과 = self.결과생성(상태)
-                기록 = await self.실행검사(결과)
+    async def test_read_failure_and_timeout_preserve_partial_results(self):
+        for status in ("failed", "timed_out"):
+            with self.subTest(status=status):
+                result = self.make_result(status)
+                record = await self.run_result(result)
 
-                self.assertEqual(기록.status, 상태)
-                self.assertEqual(기록.result, 결과)
+                self.assertEqual(record.status, status)
+                self.assertEqual(record.result, result)
                 self.assertEqual(
-                    기록.result["task_results"][-1]["completed"],
+                    record.result["task_results"][-1]["completed"],
                     5,
                 )
                 self.assertEqual(
-                    기록.steps[-1].status,
+                    record.steps[-1].status,
                     "skipped",
                 )
 
-    async def test_모드가다른_결과거절(self):
-        결과 = self.결과생성()
-        결과["mode"] = "honeypot"
+    async def test_mismatched_mode_is_rejected(self):
+        result = self.make_result()
+        result["mode"] = "honeypot"
 
-        기록 = await self.실행검사(
-            결과,
-            잘못된결과=True,
+        record = await self.run_result(
+            result,
+            invalid_result=True,
         )
 
-        self.assertEqual(기록.status, "failed")
-        self.assertIsNone(기록.result)
-        self.assertIn("실행 모드", 기록.error)
+        self.assertEqual(record.status, "failed")
+        self.assertIsNone(record.result)
+        self.assertIn("실행 모드", record.error)
 
-    async def test_등록되지않은_자식결과거절(self):
-        결과 = self.결과생성()
+    async def test_unregistered_child_result_is_rejected(self):
+        result = self.make_result()
 
-        기록 = await self.실행검사(
-            결과,
-            잘못된결과=True,
-            등록누락역할="huntress_read",
+        record = await self.run_result(
+            result,
+            invalid_result=True,
+            missing_role="huntress_read",
         )
 
-        self.assertEqual(기록.status, "failed")
-        self.assertIsNone(기록.result)
-        self.assertIn("등록되지 않은", 기록.error)
+        self.assertEqual(record.status, "failed")
+        self.assertIsNone(record.result)
+        self.assertIn("등록되지 않은", record.error)
 
-    async def test_내용검증이누락된_성공결과거절(self):
-        결과 = self.결과생성()
-        결과["content_verification"] = {
+    async def test_success_without_content_verification_is_rejected(self):
+        result = self.make_result()
+        result["content_verification"] = {
             "status": "not_checked",
         }
 
-        기록 = await self.실행검사(
-            결과,
-            잘못된결과=True,
+        record = await self.run_result(
+            result,
+            invalid_result=True,
         )
 
-        self.assertEqual(기록.status, "failed")
-        self.assertIsNone(기록.result)
-        self.assertIn("내용 불변", 기록.error)
+        self.assertEqual(record.status, "failed")
+        self.assertIsNone(record.result)
+        self.assertIn("내용 불변", record.error)
 
-    async def test_완료수가부족한_성공결과거절(self):
-        결과 = self.결과생성()
-        결과["task_results"][2]["completed"] = 5
+    async def test_success_with_incomplete_count_is_rejected(self):
+        result = self.make_result()
+        result["task_results"][2]["completed"] = 5
 
-        기록 = await self.실행검사(
-            결과,
-            잘못된결과=True,
+        record = await self.run_result(
+            result,
+            invalid_result=True,
         )
 
-        self.assertEqual(기록.status, "failed")
-        self.assertIsNone(기록.result)
+        self.assertEqual(record.status, "failed")
+        self.assertIsNone(record.result)
 
 
 if __name__ == "__main__":

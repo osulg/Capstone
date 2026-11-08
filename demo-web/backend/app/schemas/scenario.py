@@ -18,6 +18,7 @@ class ScenarioModeResponse(BaseModel):
     name: str
     enabled: bool = False
     disabled_reason: str | None = None
+    steps: list[ScenarioStepResponse] = Field(default_factory=list)
 
 
 class ScenarioResponse(BaseModel):

@@ -18,6 +18,7 @@ class ScenarioMode:
     name: str
     enabled: bool = False
     disabled_reason: str | None = "실행 연결 및 검증 예정입니다."
+    steps: tuple[ScenarioStep, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,25 @@ SCENARIOS = (
             ScenarioMode(
                 id="honeypot",
                 name="허니팟 접근",
+                enabled=True,
+                disabled_reason=None,
+                steps=(
+                    ScenarioStep(
+                        id="precheck",
+                        name="실행 환경 확인",
+                        operation_names=("PRECHECK",),
+                    ),
+                    ScenarioStep(
+                        id="honeypot_ready",
+                        name="미끼 준비 확인",
+                        operation_names=("HONEYPOT_READY",),
+                    ),
+                    ScenarioStep(
+                        id="honeypot_access",
+                        name="허니팟 접근 결과 관찰",
+                        operation_names=("HONEYPOT_ACCESS",),
+                    ),
+                ),
             ),
             ScenarioMode(
                 id="delete",
@@ -188,6 +208,13 @@ def to_public_dict(scenario: Scenario) -> dict:
                 "name": mode.name,
                 "enabled": mode.enabled,
                 "disabled_reason": mode.disabled_reason,
+                "steps": [
+                    {
+                        "id": step.id,
+                        "name": step.name,
+                    }
+                    for step in mode.steps
+                ],
             }
             for mode in scenario.modes
         ],

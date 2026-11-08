@@ -20,3 +20,15 @@ def expected_content() -> bytes:
     """기존 simulator의 평문 준비 함수와 동일한 내용을 생성한다."""
     line = lib.PLAINTEXT_LINE
     return (line * (FILE_SIZE // len(line) + 1))[:FILE_SIZE]
+
+
+# 기존 CLI에서 접근하던 미끼 이름과 순서.
+HONEYPOT_FILES = (
+    "id_rsa",
+    "credentials",
+    "config",
+    ".env",
+    "api_token.txt",
+)
+
+HONEYPOT_DELAY_SECONDS = 0.1

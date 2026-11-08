@@ -1,7 +1,7 @@
-"""S03 Huntress 일반 읽기 관리자.
+"""S03 Huntress 일반 읽기·허니팟 접근 관리자.
 
 등록 응답을 제공하는 runner에서 실행한다.
-일반 읽기만 지원하며 허니팟·삭제 모드는 아직 실행하지 않는다.
+허니팟의 접근 관찰과 정책 차단 판정은 구분한다. 삭제 모드는 아직 지원하지 않는다.
 """
 
 import argparse
@@ -22,12 +22,14 @@ from scenarios.common import (
     timestamp,
 )
 from scenarios.huntress_config import (
+    HONEYPOT_FILES,
     PREPARE_TIMEOUT_SECONDS,
     READ_FILES,
     TOTAL_TIMEOUT_SECONDS,
     WORKER_PYTHON,
 )
 from scenarios.results import validate_result_details
+from scenarios.huntress_honeypot_tasks import honeypot_paths
 from scenarios.s01_normal import check_health, find_guardfs_pid
 from scenarios.workers import registered_worker
 
@@ -108,11 +110,94 @@ def validate_task_result(payload, action, returncode):
     return payload
 
 
+def validate_honeypot_result(payload, action, returncode):
+    """접근 관찰 완료와 정책 차단 판정을 구분해 검사한다."""
+    if not isinstance(payload, dict):
+        raise ValueError("자식 결과가 JSON 객체가 아닙니다.")
+
+    if action not in ("check", "access"):
+        raise ValueError("지원하지 않는 허니팟 작업입니다.")
+
+    if payload.get("action") != action:
+        raise ValueError("허니팟 작업 종류가 일치하지 않습니다.")
+
+    status = payload.get("status")
+    reasons = {
+        "passed": "completed",
+        "failed": "operation_failed",
+        "timed_out": "deadline_exceeded",
+    }
+
+    if not isinstance(status, str) or status not in reasons:
+        raise ValueError("잘못된 허니팟 결과 상태입니다.")
+
+    if type(returncode) is not int:
+        raise ValueError("자식 종료 코드를 확인하지 못했습니다.")
+
+    if (returncode == 0) != (status == "passed"):
+        raise ValueError("자식 종료 코드와 결과가 일치하지 않습니다.")
+
+    validate_result_details(
+        {
+            "result_version": 2,
+            "status": status,
+            "termination_reason": reasons[status],
+            "steps": [
+                {
+                    "name": action.upper(),
+                    "status": "passed" if status == "passed" else "failed",
+                    "planned": payload.get("planned"),
+                    "attempted": payload.get("attempted"),
+                    "completed": payload.get("completed"),
+                    "failure": payload.get("failure"),
+                }
+            ],
+        }
+    )
+
+    if payload["planned"] != len(HONEYPOT_FILES):
+        raise ValueError("미끼 예정 수가 일치하지 않습니다.")
+
+    operations = payload.get("operations")
+
+    if not isinstance(operations, list):
+        raise ValueError("미끼별 관찰 결과가 없습니다.")
+
+    if any(not isinstance(item, dict) for item in operations):
+        raise ValueError("잘못된 미끼별 관찰 결과입니다.")
+
+    names = [item.get("name") for item in operations]
+    if names != list(HONEYPOT_FILES)[: len(names)]:
+        raise ValueError("미끼 접근 순서가 일치하지 않습니다.")
+
+    if len(operations) != payload["completed"]:
+        raise ValueError("관찰 결과 수와 완료 수가 일치하지 않습니다.")
+
+    allowed_outcomes = (
+        {"ready"}
+        if action == "check"
+        else {
+            "read_succeeded",
+            "permission_denied",
+            "missing",
+            "access_error",
+        }
+    )
+
+    if any(item.get("outcome") not in allowed_outcomes for item in operations):
+        raise ValueError("잘못된 접근 관찰 상태입니다.")
+
+    if status == "passed" and names != list(HONEYPOT_FILES):
+        raise ValueError("완료 결과에 누락된 미끼가 있습니다.")
+
+    return payload
+
+
 def parse_args():
     mount, underlay = get_runtime_paths()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("read",), required=True)
+    parser.add_argument("--mode", choices=("read", "honeypot"), required=True)
     parser.add_argument("--mount", type=Path, default=mount)
     parser.add_argument("--underlay", type=Path, default=underlay)
     parser.add_argument(
@@ -168,12 +253,16 @@ def run(args):
     worker_python = args.worker_python.expanduser().absolute()
     workdir = mount / args.work_dir_name
     underlay_workdir = underlay / args.work_dir_name
+    mount_honeypot, underlay_honeypot = honeypot_paths(
+        mount,
+        underlay,
+    )
     deadline = time.monotonic() + args.total_timeout
 
     report = {
         "result_version": 2,
         "scenario_id": SCENARIO_ID,
-        "mode": "read",
+        "mode": args.mode,
         "pid": os.getpid(),
         "holdfs_pid": None,
         "status": "failed",
@@ -199,6 +288,28 @@ def run(args):
             "total_timeout_seconds": args.total_timeout,
         },
     }
+
+    if args.mode == "honeypot":
+        report["execution_settings"] = {
+            "worker_python": str(worker_python),
+            "decoy_count": len(HONEYPOT_FILES),
+            "delay_seconds": 0.1,
+            "total_timeout_seconds": args.total_timeout,
+        }
+        report["honeypot_observation"] = {
+            "access_started": False,
+            "mount_root": str(mount_honeypot),
+            "underlay_root": str(underlay_honeypot),
+            "targets": [
+                {
+                    "name": name,
+                    "mount_path": str(mount_honeypot / name),
+                    "underlay_path": str(underlay_honeypot / name),
+                }
+                for name in HONEYPOT_FILES
+            ],
+            "policy_verification": "not_checked",
+        }
 
     current_name = "PRECHECK"
     current_path = mount
@@ -293,14 +404,84 @@ def run(args):
         # context 종료 시 해당 자식의 종료·회수를 마친 상태다.
         check_health(mount, holdfs_pid)
 
+    def run_honeypot_task(action, role):
+        limit = min(args.prepare_timeout, remaining())
+        command = [
+            str(worker_python),
+            "-u",
+            "-m",
+            "scenarios.huntress_honeypot_tasks",
+            action,
+            "--mount",
+            str(mount),
+            "--underlay",
+            str(underlay),
+            "--timeout",
+            str(limit),
+        ]
+
+        with registered_worker(
+            SCENARIO_ID,
+            role,
+            command,
+            registration_timeout=min(5.0, remaining()),
+            capture_stdout=True,
+        ) as (process, metadata):
+            report["processes"].append(metadata)
+
+            if action == "access":
+                # 등록 승인과 START 전송 이후임을 기록한다.
+                # 실제 읽기 성공이나 정책 차단을 뜻하지 않는다.
+                report["honeypot_observation"]["access_started"] = True
+
+            if process.stdin is not None and process.stdin.closed:
+                process.stdin = None
+
+            stdout, _ = process.communicate(
+                timeout=min(limit + 1.0, remaining()),
+            )
+
+            try:
+                payload = json.loads(stdout.decode("utf-8"))
+                payload = validate_honeypot_result(
+                    payload,
+                    action,
+                    process.returncode,
+                )
+            except (UnicodeDecodeError, ValueError) as error:
+                raise RuntimeError(f"{role} 결과 검증 실패: {error}") from error
+
+            # 경로가 호출한 작업의 대상과 일치하는지 검사한다.
+            expected_root = underlay_honeypot if action == "check" else mount_honeypot
+            for item in payload["operations"]:
+                expected_path = expected_root / item["name"]
+                if item.get("path") != str(expected_path):
+                    raise RuntimeError("허니팟 관찰 결과의 경로가 일치하지 않습니다.")
+
+            report["task_results"].append(
+                {
+                    "role": role,
+                    "pid": metadata["pid"],
+                    **payload,
+                }
+            )
+
+            if payload["status"] == "timed_out":
+                raise TimeoutError(f"{role} 제한 시간을 초과했습니다.")
+
+            if payload["status"] != "passed":
+                raise RuntimeError(f"{role} 실패: {payload['failure']['message']}")
+
+        check_health(mount, holdfs_pid)
+
     try:
         progress("running")
 
         if sys.platform != "linux":
             raise RuntimeError("Linux에서 실행해야 합니다.")
 
-        if args.mode != "read":
-            raise RuntimeError("현재는 일반 읽기 모드만 지원합니다.")
+        if args.mode not in ("read", "honeypot"):
+            raise RuntimeError("현재 지원하지 않는 실행 모드입니다.")
 
         if holdfs_pid is None:
             holdfs_pid = find_guardfs_pid()
@@ -325,6 +506,24 @@ def run(args):
             )
         )
         complete()
+
+        if args.mode == "honeypot":
+            current_name = "HONEYPOT_READY"
+            current_path = underlay_honeypot
+            progress("running")
+            run_honeypot_task("check", "huntress_honeypot_check")
+            complete()
+
+            current_name = "HONEYPOT_ACCESS"
+            current_path = mount_honeypot
+            progress("running")
+            run_honeypot_task("access", "huntress_honeypot_access")
+            complete()
+
+            # 접근 결과 관찰 완료이며 정책 차단 성공을 뜻하지 않는다.
+            report["status"] = "passed"
+            report["termination_reason"] = "completed"
+            return report
 
         current_name = "PREPARE"
         current_path = workdir

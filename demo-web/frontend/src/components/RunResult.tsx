@@ -25,28 +25,61 @@ export default function RunResult({ run }: RunResultProps) {
   const detection = run.detection_verification;
   const protection = run.protection_verification;
   const protectedFiles = protection?.status === "passed";
+  const isHoneypot =
+    run.scenario_id === "S03" && run.mode === "honeypot";
 
-  const title = protectedFiles
-    ? "공격 차단과 원본 보존을 확인했습니다"
-    : cancelled
+  // 접근 관찰 완료와 보호 검증 성공을 구분한다.
+  const resultSuccess = !cancelled && (
+    isHoneypot ? protectedFiles : passed || protectedFiles
+  );
+
+  const title = cancelled
     ? "테스트 프로세스 실행을 중단했습니다"
-    : passed
-      ? "파일 작업 검증을 완료했습니다"
-      : run.status === "timed_out"
-        ? "실행 제한 시간을 초과했습니다"
-        : "파일 작업 검증을 완료하지 못했습니다";
+    : isHoneypot
+      ? protectedFiles
+        ? "허니팟 읽기 접근 차단을 확인했습니다"
+        : protection?.status === "failed"
+          ? "허니팟 읽기 접근 차단에 실패했습니다"
+          : passed
+            ? "접근 관찰을 완료했지만 보호 여부는 확인하지 못했습니다"
+            : run.status === "timed_out"
+              ? "허니팟 접근 관찰 중 제한 시간을 초과했습니다"
+              : "허니팟 접근 관찰을 완료하지 못했습니다"
+      : protectedFiles
+        ? "공격 차단과 원본 보존을 확인했습니다"
+        : passed
+          ? "파일 작업 검증을 완료했습니다"
+          : run.status === "timed_out"
+            ? "실행 제한 시간을 초과했습니다"
+            : "파일 작업 검증을 완료하지 못했습니다";
+
+  const statusLabel = cancelled
+    ? "프로세스 종료"
+    : isHoneypot
+      ? protectedFiles
+        ? "접근 차단 확인"
+        : protection?.status === "failed"
+          ? "보호 검증 실패"
+          : "보호 판정 불가"
+      : protectedFiles
+        ? "보호 검증 완료"
+        : passed
+          ? "검증 성공"
+          : run.status === "timed_out"
+            ? "시간 초과"
+            : "검증 실패";
 
   return (
     <section
       className={`actual-result ${
-        cancelled ? "is-cancelled" : (passed || protectedFiles) ? "is-passed" : "is-failed"
+        cancelled ? "is-cancelled" : resultSuccess ? "is-passed" : "is-failed"
       }`}
       aria-labelledby="result-heading"
     >
       <header className="result-heading">
         <div className="result-heading-copy">
           <span className="result-icon" aria-hidden="true">
-            {cancelled ? "−" : (passed || protectedFiles) ? "✓" : "!"}
+            {cancelled ? "−" : resultSuccess ? "✓" : "!"}
           </span>
           <div>
             <p className="result-eyebrow">실제 검증 결과</p>
@@ -54,13 +87,7 @@ export default function RunResult({ run }: RunResultProps) {
           </div>
         </div>
         <span className="result-status">
-          {protectedFiles ? "보호 검증 완료" : cancelled
-            ? "프로세스 종료"
-            : passed
-              ? "검증 성공"
-              : run.status === "timed_out"
-                ? "시간 초과"
-                : "검증 실패"}
+          {statusLabel}
         </span>
       </header>
 
@@ -87,8 +114,18 @@ export default function RunResult({ run }: RunResultProps) {
         <div className="result-policy-note">
           <strong>보호 검증: {protection.status === "passed" ? "완료" : protection.status === "failed" ? "실패" : "판정 불가"}</strong>
           <p>{protection.reason}</p>
-          <p>관찰 시점의 문서 내용과 차단 근거를 확인한 결과입니다. 후속 지연 작업 완료나 일반적인 탐지·오탐 성능을 보장하지 않습니다.</p>
+          <p>
+            {isHoneypot
+              ? "등록된 접근 PID와 허니팟 경로의 접근 거부·차단 근거를 확인한 결과입니다. 미끼 내용 보존과 Stage 2 상태 판정은 검증 범위에 포함하지 않습니다."
+              : "관찰 시점의 문서 내용과 차단 근거를 확인한 결과입니다. 후속 지연 작업 완료나 일반적인 탐지·오탐 성능을 보장하지 않습니다."}
+          </p>
         </div>
+      )}
+
+      {isHoneypot && passed && (
+        <p className="result-note">
+          접근 관찰 작업은 완료됐습니다. 보호 성공 여부는 별도의 보호 검증 결과로 확인하세요.
+        </p>
       )}
 
       {cancelled && (
