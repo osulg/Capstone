@@ -58,5 +58,10 @@ export interface Run extends RunCreated {
   steps: RunStep[];
   result: Record<string, unknown> | null;
   detection_verification: "not_checked" | "passed" | "failed";
+  protection_verification?: {
+    status: "passed" | "failed" | "unknown";
+    reason: string;
+    observed_at?: string;
+  } | null;
   error: string | null;
 }

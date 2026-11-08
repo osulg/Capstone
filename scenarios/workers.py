@@ -36,6 +36,7 @@ def registered_worker(
     command: Sequence[str],
     *,
     registration_timeout: float = 5.0,
+    capture_stdout: bool = False,
 ) -> Iterator[tuple[subprocess.Popen, dict[str, Any]]]:
     """자식을 등록하고 시작시킨 뒤, 사용이 끝나면 종료 상태를 회수한다."""
 
@@ -66,7 +67,7 @@ def registered_worker(
         stdin=subprocess.PIPE,
         # 시나리오 관리자의 stdout은 최종 JSON 전용이다.
         # 자식의 일반 출력을 섞지 않는다.
-        stdout=subprocess.DEVNULL,
+        stdout=(subprocess.PIPE if capture_stdout else subprocess.DEVNULL),
         # 오류 메시지는 관리자의 stderr로 전달한다.
         stderr=None,
         # runner가 만든 프로세스 그룹을 그대로 상속한다.

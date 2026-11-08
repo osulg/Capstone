@@ -333,7 +333,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
       : pollError
         ? "조회 확인 필요"
         : run
-          ? RUN_LABELS[run.status]
+          ? (run.protection_verification?.status === "passed" ? "보호 검증 완료" : RUN_LABELS[run.status])
           : runId
             ? "상태 확인 중"
             : selected?.enabled
@@ -341,7 +341,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
               : "준비 중";
 
   const badgeTone =
-    run?.status === "passed"
+    run?.status === "passed" || run?.protection_verification?.status === "passed"
       ? "success"
       : run?.status === "failed" || run?.status === "timed_out"
         ? "error"

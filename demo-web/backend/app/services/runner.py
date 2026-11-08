@@ -25,6 +25,8 @@ from scenarios.catalog import Scenario, get_scenario
 from scenarios.common import get_runtime_paths
 from scenarios.execution import get_execution
 from scenarios.results import validate_result_details
+from scenarios.icefire_config import expected_operations
+from .icefire_verification import verify_protection
 
 from ..schemas.run import (
     RunCreatedResponse,
@@ -1011,6 +1013,21 @@ class ScenarioRunner:
                         ],
                     )
                 finally:
+                    if scenario.module == "scenarios.s01_icefire":
+                        try:
+                            record.protection_verification = await asyncio.to_thread(
+                                verify_protection, record.model_copy(deep=True),
+                                cleanup_confirmed=(process is not None and not self._cleanup_blocked
+                                                   and communication is not None and communication.done()),
+                            )
+                            verdict = record.protection_verification
+                            for step in record.steps:
+                                if step.id == "action":
+                                    step.status = {"passed": "passed", "failed": "failed", "unknown": "skipped"}[verdict["status"]]
+                                    step.error = None if verdict["status"] == "passed" else verdict["reason"]
+                        except Exception as error:
+                            logger.exception("IceFire 보호 검증 실패: %s", record.run_id)
+                            record.protection_verification = {"status": "unknown", "reason": str(error)}
                     record.finished_at = now()
 
     def _cleanup_done(self, task):
@@ -1040,6 +1057,44 @@ class ScenarioRunner:
             raise ValueError("잘못된 테스트 상태입니다.")
 
         validate_result_details(result)
+
+        if scenario.module == "scenarios.s01_icefire":
+            if result.get("result_version") != 2:
+                raise ValueError("IceFire는 상세 결과 버전 2가 필요합니다.")
+
+            if result.get("execution_scope") != "full":
+                raise ValueError("준비 전용 결과는 전체 실행 결과로 받을 수 없습니다.")
+
+            if result["status"] == "passed":
+                if result.get("attack_started") is not True:
+                    raise ValueError("공격 작업 시작을 확인하지 못했습니다.")
+
+                tasks = result.get("task_results")
+                if not isinstance(tasks, list):
+                    raise ValueError("IceFire 자식 작업 결과가 없습니다.")
+
+                if any(not isinstance(task, dict) for task in tasks):
+                    raise ValueError("잘못된 자식 작업 결과입니다.")
+
+                if [task.get("action") for task in tasks] != [
+                    "prepare",
+                    "verify",
+                    "attack",
+                ]:
+                    raise ValueError("IceFire 자식 작업 순서가 일치하지 않습니다.")
+
+                for task in tasks:
+                    planned = expected_operations(task["action"])
+                    if task.get("status") != "passed":
+                        raise ValueError("완료되지 않은 자식 작업이 있습니다.")
+
+                    for key in ("planned", "attempted", "completed"):
+                        value = task.get(key)
+                        if type(value) is not int or value != planned:
+                            raise ValueError("자식 작업 완료 수가 일치하지 않습니다.")
+
+                    if task.get("failure") is not None:
+                        raise ValueError("성공한 자식 작업에 실패 정보가 있습니다.")
 
         operations = result.get("steps")
 

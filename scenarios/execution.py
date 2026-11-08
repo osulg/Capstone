@@ -10,6 +10,7 @@ from types import MappingProxyType
 class ExecutionSpec:
     scenario_id: str
     module: str
+    extra_args: tuple[str, ...] = ()
 
     def workspace_name(self, run_id: str) -> str:
         return f"{self.scenario_id.lower()}_{run_id}"
@@ -34,6 +35,7 @@ class ExecutionSpec:
             str(underlay),
             "--work-dir-name",
             work_dir_name,
+            *self.extra_args,
         ]
 
 
@@ -44,6 +46,11 @@ _EXECUTIONS = MappingProxyType(
         "scenarios.s01_normal": ExecutionSpec(
             scenario_id="S01",
             module="scenarios.s01_normal",
+        ),
+        "scenarios.s01_icefire": ExecutionSpec(
+            scenario_id="S01",
+            module="scenarios.s01_icefire",
+            extra_args=("--run-attack",),
         ),
     }
 )

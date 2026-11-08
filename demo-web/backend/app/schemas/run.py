@@ -131,3 +131,4 @@ class RunResponse(BaseModel):
     error: str | None = None
     workspace: RunWorkspace | None = None
     event_collection: RunEventCollection | None = None
+    protection_verification: dict[str, Any] | None = None

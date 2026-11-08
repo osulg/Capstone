@@ -23,8 +23,12 @@ export default function RunResult({ run }: RunResultProps) {
   const cancelled = run.status === "cancelled";
   const completed = run.steps.filter((step) => step.status === "passed").length;
   const detection = run.detection_verification;
+  const protection = run.protection_verification;
+  const protectedFiles = protection?.status === "passed";
 
-  const title = cancelled
+  const title = protectedFiles
+    ? "공격 차단과 원본 보존을 확인했습니다"
+    : cancelled
     ? "테스트 프로세스 실행을 중단했습니다"
     : passed
       ? "파일 작업 검증을 완료했습니다"
@@ -35,14 +39,14 @@ export default function RunResult({ run }: RunResultProps) {
   return (
     <section
       className={`actual-result ${
-        cancelled ? "is-cancelled" : passed ? "is-passed" : "is-failed"
+        cancelled ? "is-cancelled" : (passed || protectedFiles) ? "is-passed" : "is-failed"
       }`}
       aria-labelledby="result-heading"
     >
       <header className="result-heading">
         <div className="result-heading-copy">
           <span className="result-icon" aria-hidden="true">
-            {cancelled ? "−" : passed ? "✓" : "!"}
+            {cancelled ? "−" : (passed || protectedFiles) ? "✓" : "!"}
           </span>
           <div>
             <p className="result-eyebrow">실제 검증 결과</p>
@@ -50,7 +54,7 @@ export default function RunResult({ run }: RunResultProps) {
           </div>
         </div>
         <span className="result-status">
-          {cancelled
+          {protectedFiles ? "보호 검증 완료" : cancelled
             ? "프로세스 종료"
             : passed
               ? "검증 성공"
@@ -79,6 +83,14 @@ export default function RunResult({ run }: RunResultProps) {
         </div>
       </dl>
 
+      {protection && (
+        <div className="result-policy-note">
+          <strong>보호 검증: {protection.status === "passed" ? "완료" : protection.status === "failed" ? "실패" : "판정 불가"}</strong>
+          <p>{protection.reason}</p>
+          <p>관찰 시점의 문서 내용과 차단 근거를 확인한 결과입니다. 후속 지연 작업 완료나 일반적인 탐지·오탐 성능을 보장하지 않습니다.</p>
+        </div>
+      )}
+
       {cancelled && (
         <p className="result-note">
           테스트가 중단되어 전체 파일 작업 검증을 완료하지 못했습니다.
@@ -104,7 +116,7 @@ export default function RunResult({ run }: RunResultProps) {
         </div>
       ) : run.error ? (
         <div className="result-error" role="alert">
-          <strong>오류 내용</strong>
+          <strong>공격 실행 결과: {run.status === "timed_out" ? "시간 초과" : run.status}</strong>
           <p>{run.error}</p>
         </div>
       ) : null}

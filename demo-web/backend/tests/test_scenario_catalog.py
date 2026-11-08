@@ -10,7 +10,7 @@ ROOT = BACKEND.parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(BACKEND))
 
-from scenarios.catalog import list_scenarios
+from scenarios.catalog import get_scenario, list_scenarios
 
 HAS_PYDANTIC = importlib.util.find_spec("pydantic") is not None
 
@@ -37,11 +37,24 @@ class ScenarioCatalogTests(unittest.TestCase):
             ],
         )
 
-    def test_unimplemented_scenarios_are_disabled(self):
+    def test_only_icefire_is_enabled(self):
         for item in list_scenarios():
             with self.subTest(scenario_id=item["id"]):
-                self.assertFalse(item["enabled"])
-                self.assertTrue(item["disabled_reason"])
+                if item["id"] == "S01":
+                    self.assertTrue(item["enabled"])
+                    self.assertIsNone(item["disabled_reason"])
+                else:
+                    self.assertFalse(item["enabled"])
+                    self.assertTrue(item["disabled_reason"])
+
+    def test_icefire_module_and_steps_are_connected(self):
+        scenario = get_scenario("S01")
+
+        self.assertEqual(scenario.module, "scenarios.s01_icefire")
+        self.assertEqual(
+            [name for step in scenario.steps for name in step.operation_names],
+            ["PRECHECK", "PREPARE", "VERIFY_READY", "ACTION"],
+        )
 
 
 @unittest.skipUnless(
@@ -71,7 +84,7 @@ class ScenarioAvailabilityTests(unittest.IsolatedAsyncioTestCase):
         runner = ScenarioRunner()
 
         try:
-            for scenario_id in ("S01", "S02", "S03", "S04"):
+            for scenario_id in ("S02", "S03", "S04"):
                 with self.subTest(scenario_id=scenario_id):
                     with self.assertRaises(ScenarioUnavailableError):
                         runner.start(scenario_id)

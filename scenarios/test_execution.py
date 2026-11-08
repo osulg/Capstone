@@ -15,8 +15,31 @@ class ExecutionTests(unittest.TestCase):
     def test_rejects_wrong_scenario_id(self):
         self.assertIsNone(get_execution("S02", "scenarios.s01_normal"))
 
-    def test_unimplemented_simulator_is_not_allowed(self):
-        self.assertIsNone(get_execution("S01", "scenarios.s01_icefire"))
+    def test_icefire_command_requests_full_execution(self):
+        spec = get_execution("S01", "scenarios.s01_icefire")
+        self.assertIsNotNone(spec)
+
+        command = spec.build_command(
+            mount=Path("/runtime/mount"),
+            underlay=Path("/runtime/underlay"),
+            work_dir_name="s01_" + "a" * 32,
+        )
+
+        self.assertEqual(command.count("--run-attack"), 1)
+        self.assertIn("--wait-registration-ack", command)
+        self.assertEqual(
+            command[command.index("-m") + 1],
+            "scenarios.s01_icefire",
+        )
+
+    def test_other_simulators_are_not_allowed_yet(self):
+        for scenario_id, module in (
+            ("S02", "scenarios.s02_darkradiation"),
+            ("S03", "scenarios.s03_huntress"),
+            ("S04", "scenarios.s04_akira"),
+        ):
+            with self.subTest(scenario_id=scenario_id):
+                self.assertIsNone(get_execution(scenario_id, module))
 
     def test_normal_command_preserves_execution_contract(self):
         spec = get_execution("S01", "scenarios.s01_normal")

@@ -37,8 +37,31 @@ SCENARIOS = (
             "모의 노트 생성과 도구 표식 삭제를 시도합니다."
         ),
         expected_result=("파일 작업 결과와 HoldFS 탐지·보호 이벤트를 관찰합니다."),
-        enabled=False,
-        disabled_reason="웹 실행 연결 및 Ubuntu 검증 예정입니다.",
+        enabled=True,
+        disabled_reason=None,
+        module="scenarios.s01_icefire",
+        steps=(
+            ScenarioStep(
+                id="precheck",
+                name="실행 환경 확인",
+                operation_names=("PRECHECK",),
+            ),
+            ScenarioStep(
+                id="prepare",
+                name="더미 문서 준비",
+                operation_names=("PREPARE",),
+            ),
+            ScenarioStep(
+                id="verify_ready",
+                name="문서 공개 확인",
+                operation_names=("VERIFY_READY",),
+            ),
+            ScenarioStep(
+                id="action",
+                name="공격 시도 및 보호 결과 확인",
+                operation_names=("ACTION",),
+            ),
+        ),
     ),
     Scenario(
         id="S02",
