@@ -16,29 +16,43 @@ ROOT = BACKEND.parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(BACKEND))
 
+from scenario_fixtures import NormalScenarioMixin
+
 HAS_PYDANTIC = importlib.util.find_spec("pydantic") is not None
 if HAS_PYDANTIC:
-    from app.schemas.run import RunEventCollection, RunProcess, RunResponse, RunWorkspace
+    from app.schemas.run import (
+        RunEventCollection,
+        RunProcess,
+        RunResponse,
+        RunWorkspace,
+    )
     from app.services.holdfs_events import EventCollection, capture_log
     from app.services.runner import ScenarioRunner, now
-    from scenarios.catalog import get_scenario
+    from scenario_fixtures import get_test_scenario as get_scenario
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "백엔드 Pydantic 환경이 필요합니다.")
-class RunnerEventTests(unittest.IsolatedAsyncioTestCase):
+class RunnerEventTests(NormalScenarioMixin, unittest.IsolatedAsyncioTestCase):
     def _registered_record(self):
         """파일을 만들지 않고 로그 연결용 실행 정보를 준비한다."""
         return RunResponse(
-            run_id="test", scenario_id="S01", status="passed", created_at=now(),
+            run_id="test",
+            scenario_id="S01",
+            status="passed",
+            created_at=now(),
             workspace=RunWorkspace(
                 name="s01_test",
                 mount_path="/runtime/mount/s01_test",
                 underlay_path="/runtime/underlay/s01_test",
             ),
-            processes=[RunProcess(
-                role="normal_worker", pid=123,
-                start_time_ticks=1, registered_at=now(),
-            )],
+            processes=[
+                RunProcess(
+                    role="normal_worker",
+                    pid=123,
+                    start_time_ticks=1,
+                    registered_at=now(),
+                )
+            ],
         )
 
     async def test_real_log_records_are_filtered_and_collected(self):
@@ -55,8 +69,13 @@ class RunnerEventTests(unittest.IsolatedAsyncioTestCase):
                 ]
                 started = time.time_ns()
                 records = [
-                    {"pid": pid, "ts_ns": time.time_ns(), "op": "write",
-                     "path": path, "applied": False}
+                    {
+                        "pid": pid,
+                        "ts_ns": time.time_ns(),
+                        "op": "write",
+                        "path": path,
+                        "applied": False,
+                    }
                     for pid, path in (
                         (123, "/runtime/underlay/s01_test/test.txt"),
                         (999, "/runtime/underlay/s01_test/test.txt"),
@@ -76,7 +95,10 @@ class RunnerEventTests(unittest.IsolatedAsyncioTestCase):
                 )
 
                 report = runner._collect_run_events(
-                    self._registered_record(), checkpoints, [], started,
+                    self._registered_record(),
+                    checkpoints,
+                    [],
+                    started,
                 )
                 self.assertEqual(len(report.events), 2)
                 self.assertEqual(len(report.pid_only_events), 1)
@@ -97,18 +119,26 @@ class RunnerEventTests(unittest.IsolatedAsyncioTestCase):
                     capture_log(path, "policy"),
                 ]
                 policy_event = {"source": "policy", "pid": 123, "op": "COMMIT"}
-                with patch(
-                    "app.services.runner.collect_events",
-                    side_effect=[
-                        ValueError("broken source"),
-                        EventCollection(events=[policy_event]),
-                    ],
-                ), self.assertLogs("app.services.runner", level="ERROR"):
+                with (
+                    patch(
+                        "app.services.runner.collect_events",
+                        side_effect=[
+                            ValueError("broken source"),
+                            EventCollection(events=[policy_event]),
+                        ],
+                    ),
+                    self.assertLogs("app.services.runner", level="ERROR"),
+                ):
                     report = runner._collect_run_events(
-                        self._registered_record(), checkpoints, [], time.time_ns(),
+                        self._registered_record(),
+                        checkpoints,
+                        [],
+                        time.time_ns(),
                     )
                 self.assertEqual(report.events, [policy_event])
-                self.assertTrue(any("broken source" in issue for issue in report.issues))
+                self.assertTrue(
+                    any("broken source" in issue for issue in report.issues)
+                )
         finally:
             await runner.close()
 
@@ -118,10 +148,13 @@ class RunnerEventTests(unittest.IsolatedAsyncioTestCase):
         process = SimpleNamespace(pid=123, returncode=0)
         scenario = get_scenario("S01")
         result = {
-            "scenario_id": "S01", "pid": 123, "status": "passed",
+            "scenario_id": "S01",
+            "pid": 123,
+            "status": "passed",
             "steps": [
                 {"name": name, "status": "passed"}
-                for step in scenario.steps for name in step.operation_names
+                for step in scenario.steps
+                for name in step.operation_names
             ],
         }
 
@@ -152,7 +185,8 @@ class RunnerEventTests(unittest.IsolatedAsyncioTestCase):
                     side_effect=spawn,
                 ),
                 patch.object(
-                    runner, "_collect_output",
+                    runner,
+                    "_collect_output",
                     new=AsyncMock(return_value=json.dumps(result).encode()),
                 ),
                 patch.object(runner, "_terminate_process_group", side_effect=terminate),
@@ -176,17 +210,17 @@ class RunnerEventTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("app.services.runner", level="ERROR"):
             result, _ = await self._run_success(capture_failure=True)
         self.assertEqual(result.status, "passed")
-        self.assertTrue(any(
-            "capture failed" in issue for issue in result.event_collection.issues
-        ))
+        self.assertTrue(
+            any("capture failed" in issue for issue in result.event_collection.issues)
+        )
 
     async def test_collection_error_does_not_fail_file_operations(self):
         with self.assertLogs("app.services.runner", level="ERROR"):
             result, _ = await self._run_success(collect_failure=True)
         self.assertEqual(result.status, "passed")
-        self.assertTrue(any(
-            "collect failed" in issue for issue in result.event_collection.issues
-        ))
+        self.assertTrue(
+            any("collect failed" in issue for issue in result.event_collection.issues)
+        )
 
     async def test_missing_filesystem_log_does_not_skip_policy_checkpoint(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -196,7 +230,8 @@ class RunnerEventTests(unittest.IsolatedAsyncioTestCase):
             runner = ScenarioRunner(underlay_path=root / "underlay")
             try:
                 with patch(
-                    "app.services.runner.FILESECURITY_LOG_PATH", str(policy_log),
+                    "app.services.runner.FILESECURITY_LOG_PATH",
+                    str(policy_log),
                 ):
                     checkpoints, issues = runner._capture_event_logs()
                 self.assertEqual([item.source for item in checkpoints], ["policy"])
@@ -208,7 +243,10 @@ class RunnerEventTests(unittest.IsolatedAsyncioTestCase):
     async def test_terminal_status_is_hidden_until_finalization(self):
         runner = ScenarioRunner()
         record = RunResponse(
-            run_id="test", scenario_id="S01", status="passed", created_at=now(),
+            run_id="test",
+            scenario_id="S01",
+            status="passed",
+            created_at=now(),
         )
         runner._runs[record.run_id] = record
         try:
@@ -252,7 +290,9 @@ class RunnerEventTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(runner, "_collect_output", side_effect=output),
             patch.object(runner, "_terminate_process_group", side_effect=terminate),
-            patch.object(runner, "_collect_run_events", side_effect=collect) as collector,
+            patch.object(
+                runner, "_collect_run_events", side_effect=collect
+            ) as collector,
         ):
             try:
                 created = runner.start("S01")

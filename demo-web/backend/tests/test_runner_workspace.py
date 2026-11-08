@@ -12,13 +12,15 @@ ROOT = BACKEND.parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(BACKEND))
 
+from scenario_fixtures import NormalScenarioMixin
+
 HAS_PYDANTIC = importlib.util.find_spec("pydantic") is not None
 if HAS_PYDANTIC:
     from app.services.runner import ScenarioRunner
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "백엔드 Pydantic 환경이 필요합니다.")
-class RunnerWorkspaceTests(unittest.IsolatedAsyncioTestCase):
+class RunnerWorkspaceTests(NormalScenarioMixin, unittest.IsolatedAsyncioTestCase):
     async def test_workspace_survives_cancel_before_spawn(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -63,10 +65,13 @@ class RunnerWorkspaceTests(unittest.IsolatedAsyncioTestCase):
             )
             try:
                 # 실제 프로세스를 만들기 직전의 인자를 검사한다.
-                with patch(
-                    "app.services.runner.asyncio.create_subprocess_exec",
-                    new=AsyncMock(side_effect=OSError("test spawn stopped")),
-                ) as spawn, self.assertLogs("app.services.runner", level="ERROR"):
+                with (
+                    patch(
+                        "app.services.runner.asyncio.create_subprocess_exec",
+                        new=AsyncMock(side_effect=OSError("test spawn stopped")),
+                    ) as spawn,
+                    self.assertLogs("app.services.runner", level="ERROR"),
+                ):
                     created = runner.start("S01")
                     await runner._active_task
 

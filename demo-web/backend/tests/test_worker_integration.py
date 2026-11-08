@@ -18,8 +18,7 @@ sys.path.insert(0, str(BACKEND))
 
 from app.schemas.run import RunResponse
 from app.services.runner import ScenarioRunner, now
-
-from scenarios.catalog import get_scenario
+from scenario_fixtures import NormalScenarioMixin, get_test_scenario as get_scenario
 
 # 별도 프로세스에서 실행할 검증용 관리자 코드.
 # S01 파일 작업을 실행하는 것이 아니라 등록 프로토콜만 이용한다.
@@ -108,7 +107,7 @@ except RuntimeError as error:
     sys.platform == "linux",
     "실제 /proc 검증은 Linux에서 수행합니다.",
 )
-class WorkerIntegrationTests(unittest.IsolatedAsyncioTestCase):
+class WorkerIntegrationTests(NormalScenarioMixin, unittest.IsolatedAsyncioTestCase):
     async def _check_registration_failure(self, mode):
         """실제 등록 거절 또는 응답 통로 종료 시 자식 회수를 확인한다."""
         scenario = get_scenario("S01")

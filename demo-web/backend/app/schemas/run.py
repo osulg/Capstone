@@ -30,7 +30,7 @@ StepStatus = Literal[
 
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    scenario_id: str = Field(pattern=r"^S0[1-5]$")
+    scenario_id: str = Field(pattern=r"^S0[1-4]$")
 
 
 class RunCreatedResponse(BaseModel):

@@ -19,6 +19,7 @@ sys.path.insert(0, str(BACKEND))
 from app.api.runs import cancel_run
 from app.schemas.run import RunResponse
 from app.services.runner import RunBusyError, ScenarioRunner, now
+from scenario_fixtures import NormalScenarioMixin
 
 
 @asynccontextmanager
@@ -71,7 +72,7 @@ async def running_runner(*, cleanup_failure=False):
             await runner.close()
 
 
-class RunnerCancelTests(unittest.IsolatedAsyncioTestCase):
+class RunnerCancelTests(NormalScenarioMixin, unittest.IsolatedAsyncioTestCase):
     async def test_cancel_before_process_creation(self):
         runner = ScenarioRunner()
 
@@ -231,7 +232,9 @@ class RunnerCancelTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(runner, "_collect_output", side_effect=collect_output),
             patch.object(
-                runner, "_terminate_process_group", side_effect=terminate_group,
+                runner,
+                "_terminate_process_group",
+                side_effect=terminate_group,
             ),
         ):
             try:
@@ -248,7 +251,8 @@ class RunnerCancelTests(unittest.IsolatedAsyncioTestCase):
                 released.set()
                 if runner._pending_cleanup:
                     await asyncio.wait_for(
-                        asyncio.gather(*tuple(runner._pending_cleanup)), timeout=3,
+                        asyncio.gather(*tuple(runner._pending_cleanup)),
+                        timeout=3,
                     )
                 await runner.close()
 

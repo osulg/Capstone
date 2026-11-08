@@ -1,6 +1,23 @@
-# GuardFS demo scenarios
+# HoldFS 시나리오
 
-## S01: normal file operations
+## 웹 연동 예정 구성
+
+| 웹 ID | 시나리오 | 추가 예정 모듈 |
+| --- | --- | --- |
+| S01 | IceFire 랜섬웨어 | `scenarios.s01_icefire` |
+| S02 | DarkRadiation 랜섬웨어 | `scenarios.s02_darkradiation` |
+| S03 | Huntress | `scenarios.s03_huntress` |
+| S04 | Akira | `scenarios.s04_akira` |
+
+위 모듈은 아직 추가되지 않았다. 현재 catalog와 runner는 기존 S01 정상 작업을 사용한다.
+새 모듈은 각 연동 단계에서 실제 구현하며, 구현·검증 전에는 웹 실행을 활성화하지 않는다.
+실행 옵션·PID 구성·완료 조건은 [연동 명세](../docs/demo-web-scenario-integration.md)를 참고한다.
+
+`experiments/simulators/`의 원본과 공통 하네스는 기존 CLI 및 테스트를 위해 유지하고 웹 모듈에서 재사용한다.
+`common.py`, `workers.py`, `child_gate.py`는 공통 실행 제어 도구이며 관련 테스트도 유지한다.
+기존 `s01_normal.py`와 테스트는 정상 파일 연산 회귀 검증용으로 보존한다. 아래 기존 명령은 새 S01 IceFire 실행 명령이 아니다.
+
+## 기존 정상 파일 연산 회귀 검증
 
 Run on Linux from the repository root after starting GuardFS:
 

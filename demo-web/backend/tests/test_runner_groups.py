@@ -16,6 +16,8 @@ ROOT = BACKEND.parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(BACKEND))
 
+from scenario_fixtures import NormalScenarioMixin
+
 HAS_PYDANTIC = importlib.util.find_spec("pydantic") is not None
 if HAS_PYDANTIC:
     from app.services.runner import ScenarioRunner
@@ -87,7 +89,7 @@ while True:
     sys.platform == "linux" and HAS_PYDANTIC,
     "Linux와 백엔드 Pydantic 환경이 필요합니다.",
 )
-class RunnerGroupTests(unittest.IsolatedAsyncioTestCase):
+class RunnerGroupTests(NormalScenarioMixin, unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.groups = []
         self.child_pids = set()

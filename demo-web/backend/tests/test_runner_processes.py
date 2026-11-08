@@ -17,6 +17,8 @@ ROOT = BACKEND.parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(BACKEND))
 
+from scenario_fixtures import NormalScenarioMixin
+
 HAS_PYDANTIC = importlib.util.find_spec("pydantic") is not None
 if HAS_PYDANTIC:
     from app.schemas.run import RunResponse
@@ -99,7 +101,7 @@ class ProcessRegistrationTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "Pydantic is not installed")
-class RunnerCleanupTests(unittest.IsolatedAsyncioTestCase):
+class RunnerCleanupTests(NormalScenarioMixin, unittest.IsolatedAsyncioTestCase):
     async def test_output_error_does_not_lock_finished_process(self):
         process = SimpleNamespace(pid=100, returncode=1)
         runner = ScenarioRunner()

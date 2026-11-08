@@ -23,6 +23,7 @@ from guardfs.common.paths import (
 )
 from scenarios.catalog import Scenario, get_scenario
 from scenarios.common import get_runtime_paths
+from scenarios.execution import get_execution
 
 from ..schemas.run import (
     RunCreatedResponse,
@@ -105,9 +106,10 @@ class ScenarioRunner:
                 scenario.disabled_reason or "실행할 수 없는 시나리오입니다."
             )
 
-        # 현재 구현은 자식 프로세스를 만들지 않는 S01만 지원
-        if scenario.module != "scenarios.s01_normal":
-            raise ScenarioUnavailableError("현재 실행 관리자는 S01만 지원합니다.")
+        execution = get_execution(scenario.id, scenario.module)
+
+        if execution is None:
+            raise ScenarioUnavailableError("실행 연결이 구현되지 않은 시나리오입니다.")
 
         if self._cleanup_blocked:
             raise RunBusyError(
@@ -122,7 +124,7 @@ class ScenarioRunner:
         run_id = uuid.uuid4().hex
 
         # 최종 결과가 없는 중단 실행도 로그 수집 경로를 알 수 있도록 미리 기록한다.
-        work_dir_name = f"s01_{run_id}"
+        work_dir_name = execution.workspace_name(run_id)
         workspace = RunWorkspace(
             name=work_dir_name,
             mount_path=str(self.mount_path / work_dir_name),
@@ -732,28 +734,21 @@ class ScenarioRunner:
                 record.error = "사용자가 테스트 프로세스 종료를 요청했습니다."
                 return
 
-            command = [
-                sys.executable,
-                "-u",
-                "-m",
-                scenario.module,
-            ]
-            # 기록한 작업 경로를 S01에 전달하고 API 실행에서 등록 승인을 기다린다.
-            if scenario.module == "scenarios.s01_normal":
-                if record.workspace is None:
-                    raise ValueError("실행 작업 경로가 설정되지 않았습니다.")
+            execution = get_execution(scenario.id, scenario.module)
 
-                command.extend(
-                    [
-                        "--wait-registration-ack",
-                        "--mount",
-                        str(self.mount_path),
-                        "--underlay",
-                        str(self.underlay_path),
-                        "--work-dir-name",
-                        record.workspace.name,
-                    ]
+            if execution is None:
+                raise ScenarioUnavailableError(
+                    "실행 연결이 구현되지 않은 시나리오입니다."
                 )
+
+            if record.workspace is None:
+                raise ValueError("실행 작업 경로가 설정되지 않았습니다.")
+
+            command = execution.build_command(
+                mount=self.mount_path,
+                underlay=self.underlay_path,
+                work_dir_name=record.workspace.name,
+            )
 
             # 파일 읽기는 스레드에서 수행하고 수집 실패는 실행 결과와 분리한다.
             try:
