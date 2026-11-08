@@ -9,12 +9,15 @@ import {
 } from "../api/clients";
 
 import type {
+  HuntressMode,
   Run,
   RunStatus,
   RunStep,
   Scenario,
   StepStatus,
 } from "../types/api";
+
+import { isHuntressMode } from "../types/api";
 
 import {
   clearSavedRun,
@@ -51,6 +54,18 @@ const STEP_LABELS: Record<StepStatus, string> = {
   skipped: "검증하지 못함",
 };
 
+const MODE_DESCRIPTIONS: Record<HuntressMode, string> = {
+  read: "더미 자격 파일 6개를 읽고 내용 변화를 확인합니다.",
+  honeypot: "미리 배치한 미끼에 접근하고 차단 근거를 확인합니다.",
+  delete: "더미 로그 12개 삭제를 시도하고 남은 파일을 확인합니다.",
+};
+
+const MODE_CONDITIONS: Record<HuntressMode, string> = {
+  read: "더미 자격 파일 6개 · 전체 1회 읽기",
+  honeypot: "미끼 5개 사전 준비 · 경로별 접근 시도",
+  delete: "더미 로그 12개 · 삭제 간격 0.1초",
+};
+
 function isFinished(status: RunStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
@@ -75,6 +90,9 @@ export default function Demo({ onReplayIntro }: DemoProps) {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [selectedId, setSelectedId] = useState(
     savedRun?.scenarioId ?? "S01",
+  );
+  const [selectedMode, setSelectedMode] = useState<HuntressMode>(
+    savedRun?.mode ?? "read",
   );
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState("");
@@ -116,6 +134,12 @@ export default function Demo({ onReplayIntro }: DemoProps) {
     run?.status === "cancelling";
 
   const selected = scenarios.find((item) => item.id === selectedId);
+  const selectedModeDefinition =
+    selected?.id === "S03"
+      ? (selected.modes ?? []).find((mode) => mode.id === selectedMode)
+      : undefined;
+  const modeUnavailable =
+    selected?.id === "S03" && selectedModeDefinition?.enabled !== true;
 
   // 조회가 실패해도 실제 테스트가 종료됐다고 가정하지 않는다.
   const awaitingResult =
@@ -178,6 +202,20 @@ export default function Demo({ onReplayIntro }: DemoProps) {
 
         setRun(result);
 
+        // 저장값보다 서버가 반환한 실제 실행 정보를 우선한다.
+        setSelectedId(result.scenario_id);
+        if (result.scenario_id === "S03" && isHuntressMode(result.mode)) {
+          setSelectedMode(result.mode);
+        }
+        saveRun({
+          runId: result.run_id,
+          scenarioId: result.scenario_id,
+          mode:
+            result.scenario_id === "S03" && isHuntressMode(result.mode)
+              ? result.mode
+              : null,
+        });
+
         // 이전 요청이 끝난 다음에만 다음 조회를 예약한다.
         if (!isFinished(result.status)) {
           timer = setTimeout(poll, 500);
@@ -221,6 +259,26 @@ export default function Demo({ onReplayIntro }: DemoProps) {
 
     clearSavedRun();
     setSelectedId(id);
+    setSelectedMode("read");
+    setRunId(null);
+    setRun(null);
+    setStartError("");
+    setPollError("");
+    setSessionNotice("");
+    setCancelAcknowledged(false);
+    setCancelError("");
+  }
+
+  function selectMode(value: string) {
+    if (
+      busy ||
+      selectedId !== "S03" ||
+      !isHuntressMode(value) ||
+      value === selectedMode
+    ) return;
+
+    clearSavedRun();
+    setSelectedMode(value);
     setRunId(null);
     setRun(null);
     setStartError("");
@@ -232,18 +290,20 @@ export default function Demo({ onReplayIntro }: DemoProps) {
 
   // ── 4. 사용자가 버튼을 눌렀을 때만 실행 요청 ──
   async function handleStart() {
-    if (!selected?.enabled || busy || submittingRef.current) return;
+    if (!selected?.enabled || modeUnavailable || busy || submittingRef.current) return;
 
     submittingRef.current = true;
     setSubmitting(true);
     setStartError("");
 
     try {
-      const created = await startRun(selected.id);
+      const mode = selected.id === "S03" ? selectedMode : null;
+      const created = await startRun(selected.id, mode);
 
       const stored = saveRun({
         runId: created.run_id,
         scenarioId: created.scenario_id,
+        mode: created.mode ?? null,
       });
 
       setSessionNotice(
@@ -427,8 +487,11 @@ export default function Demo({ onReplayIntro }: DemoProps) {
             >
               <legend className="sr-only">시나리오 선택</legend>
               {scenarios.map((scenario) => (
-                <label
+                <div
                   key={scenario.id}
+                  className={`scenario-group ${scenario.id === "S03" && selectedId === "S03" ? "is-expanded" : ""}`}
+                >
+                <label
                   className={`scenario-option ${
                     selectedId === scenario.id ? "is-selected" : ""
                   }`}
@@ -456,6 +519,43 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                     {selectedId === scenario.id ? "✓" : ""}
                   </span>
                 </label>
+                {scenario.id === "S03" && selectedId === "S03" && (
+                  <div className="huntress-panel">
+                    <fieldset className="huntress-tabs">
+                      <legend className="sr-only">Huntress 실행 모드</legend>
+                      {(scenario.modes ?? []).map((mode) => (
+                        <label
+                          key={mode.id}
+                          className={`huntress-tab ${selectedMode === mode.id ? "is-selected" : ""}`}
+                        >
+                          <input
+                            type="radio"
+                            name="huntress-mode"
+                            value={mode.id}
+                            checked={selectedMode === mode.id}
+                            onChange={() => selectMode(mode.id)}
+                          />
+                          <span>{mode.id === "read" ? "일반 읽기" : mode.id === "honeypot" ? "허니팟 접근" : "로그 삭제"}</span>
+                        </label>
+                      ))}
+                    </fieldset>
+                    <div className="huntress-mode-detail">
+                      <h3>{scenario.modes?.find((mode) => mode.id === selectedMode)?.name}</h3>
+                      <p>{MODE_DESCRIPTIONS[selectedMode]}</p>
+                      <dl>
+                        <div>
+                          <dt>실행 조건</dt>
+                          <dd>{MODE_CONDITIONS[selectedMode]}</dd>
+                        </div>
+                        <div>
+                          <dt>확인 범위</dt>
+                          <dd>{selectedMode === "read" ? "읽기 결과와 내용 불변" : selectedMode === "honeypot" ? "접근 결과와 차단 근거" : "삭제 결과와 실제 파일 보존"}</dd>
+                        </div>
+                      </dl>
+                    </div>
+                  </div>
+                )}
+                </div>
               ))}
             </fieldset>
           </section>
@@ -509,9 +609,12 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                 ))}
               </ol>
 
-              {!selected.enabled && (
+              {(!selected.enabled || modeUnavailable) && (
                 <p className="demo-notice">
-                  {selected.disabled_reason ?? "실행 기능을 준비 중입니다."}
+                  {!selected.enabled
+                    ? selected.disabled_reason ?? "실행 기능을 준비 중입니다."
+                    : selectedModeDefinition?.disabled_reason ??
+                      "선택한 모드의 실행 기능을 준비 중입니다."}
                 </p>
               )}
 
@@ -524,7 +627,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                 <button
                   type="button"
                   className="demo-start-button"
-                  disabled={busy || loading || !selected.enabled}
+                  disabled={busy || loading || !selected.enabled || modeUnavailable}
                   onClick={() => void handleStart()}
                 >
                   <span>
@@ -536,7 +639,9 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                           ? "검증 진행 중"
                           : run
                             ? "다시 실행"
-                            : "시연 시작"}
+                            : selected.id === "S03"
+                              ? `${selectedMode === "read" ? "일반 읽기" : selectedMode === "honeypot" ? "허니팟 접근" : "로그 삭제"} 실행`
+                              : "시연 시작"}
                   </span>
                   <span aria-hidden="true">→</span>
                 </button>

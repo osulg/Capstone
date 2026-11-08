@@ -24,14 +24,14 @@ from guardfs.common.paths import (
 from scenarios.catalog import Scenario, get_scenario
 from scenarios.common import get_runtime_paths
 from scenarios.execution import get_execution
-from scenarios.results import validate_result_details
 from scenarios.icefire_config import expected_operations
-from .icefire_verification import verify_protection
+from scenarios.results import validate_result_details
 
 from ..schemas.run import (
     RunCreatedResponse,
     RunEventCollection,
     RunProcess,
+    RunRequest,
     RunResponse,
     RunStepResponse,
     RunWorkspace,
@@ -42,6 +42,7 @@ from .holdfs_events import (
     capture_log,
     collect_events,
 )
+from .icefire_verification import verify_protection
 
 logger = logging.getLogger(__name__)
 
@@ -94,10 +95,29 @@ class ScenarioRunner:
         self._pending_cleanup: set[asyncio.Task] = set()
         self._closed = False
 
-    def start(self, scenario_id: str) -> RunCreatedResponse:
-        """실행을 예약하고 실행 ID를 즉시 반환"""
+    def start(
+        self,
+        scenario_id: str,
+        *,
+        mode: str | None = None,
+    ) -> RunCreatedResponse:
+        """실행을 예약하고 실행 ID를 즉시 반환한다."""
         if self._closed:
             raise RuntimeError("실행 관리자가 종료되었습니다.")
+
+        # API를 통하지 않는 호출도 같은 규칙으로 검사한다.
+        try:
+            request = RunRequest(
+                scenario_id=scenario_id,
+                mode=mode,
+            )
+        except ValueError as error:
+            raise ScenarioUnavailableError(
+                "시나리오 ID와 실행 모드 조합이 올바르지 않습니다."
+            ) from error
+
+        scenario_id = request.scenario_id
+        mode = request.mode
 
         scenario = get_scenario(scenario_id)
 
@@ -108,6 +128,23 @@ class ScenarioRunner:
             raise ScenarioUnavailableError(
                 scenario.disabled_reason or "실행할 수 없는 시나리오입니다."
             )
+
+        if scenario.id == "S03":
+            selected_mode = next(
+                (item for item in scenario.modes if item.id == mode),
+                None,
+            )
+
+            if selected_mode is None:
+                raise ScenarioUnavailableError(
+                    "등록되지 않은 Huntress 실행 모드입니다."
+                )
+
+            if not selected_mode.enabled:
+                raise ScenarioUnavailableError(
+                    selected_mode.disabled_reason
+                    or "아직 실행할 수 없는 Huntress 모드입니다."
+                )
 
         execution = get_execution(scenario.id, scenario.module)
 
@@ -137,6 +174,7 @@ class ScenarioRunner:
         record = RunResponse(
             run_id=run_id,
             scenario_id=scenario.id,
+            mode=mode,
             status="queued",
             created_at=now(),
             workspace=workspace,
@@ -155,6 +193,7 @@ class ScenarioRunner:
         return RunCreatedResponse(
             run_id=run_id,
             scenario_id=scenario.id,
+            mode=mode,
             status="queued",
         )
 
@@ -753,6 +792,9 @@ class ScenarioRunner:
                 work_dir_name=record.workspace.name,
             )
 
+            if record.mode is not None:
+                command.extend(["--mode", record.mode])
+
             # 파일 읽기는 스레드에서 수행하고 수집 실패는 실행 결과와 분리한다.
             try:
                 checkpoints, capture_issues = await asyncio.to_thread(
@@ -1016,18 +1058,36 @@ class ScenarioRunner:
                     if scenario.module == "scenarios.s01_icefire":
                         try:
                             record.protection_verification = await asyncio.to_thread(
-                                verify_protection, record.model_copy(deep=True),
-                                cleanup_confirmed=(process is not None and not self._cleanup_blocked
-                                                   and communication is not None and communication.done()),
+                                verify_protection,
+                                record.model_copy(deep=True),
+                                cleanup_confirmed=(
+                                    process is not None
+                                    and not self._cleanup_blocked
+                                    and communication is not None
+                                    and communication.done()
+                                ),
                             )
                             verdict = record.protection_verification
                             for step in record.steps:
                                 if step.id == "action":
-                                    step.status = {"passed": "passed", "failed": "failed", "unknown": "skipped"}[verdict["status"]]
-                                    step.error = None if verdict["status"] == "passed" else verdict["reason"]
+                                    step.status = {
+                                        "passed": "passed",
+                                        "failed": "failed",
+                                        "unknown": "skipped",
+                                    }[verdict["status"]]
+                                    step.error = (
+                                        None
+                                        if verdict["status"] == "passed"
+                                        else verdict["reason"]
+                                    )
                         except Exception as error:
-                            logger.exception("IceFire 보호 검증 실패: %s", record.run_id)
-                            record.protection_verification = {"status": "unknown", "reason": str(error)}
+                            logger.exception(
+                                "IceFire 보호 검증 실패: %s", record.run_id
+                            )
+                            record.protection_verification = {
+                                "status": "unknown",
+                                "reason": str(error),
+                            }
                     record.finished_at = now()
 
     def _cleanup_done(self, task):

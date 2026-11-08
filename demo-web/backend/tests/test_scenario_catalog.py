@@ -30,8 +30,8 @@ class ScenarioCatalogTests(unittest.TestCase):
         self.assertEqual(
             [(item["id"], item["name"]) for item in scenarios],
             [
-                ("S01", "IceFire 랜섬웨어"),
-                ("S02", "DarkRadiation 랜섬웨어"),
+                ("S01", "IceFire"),
+                ("S02", "DarkRadiation"),
                 ("S03", "Huntress"),
                 ("S04", "Akira"),
             ],
@@ -65,10 +65,13 @@ class ScenarioRequestTests(unittest.TestCase):
     def test_request_accepts_current_ids(self):
         for scenario_id in ("S01", "S02", "S03", "S04"):
             with self.subTest(scenario_id=scenario_id):
-                self.assertEqual(
-                    RunRequest(scenario_id=scenario_id).scenario_id,
-                    scenario_id,
-                )
+                payload = {"scenario_id": scenario_id}
+
+                if scenario_id == "S03":
+                    payload["mode"] = "read"
+
+                request = RunRequest(**payload)
+                self.assertEqual(request.scenario_id, scenario_id)
 
     def test_request_rejects_removed_id(self):
         with self.assertRaises(ValidationError):
@@ -87,7 +90,10 @@ class ScenarioAvailabilityTests(unittest.IsolatedAsyncioTestCase):
             for scenario_id in ("S02", "S03", "S04"):
                 with self.subTest(scenario_id=scenario_id):
                     with self.assertRaises(ScenarioUnavailableError):
-                        runner.start(scenario_id)
+                        runner.start(
+                            scenario_id,
+                            mode="read" if scenario_id == "S03" else None,
+                        )
 
             self.assertIsNone(runner._active_task)
             self.assertEqual(runner._runs, {})

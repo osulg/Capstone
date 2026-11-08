@@ -3,6 +3,19 @@ export interface ScenarioStep {
   name: string;
 }
 
+export type HuntressMode = "read" | "honeypot" | "delete";
+
+export function isHuntressMode(value: unknown): value is HuntressMode {
+  return value === "read" || value === "honeypot" || value === "delete";
+}
+
+export interface ScenarioMode {
+  id: HuntressMode;
+  name: string;
+  enabled: boolean;
+  disabled_reason: string | null;
+}
+
 export interface Scenario {
   id: string;
   name: string;
@@ -12,6 +25,7 @@ export interface Scenario {
   enabled: boolean;
   disabled_reason: string | null;
   steps: ScenarioStep[];
+  modes: ScenarioMode[];
 }
 
 export type RunStatus =
@@ -34,6 +48,7 @@ export interface RunCreated {
   run_id: string;
   scenario_id: string;
   status: RunStatus;
+  mode: HuntressMode | null;
 }
 
 export interface RunStep extends ScenarioStep {

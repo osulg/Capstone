@@ -13,6 +13,13 @@ class ScenarioStepResponse(BaseModel):
     name: str
 
 
+class ScenarioModeResponse(BaseModel):
+    id: str
+    name: str
+    enable: bool = False
+    disabled_reason: str | None = None
+
+
 class ScenarioResponse(BaseModel):
     id: str
     name: str
@@ -22,3 +29,4 @@ class ScenarioResponse(BaseModel):
     enabled: bool
     disabled_reason: str | None = None
     steps: list[ScenarioStepResponse] = Field(default_factory=list)
+    modes: list[ScenarioModeResponse] = Field(default_factory=list)

@@ -30,7 +30,10 @@ async def create_run(body: RunRequest, request: Request):
     runner = get_runner(request)
 
     try:
-        return runner.start(body.scenario_id)
+        return runner.start(
+            body.scenario_id,
+            mode=body.mode,
+        )
 
     except ScenarioUnavailableError as error:
         raise HTTPException(

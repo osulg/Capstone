@@ -7,7 +7,7 @@ backend/schemas/run.py
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 RunStatus = Literal[
     "queued",
@@ -27,10 +27,24 @@ StepStatus = Literal[
     "skipped",
 ]
 
+HuntressMode = Literal["read", "honeypot", "delete"]
+
 
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
     scenario_id: str = Field(pattern=r"^S0[1-4]$")
+    mode: HuntressMode | None = None
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if self.scenario_id == "S03":
+            if self.mode is None:
+                raise ValueError("S03은 실행 모드를 선택해야 합니다.")
+        elif self.mode is not None:
+            raise ValueError("실행 모드는 S03에서만 지정할 수 있습니다.")
+
+        return self
 
 
 class RunCreatedResponse(BaseModel):
@@ -39,6 +53,7 @@ class RunCreatedResponse(BaseModel):
     run_id: str
     scenario_id: str
     status: RunStatus
+    mode: HuntressMode | None = None
 
 
 class RunStepResponse(BaseModel):
@@ -101,6 +116,7 @@ class RunResponse(BaseModel):
 
     run_id: str
     scenario_id: str
+    mode: HuntressMode | None = None
     status: RunStatus = Field(
         description=(
             "cancelling은 테스트 프로세스 종료 처리 중, "

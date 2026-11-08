@@ -1,4 +1,4 @@
-import type { Run, RunCreated, Scenario } from "../types/api";
+import type { HuntressMode, Run, RunCreated, Scenario, } from "../types/api";
 
 /** 서버가 HTTP 오류 응답을 반환한 경우 */
 export class ApiError extends Error {
@@ -57,15 +57,21 @@ export function getScenarios(): Promise<Scenario[]> {
   return request<Scenario[]>("/api/scenarios");
 }
 
-export function startRun(scenarioId: string): Promise<RunCreated> {
+export function startRun(
+  scenarioId: string,
+  mode: HuntressMode | null = null,
+): Promise<RunCreated> {
+  const payload =
+    scenarioId === "S03"
+      ? { scenario_id: scenarioId, mode }
+      : { scenario_id: scenarioId };
+
   return request<RunCreated>("/api/runs", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      scenario_id: scenarioId,
-    }),
+    body: JSON.stringify(payload),
   });
 }
 

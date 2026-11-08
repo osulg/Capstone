@@ -13,6 +13,14 @@ class ScenarioStep:
 
 
 @dataclass(frozen=True)
+class ScenarioMode:
+    id: str
+    name: str
+    enabled: bool = False
+    disabled_reason: str | None = "실행 연결 및 검증 예정입니다."
+
+
+@dataclass(frozen=True)
 class Scenario:
     id: str
     name: str
@@ -26,11 +34,13 @@ class Scenario:
     # 백엔드 내부에서만 사용한다.
     module: str | None = None
 
+    modes: tuple[ScenarioMode, ...] = ()
+
 
 SCENARIOS = (
     Scenario(
         id="S01",
-        name="IceFire 랜섬웨어",
+        name="IceFire",
         category="전체 덮어쓰기",
         description=(
             "더미 문서의 전체 덮어쓰기, 확장자 변경, "
@@ -65,7 +75,7 @@ SCENARIOS = (
     ),
     Scenario(
         id="S02",
-        name="DarkRadiation 랜섬웨어",
+        name="DarkRadiation",
         category="시스템 도구 기반 파일 변환",
         description=(
             "시스템 openssl로 더미 파일을 변환하고 확장자를 변경하는 작업을 시도합니다."
@@ -85,6 +95,11 @@ SCENARIOS = (
         expected_result=("각 작업의 접근 결과와 HoldFS 이벤트를 구분해 확인합니다."),
         enabled=False,
         disabled_reason="웹 실행 연결 및 Ubuntu 검증 예정입니다.",
+        modes=(
+            ScenarioMode(id="read", name="일반 더미 자격 파일 읽기"),
+            ScenarioMode(id="honeypot", name="허니팟 접근"),
+            ScenarioMode(id="delete", name="더미 로그 삭제"),
+        ),
     ),
     Scenario(
         id="S04",
@@ -124,6 +139,15 @@ def to_public_dict(scenario: Scenario) -> dict:
                 "name": step.name,
             }
             for step in scenario.steps
+        ],
+        "modes": [
+            {
+                "id": mode.id,
+                "name": mode.name,
+                "enabled": mode.enabled,
+                "disabled_reason": mode.disabled_reason,
+            }
+            for mode in scenario.modes
         ],
     }
 

@@ -223,6 +223,66 @@ summary:focus-visible {
   font-size: 11px;
 }
 
+/* S03을 선택하면 해당 카드 안에서 모드와 설명을 펼친다. */
+.scenario-group { min-width: 0; }
+.scenario-group.is-expanded {
+  border: 1px solid #bdbdbd;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.scenario-group.is-expanded > .scenario-option {
+  border: 0;
+  border-radius: 0;
+}
+.huntress-panel {
+  padding: 0 18px 22px;
+  background: #fdfdfd;
+}
+.huntress-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 4px;
+  border: 0;
+  border-radius: 24px;
+  background: #f3f3f3;
+}
+.huntress-tab { position: relative; cursor: pointer; }
+.huntress-tab input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.huntress-tab span {
+  display: block;
+  padding: 11px 8px;
+  border-radius: 20px;
+  color: #737373;
+  text-align: center;
+  font-size: 13px;
+}
+.huntress-tab.is-selected span {
+  color: #353535;
+  background: #dedede;
+}
+.huntress-tab input:focus-visible + span {
+  outline: 2px solid #555;
+  outline-offset: 2px;
+}
+.huntress-tab:has(input:disabled) { cursor: not-allowed; }
+.huntress-mode-detail { padding-top: 20px; }
+.huntress-mode-detail h3 { margin: 0 0 8px; font-size: 15px; }
+.huntress-mode-detail p { margin: 0; color: #737373; font-size: 13px; line-height: 1.6; }
+.huntress-mode-detail dl { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0 0; }
+.huntress-mode-detail dt { margin-bottom: 6px; color: #737373; font-size: 12px; }
+.huntress-mode-detail dd { margin: 0; font-size: 13px; line-height: 1.5; }
+@media (max-width: 480px) {
+  .huntress-tabs, .huntress-mode-detail dl { grid-template-columns: 1fr; }
+}
+
 /* 선택한 시나리오 설명과 전체 상태 */
 .scenario-detail {
   margin-top: 24px;
