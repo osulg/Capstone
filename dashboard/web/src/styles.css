@@ -148,6 +148,10 @@ label.field { display: inline-flex; align-items: center; gap: 6px; }
 .pid-flow li.lv-HIGH b { color: var(--high); }
 .final { font-weight: 700; }
 .pid-flow .why, .list td.why { color: var(--muted); white-space: normal; overflow-wrap: anywhere; }
+/* 긴 경로는 칸 안에서 여러 줄로 나누고, 상세 칸이 한 글자 폭으로 찌그러지지 않게 최소 폭을 준다 */
+.list td.path { white-space: normal; overflow-wrap: anywhere; min-width: 200px; }
+.list td.path .link-btn { text-align: left; overflow-wrap: anywhere; }
+.list td.why { min-width: 180px; }
 
 /* ── 5) 파일 현황 ── */
 /* 보호 결과 요약: 큰 숫자 두 칸 */
