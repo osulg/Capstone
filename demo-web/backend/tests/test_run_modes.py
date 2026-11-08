@@ -90,7 +90,7 @@ class HuntressModeAvailabilityTests(unittest.IsolatedAsyncioTestCase):
                 "app.services.runner.get_scenario",
                 return_value=scenario,
             ):
-                for mode in ("read", "honeypot", "delete"):
+                for mode in ("honeypot", "delete"):
                     with self.subTest(mode=mode):
                         with self.assertRaises(ScenarioUnavailableError) as caught:
                             runner.start("S03", mode=mode)

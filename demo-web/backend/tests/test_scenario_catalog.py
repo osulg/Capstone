@@ -37,15 +37,22 @@ class ScenarioCatalogTests(unittest.TestCase):
             ],
         )
 
-    def test_only_icefire_is_enabled(self):
+    def test_icefire_and_huntress_are_enabled(self):
         for item in list_scenarios():
             with self.subTest(scenario_id=item["id"]):
-                if item["id"] == "S01":
+                if item["id"] in ("S01", "S03"):
                     self.assertTrue(item["enabled"])
                     self.assertIsNone(item["disabled_reason"])
                 else:
                     self.assertFalse(item["enabled"])
                     self.assertTrue(item["disabled_reason"])
+
+    def test_only_huntress_read_mode_is_enabled(self):
+        scenario = get_scenario("S03")
+        self.assertEqual(
+            [(mode.id, mode.enabled) for mode in scenario.modes],
+            [("read", True), ("honeypot", False), ("delete", False)],
+        )
 
     def test_icefire_module_and_steps_are_connected(self):
         scenario = get_scenario("S01")
@@ -87,13 +94,10 @@ class ScenarioAvailabilityTests(unittest.IsolatedAsyncioTestCase):
         runner = ScenarioRunner()
 
         try:
-            for scenario_id in ("S02", "S03", "S04"):
+            for scenario_id in ("S02", "S04"):
                 with self.subTest(scenario_id=scenario_id):
                     with self.assertRaises(ScenarioUnavailableError):
-                        runner.start(
-                            scenario_id,
-                            mode="read" if scenario_id == "S03" else None,
-                        )
+                        runner.start(scenario_id)
 
             self.assertIsNone(runner._active_task)
             self.assertEqual(runner._runs, {})

@@ -763,6 +763,7 @@ class ScenarioRunner:
             record.status = "running"
 
         record.started_at = now()
+        execution_timeout = self.timeout_seconds
 
         try:
             if self._stop.is_set():
@@ -777,6 +778,8 @@ class ScenarioRunner:
                 return
 
             execution = get_execution(scenario.id, scenario.module)
+            if execution is not None and execution.timeout_seconds is not None:
+                execution_timeout = min(self.timeout_seconds, execution.timeout_seconds)
 
             if execution is None:
                 raise ScenarioUnavailableError(
@@ -846,7 +849,7 @@ class ScenarioRunner:
 
             done, _ = await asyncio.wait(
                 {communication, stop_wait, cancel_wait},
-                timeout=self.timeout_seconds,
+                timeout=execution_timeout,
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
@@ -908,7 +911,7 @@ class ScenarioRunner:
 
         except TimeoutError:
             record.status = "timed_out"
-            record.error = f"실행 제한 시간 {self.timeout_seconds}초를 초과했습니다."
+            record.error = f"실행 제한 시간 {execution_timeout}초를 초과했습니다."
 
         except asyncio.CancelledError:
             record.status = "failed"
@@ -1117,6 +1120,52 @@ class ScenarioRunner:
             raise ValueError("잘못된 테스트 상태입니다.")
 
         validate_result_details(result)
+
+        if scenario.module == "scenarios.s03_huntress":
+            if result.get("result_version") != 2:
+                raise ValueError("Huntress는 상세 결과 버전 2가 필요합니다.")
+            if record.mode != "read" or result.get("mode") != record.mode:
+                raise ValueError("Huntress 실행 모드가 일치하지 않습니다.")
+
+            if result["status"] == "passed":
+                from scenarios.s03_huntress import validate_task_result
+
+                tasks = result.get("task_results")
+                if not isinstance(tasks, list):
+                    raise ValueError("Huntress 자식 작업 결과가 없습니다.")
+                if any(not isinstance(task, dict) for task in tasks):
+                    raise ValueError("잘못된 자식 작업 결과입니다.")
+                expected_tasks = [
+                    ("huntress_prepare", "prepare"),
+                    ("huntress_verify_ready", "verify"),
+                    ("huntress_read", "read"),
+                    ("huntress_verify_mount", "verify"),
+                    ("huntress_verify_underlay", "verify"),
+                ]
+                if [
+                    (task.get("role"), task.get("action")) for task in tasks
+                ] != expected_tasks:
+                    raise ValueError("Huntress 작업 순서가 일치하지 않습니다.")
+                registered = {
+                    (process.role, process.pid) for process in record.processes
+                }
+                for task in tasks:
+                    if task.get("status") != "passed":
+                        raise ValueError("완료되지 않은 자식 작업이 있습니다.")
+                    if (
+                        type(task.get("pid")) is not int
+                        or (task.get("role"), task["pid"]) not in registered
+                    ):
+                        raise ValueError("등록되지 않은 자식 작업 결과입니다.")
+                    validate_task_result(task, task["action"], returncode=0)
+                verification = result.get("content_verification")
+                if (
+                    not isinstance(verification, dict)
+                    or verification.get("status") != "passed"
+                    or type(verification.get("files")) is not int
+                    or verification["files"] != 6
+                ):
+                    raise ValueError("파일 내용 불변 확인이 완료되지 않았습니다.")
 
         if scenario.module == "scenarios.s01_icefire":
             if result.get("result_version") != 2:

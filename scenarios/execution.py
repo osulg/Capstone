@@ -5,12 +5,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
+from scenarios.huntress_config import TOTAL_TIMEOUT_SECONDS
+
 
 @dataclass(frozen=True)
 class ExecutionSpec:
     scenario_id: str
     module: str
     extra_args: tuple[str, ...] = ()
+    timeout_seconds: float | None = None
 
     def workspace_name(self, run_id: str) -> str:
         return f"{self.scenario_id.lower()}_{run_id}"
@@ -51,6 +54,15 @@ _EXECUTIONS = MappingProxyType(
             scenario_id="S01",
             module="scenarios.s01_icefire",
             extra_args=("--run-attack",),
+        ),
+        "scenarios.s03_huntress": ExecutionSpec(
+            scenario_id="S03",
+            module="scenarios.s03_huntress",
+            extra_args=(
+                "--total-timeout",
+                str(TOTAL_TIMEOUT_SECONDS),
+            ),
+            timeout_seconds=TOTAL_TIMEOUT_SECONDS,
         ),
     }
 )

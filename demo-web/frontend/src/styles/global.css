@@ -342,10 +342,10 @@ summary:focus-visible {
   transition: width 300ms ease;
 }
 
-/* 네 단계 검증 영역 */
+/* 넓은 화면에서는 실제 단계 수에 맞춰 한 줄로 배치한다. */
 .run-steps {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--step-count, 4), minmax(0, 1fr));
   gap: 18px;
   margin: 28px 0 36px;
   padding: 0;

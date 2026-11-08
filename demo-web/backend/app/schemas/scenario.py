@@ -16,7 +16,7 @@ class ScenarioStepResponse(BaseModel):
 class ScenarioModeResponse(BaseModel):
     id: str
     name: str
-    enable: bool = False
+    enabled: bool = False
     disabled_reason: str | None = None
 
 

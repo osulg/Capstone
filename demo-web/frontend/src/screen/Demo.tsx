@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 
 import {
   ApiError,
@@ -592,7 +593,10 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                 </p>
               )}
 
-              <ol className="run-steps">
+              <ol
+                className="run-steps"
+                style={{ "--step-count": Math.max(steps.length, 1) } as CSSProperties}
+              >
                 {steps.map((step, index) => (
                   <li key={step.id} className={`run-step ${step.status}`}>
                     <span className="step-number" aria-hidden="true">

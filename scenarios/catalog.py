@@ -92,13 +92,55 @@ SCENARIOS = (
             "더미 자격 파일 읽기, 허니팟 접근, "
             "더미 로그 삭제를 별도 작업으로 관찰합니다."
         ),
-        expected_result=("각 작업의 접근 결과와 HoldFS 이벤트를 구분해 확인합니다."),
-        enabled=False,
-        disabled_reason="웹 실행 연결 및 Ubuntu 검증 예정입니다.",
+        expected_result=(
+            "일반 읽기의 완료와 파일 내용 불변을 확인하고, "
+            "관찰된 탐지 이벤트는 별도로 기록합니다."
+        ),
+        enabled=True,
+        disabled_reason=None,
+        module="scenarios.s03_huntress",
         modes=(
-            ScenarioMode(id="read", name="일반 더미 자격 파일 읽기"),
-            ScenarioMode(id="honeypot", name="허니팟 접근"),
-            ScenarioMode(id="delete", name="더미 로그 삭제"),
+            ScenarioMode(
+                id="read",
+                name="일반 더미 자격 파일 읽기",
+                enabled=True,
+                disabled_reason=None,
+            ),
+            ScenarioMode(
+                id="honeypot",
+                name="허니팟 접근",
+            ),
+            ScenarioMode(
+                id="delete",
+                name="더미 로그 삭제",
+            ),
+        ),
+        steps=(
+            ScenarioStep(
+                id="precheck",
+                name="실행 환경 확인",
+                operation_names=("PRECHECK",),
+            ),
+            ScenarioStep(
+                id="prepare",
+                name="더미 자격 파일 준비",
+                operation_names=("PREPARE",),
+            ),
+            ScenarioStep(
+                id="verify_ready",
+                name="파일 공개 확인",
+                operation_names=("VERIFY_READY",),
+            ),
+            ScenarioStep(
+                id="read",
+                name="더미 파일 읽기",
+                operation_names=("READ",),
+            ),
+            ScenarioStep(
+                id="verify_content",
+                name="파일 내용 불변 확인",
+                operation_names=("VERIFY_MOUNT", "VERIFY_UNDERLAY"),
+            ),
         ),
     ),
     Scenario(

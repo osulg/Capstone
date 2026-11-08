@@ -35,7 +35,6 @@ class ExecutionTests(unittest.TestCase):
     def test_other_simulators_are_not_allowed_yet(self):
         for scenario_id, module in (
             ("S02", "scenarios.s02_darkradiation"),
-            ("S03", "scenarios.s03_huntress"),
             ("S04", "scenarios.s04_akira"),
         ):
             with self.subTest(scenario_id=scenario_id):
@@ -71,6 +70,31 @@ class ExecutionTests(unittest.TestCase):
                 name,
             ],
         )
+
+    def test_huntress_execution_contract(self):
+        spec = get_execution("S03", "scenarios.s03_huntress")
+        self.assertIsNotNone(spec)
+        self.assertEqual(spec.timeout_seconds, 120.0)
+        self.assertEqual(
+            spec.workspace_name("test-run"),
+            "s03_test-run",
+        )
+
+        command = spec.build_command(
+            mount=Path("/runtime/mount"),
+            underlay=Path("/runtime/underlay"),
+            work_dir_name="s03_" + "a" * 32,
+        )
+
+        self.assertEqual(
+            command[command.index("-m") + 1],
+            "scenarios.s03_huntress",
+        )
+        self.assertEqual(
+            float(command[command.index("--total-timeout") + 1]),
+            120.0,
+        )
+        self.assertNotIn("--run-attack", command)
 
 
 if __name__ == "__main__":
