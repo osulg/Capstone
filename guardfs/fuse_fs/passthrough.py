@@ -2125,7 +2125,9 @@ class Passthrough(pyfuse3.Operations):
             from guardfs.stage2.policy.high import handle_rename_high
 
             await handle_rename_high(old_path, new_path, pid, self)
-            return
+            # 실제 rename을 차단했으므로 커널에도 실패를 전달한다.
+            # 성공 응답으로 mount의 이름 캐시만 변경되는 것을 방지한다.
+            raise pyfuse3.FUSEError(errno.EACCES)
 
         ev = FsEvent(
             ts_ns=time.time_ns(),
