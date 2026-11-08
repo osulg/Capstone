@@ -32,6 +32,10 @@ from guardfs.common.config import (
     ENTROPY_MAX_EVENT_SAMPLE_SIZE,
     ENTROPY_THRESHOLD,
     INTERPRETER_BASENAMES,
+    LINEAGE_AGGREGATION_ENABLED,
+    LINEAGE_MIN_CHILD_PIDS,
+    LINEAGE_MIN_FILES,
+    LINEAGE_SKIP_SIGSTOP_FOR_SESSION_LEADER,
     STAGE1_SAMPLING_RATE,
     STATS_E_SUM_THRESHOLD,
     STATS_RENAME_THRESHOLD,
@@ -51,7 +55,7 @@ from guardfs.common.paths import (
 )
 from guardfs.stage1.detector import Stage1Detector
 from guardfs.stage1.logger import EventLogger
-from guardfs.stage1.trust import is_trusted_pid
+from guardfs.stage1.trust import _get_parent_pid, _get_start_time, is_trusted_pid
 from guardfs.stage2.stage2_worker import stage2_worker
 from guardfs.stage2.states import ProcState
 
@@ -192,6 +196,27 @@ async def stats_collector(
                 if ev.pid > 0:
                     ops._pid_features[ev.pid] = st.to_feature_row()
 
+                # ── lineage 집계 (신뢰 one-shot 우회 대응) ──
+                # 신뢰 writer의 행동은 부모(lineage) 단위로도 누적한다. 자식이 죽어도
+                # Stage2가 그 누적 프로필을 재평가하도록. 격상 결정은 lineage가 아니라
+                # 기존 Stage2 임계(dyn≥0.6 등)가 내린다 — lineage는 입력만 공급한다.
+                if (
+                    LINEAGE_AGGREGATION_ENABLED
+                    and ev.pid > 0
+                    and ops.is_trusted_process(ev.pid)
+                ):
+                    lineage_key = ops.note_lineage_write(ev)
+                    if lineage_key is not None:
+                        await ops.mark_suspect(
+                            lineage_key,
+                            reason="lineage_burst",
+                            path=ev.path,
+                            features=ops._pid_features.get(lineage_key),
+                        )
+                else:
+                    # 부모(lineage 키)가 직접 하는 연산(rename 등)도 같은 버킷에 모은다.
+                    ops.note_lineage_parent_op(ev)
+
                 # 보조 샘플링 게이트: 신규 PID + 비신뢰 실행 경로면
                 # Stage1 탐지기 결과와 무관하게 일정 확률로 강제 Stage2 등록.
                 # PID당 최초 이벤트에서 단 한 번만 굴린다.
@@ -299,6 +324,18 @@ class Passthrough(pyfuse3.Operations):
         # Stage1 보조 샘플링을 이미 굴린 PID (PID당 1회만 시도)
         self._pid_sampled: set = set()
 
+        # ── lineage(계보) 집계: 신뢰 one-shot 도구 우회 대응 ──
+        # 신뢰 시스템 도구를 파일당 one-shot으로 호출하면(openssl 루프 등) 각 PID가
+        # Stage2 재평가 전에 죽어 per-PID 추적이 공격을 못 따라간다. 그래서 신뢰
+        # writer의 행동을 "부모(lineage) PID" 단위로 누적해, 자식이 죽어도 Stage2가
+        # 그 누적 프로필을 재평가하도록 한다(설계: design_lineage_stage2_fix).
+        #   _lineage_stats   : lineage(부모) PID -> 누적 PidStats
+        #   _lineage_children: lineage PID -> 집계에 기여한 서로 다른 자식 PID 집합
+        #   _lineage_ppid    : (pid,starttime) -> lineage 키(ppid) 캐시 (PID 재사용 방지)
+        self._lineage_stats: dict = defaultdict(PidStats)
+        self._lineage_children: dict[int, set] = defaultdict(set)
+        self._lineage_ppid: dict = {}
+
         # O_TRUNC로 열렸으나 실제로는 스테이징으로 유도된 (pid, path) 집합.
         # 커밋 시 이 경로는 기존 내용을 먼저 비우고 버퍼를 적용해야 한다.
         self._trunc_paths: dict[int, set] = defaultdict(set)
@@ -366,6 +403,76 @@ class Passthrough(pyfuse3.Operations):
           버퍼링/지연을 적용한다 (판정 전 첫 write가 무방비로 반영되는 것을 방지).
         """
         return ProcState.LOW if self.is_trusted_process(pid) else ProcState.MEDIUM
+
+    # ---------------------------------- lineage ---------------------------------- #
+
+    def get_lineage_key(self, pid: int) -> int | None:
+        """
+        신뢰 writer의 집계 대상 '부모(lineage) PID'를 반환한다. 제외 대상이면 None.
+
+        제외: ppid 없음/0/1(init), GuardFS 자신. (PID 재사용 방지를 위해
+        (pid, starttime) 조합으로 캐싱.)
+        """
+        start = _get_start_time(pid)
+        cache_key = (pid, start) if start is not None else None
+        if cache_key is not None and cache_key in self._lineage_ppid:
+            return self._lineage_ppid[cache_key]
+
+        ppid = _get_parent_pid(pid)
+        if ppid is None or ppid <= 1 or ppid == os.getpid():
+            result = None
+        else:
+            result = ppid
+
+        if cache_key is not None:
+            self._lineage_ppid[cache_key] = result
+        return result
+
+    def _is_session_leader(self, pid: int) -> bool:
+        """pid가 세션 리더(로그인/대화형 셸일 가능성)인지."""
+        try:
+            return os.getsid(pid) == pid
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+
+    def note_lineage_write(self, ev) -> int | None:
+        """
+        신뢰 writer의 파일 이벤트를 lineage(부모) 버킷에 누적한다. 최소 폭(G3)을
+        만족하면 Stage2로 올릴 lineage 키를 반환한다(아니면 None).
+
+        호출 조건(stats_collector에서 보장): LINEAGE 활성 + ev.pid가 신뢰 writer.
+        누적은 자식의 모든 파일 이벤트 + 그 부모 자신의 이벤트를 포함해, 공격의
+        read/write/rename 신호를 부모 프로필에 모은다.
+        """
+        key = self.get_lineage_key(ev.pid)
+        if key is None:
+            return None
+
+        lstats = self._lineage_stats[key]
+        lstats.update(ev)
+        self._lineage_children[key].add(ev.pid)
+
+        # 부모 자신이 하는 연산(예: rename ☢)도 같은 버킷에 모은다.
+        # (부모가 이미 lineage 키로 추적 중일 때만 — 자식이 먼저 떠야 성립)
+        # → 이 경로는 stats_collector에서 ev.pid==key 분기로 처리한다.
+
+        # 고엔트로피 write 신호 + 최소 폭을 만족할 때만 Stage2로.
+        if not getattr(ev, "_entropy_suspicious", False):
+            return None
+        row = lstats.to_feature_row()
+        if (
+            len(self._lineage_children[key]) >= LINEAGE_MIN_CHILD_PIDS
+            and row.get("unique_files_touched", 0) >= LINEAGE_MIN_FILES
+        ):
+            self._pid_features[key] = row
+            return key
+        return None
+
+    def note_lineage_parent_op(self, ev) -> None:
+        """부모(lineage 키)가 직접 하는 파일 이벤트를 같은 버킷에 누적한다."""
+        if ev.pid in self._lineage_children:
+            self._lineage_stats[ev.pid].update(ev)
+            self._pid_features[ev.pid] = self._lineage_stats[ev.pid].to_feature_row()
 
     def _get_forced_state(self, pid: int) -> ProcState | None:
         """override 파일 있으면 해당 상태, 없으면 None (실제 ML 탐지 모드)"""
@@ -565,9 +672,25 @@ class Passthrough(pyfuse3.Operations):
         if not changed:
             return
         print(f"[TRIGGER HIGH] pid={pid} reason={reason}")
-        from guardfs.stage2.policy.high import handle_high_enter
+        from guardfs.stage2.policy.high import handle_high_enter, suspend_process_once
 
         await handle_high_enter(pid, self, reason)
+
+        # lineage(부모) 격상: 부모는 파일 연산을 직접 안 해 write-트리거 SIGSTOP이
+        # 걸리지 않으므로 여기서 즉시 정지시켜 공격 루프를 끊는다. 세션 리더(대화형
+        # 셸일 가능성)는 정지를 보류하고 로그만 남긴다(설계 R2).
+        if pid in self._lineage_children:
+            if (
+                LINEAGE_SKIP_SIGSTOP_FOR_SESSION_LEADER
+                and self._is_session_leader(pid)
+            ):
+                print(
+                    f"[LINEAGE] pid={pid} 세션 리더 → SIGSTOP 보류(로그만). "
+                    f"자식 신규 write는 차단됨."
+                )
+            else:
+                print(f"[LINEAGE] pid={pid} lineage 격상 → 부모 프로세스 정지")
+                suspend_process_once(pid, self)
 
     async def _resolve_effective_state(self, pid: int) -> ProcState:
         """
@@ -618,6 +741,16 @@ class Passthrough(pyfuse3.Operations):
 
         if state == ProcState.HIGH:
             return state
+
+        # lineage HIGH 자식 차단: 부모(lineage)가 HIGH로 격상됐으면, 그 부모가 새로
+        # 띄우는 신뢰 자식의 write도 HIGH로 취급해 차단한다(신뢰라 평소엔 LOW 통과).
+        if LINEAGE_AGGREGATION_ENABLED and self.is_trusted_process(pid):
+            lineage_key = self.get_lineage_key(pid)
+            if (
+                lineage_key is not None
+                and self._proc_state.get(lineage_key) == ProcState.HIGH
+            ):
+                return ProcState.HIGH
 
         if state != ProcState.MEDIUM and not await is_trusted_pid(pid):
             changed = await self.set_proc_state(
