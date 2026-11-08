@@ -30,7 +30,7 @@ export default function FileLog({ rows, onDetail }: Props) {
             {shown.map((r) => (
               <tr key={r.target} title={r.target}>
                 <td className="mono wrap">{r.short}</td>
-                <td className="mono">{r.time.slice(11)}</td>
+                <td className="mono">{r.time.slice(11, 19)}</td>
                 <td className={r.danger ? "high" : ""}>{r.result}</td>
                 <td>
                   <button className="link-btn" onClick={() => onDetail(r.target)}>상세 보기 ›</button>

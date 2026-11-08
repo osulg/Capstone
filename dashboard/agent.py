@@ -201,8 +201,8 @@ HONEYPOT_REASON = "HoneypotDetector: 허니팟(미끼) 파일 접근 차단"
 HONEYPOT_DEDUP_SEC = 2.0
 
 
-# run_all.sh 가 HoldFS 실행 출력 각 줄 앞에 붙이는 출력 시각 ("YYYY-MM-DD HH:MM:SS ")
-RE_LINE_TIME = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (.*)$")
+# run_all.sh 가 HoldFS 실행 출력 각 줄 앞에 붙이는 출력 시각 ("YYYY-MM-DD HH:MM:SS.mmm ", 밀리초는 없을 수도 있음)
+RE_LINE_TIME = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{3})?) (.*)$")
 
 
 class StdoutParser:

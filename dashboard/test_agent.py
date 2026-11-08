@@ -175,3 +175,8 @@ def test_process_name_uses_thread_group_leader():
         done.set()
         t.join()
     assert process_name(999999999) == "-"
+
+
+def test_line_time_with_milliseconds():
+    evs = feed_all(["2026-11-08 12:04:45.212 [TRIGGER HIGH] pid=4250 reason=ml_score=0.900"])
+    assert evs[0]["time"] == "2026-11-08 12:04:45.212"

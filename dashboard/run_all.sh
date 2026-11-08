@@ -66,11 +66,14 @@ cleanup_previous() {
     sleep 1
 }
 
-# 표준입력 각 줄 앞에 지금 시각("YYYY-MM-DD HH:MM:SS ")을 붙인다
+# 표준입력 각 줄 앞에 지금 시각("YYYY-MM-DD HH:MM:SS.mmm ")을 붙인다.
+# filesecurity.log 와 같은 밀리초 단위라 같은 초 안의 순서도 맞출 수 있다.
 stamp_lines() {
-    local line
+    local line t frac
     while IFS= read -r line || [ -n "$line" ]; do
-        printf '%(%Y-%m-%d %H:%M:%S)T %s\n' -1 "$line"
+        t=${EPOCHREALTIME/,/.}            # 초.마이크로초 (로캘에 따라 소수점이 쉼표일 수 있음)
+        frac=${t#*.}
+        printf '%(%Y-%m-%d %H:%M:%S)T.%s %s\n' "${t%.*}" "${frac:0:3}" "$line"
     done
 }
 

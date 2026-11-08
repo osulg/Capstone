@@ -12,7 +12,7 @@ export default function StatusBar({ online, lastUpdate, events }: Props) {
   return (
     <div className="statusbar">
       <span>서버: {online ? "연결됨" : "연결 끊김"}</span>
-      <span>마지막 이벤트: {last ? last.time.slice(11) : "-"}</span>
+      <span>마지막 이벤트: {last ? last.time.slice(11, 19) : "-"}</span>
       <span>이벤트 {events.length}건</span>
       <span>{lastUpdate === "-" ? "갱신 대기" : `마지막 ${lastUpdate}`}</span>
     </div>

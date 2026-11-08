@@ -9,7 +9,7 @@ interface Props {
   onPid: (pid: number) => void; // 접근한 프로세스의 PID 상세로 이동
 }
 
-const hms = (t: string) => t.slice(11);
+const hms = (t: string) => t.slice(11, 19);   // 밀리초는 정렬에만 쓰고 화면에는 초까지
 
 interface Accessor {
   pid: number;

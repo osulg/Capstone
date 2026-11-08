@@ -12,7 +12,7 @@ interface Props {
   onAskAi?: (pid: number) => void;
 }
 
-const hms = (t: string) => t.slice(11);
+const hms = (t: string) => t.slice(11, 19);   // 밀리초는 정렬에만 쓰고 화면에는 초까지
 
 // 진행 흐름의 점 색: 초록 LOW / 노랑 MEDIUM / 빨강 HIGH / 흰색 판정 전(SUSPICIOUS). 글씨는 HIGH만 빨강.
 type StepLevel = "LOW" | "MEDIUM" | "HIGH" | "PENDING";
@@ -34,6 +34,18 @@ function tieRank(e: EdrEvent): number {
   if (e.result === "BLOCKED") return 5;
   if (e.action === "SIGSTOP") return 6;
   return 4;
+}
+
+// HoldFS 는 정상 복귀 때마다 반영 단계를 돌고, 반영할 쓰기가 없어도 '반영 완료(DATA_APPLIED)'를 남긴다.
+// 그 감시 구간(마지막 MEDIUM 격상 이후)에 실제로 반영된 파일(FILE_APPLIED)이 없으면 빼고 보여준다.
+function dropEmptyCommit(rows: EdrEvent[]): EdrEvent[] {
+  let applied = false;
+  return rows.filter((e) => {
+    if (e.action === "ESCALATE" && e.level === "MEDIUM") applied = false;
+    if (e.result === "FILE_APPLIED") applied = true;
+    if (e.result === "DATA_APPLIED") { const keep = applied; applied = false; return keep; }
+    return true;
+  });
 }
 
 // HIGH 격상 바로 앞(2초 이내)의 격상 원인 기록. 전체 로그에서는 HIGH 격상 줄에 합친다.
@@ -117,8 +129,8 @@ function buildLog(rows: EdrEvent[], th: ReturnType<typeof useThresholds>): LogRo
 
 export default function PidDetail({ pid, events, onBack, onFile, onAskAi }: Props) {
   const th = useThresholds();
-  const rows = events.filter((e) => e.pid === pid && !isHiddenEvent(e))
-    .sort((a, b) => a.time.localeCompare(b.time) || tieRank(a) - tieRank(b));
+  const rows = dropEmptyCommit(events.filter((e) => e.pid === pid && !isHiddenEvent(e))
+    .sort((a, b) => a.time.localeCompare(b.time) || tieRank(a) - tieRank(b)));
   const process = [...rows].reverse().find((e) => e.process && e.process !== "-")?.process ?? "-";
   const level = rows.reduce((m, e) => ((LEVEL_RANK[e.level] ?? 0) > (LEVEL_RANK[m] ?? 0) ? e.level : m), "LOW");
   const files = new Set(rows.filter((e) => e.target).map((e) => e.target)).size;

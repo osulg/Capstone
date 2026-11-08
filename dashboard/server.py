@@ -123,8 +123,12 @@ def _normalize(raw: dict) -> dict:
     ev["process"] = ev["process"] or "-"
     ts = raw.get("ts")
     if ts is None and ev["time"]:
+        # HoldFS·agent 시각은 "YYYY-MM-DD HH:MM:SS" 또는 밀리초가 붙은 "…SS.mmm"
+        base, _, frac = str(ev["time"]).partition(".")
         try:
-            ts = time.mktime(time.strptime(ev["time"], "%Y-%m-%d %H:%M:%S"))
+            ts = time.mktime(time.strptime(base, "%Y-%m-%d %H:%M:%S"))
+            if frac.isdigit():
+                ts += int(frac) / 10 ** len(frac)
         except ValueError:
             ts = None
     ev["ts"] = float(ts) if ts is not None else time.time()

@@ -122,7 +122,7 @@ export default function SystemView({ events, onAskAi }: Props) {
                       <td className="mono">{r.pid}</td>
                       <td>{r.process}</td>
                       <td className={high ? "high" : ""}>{high ? (r.suspended ? "HIGH · 정지됨" : "HIGH · 차단") : "MEDIUM · 감시 중"}</td>
-                      <td className="mono">{r.since.slice(11)}</td>
+                      <td className="mono">{r.since.slice(11, 19)}</td>
                       <td title="원본에 반영하지 않고 잡아 둔 쓰기. HIGH가 되면 버려지고 원본이 보존된다">
                         {high ? "-" : pendingText(r.pid)}</td>
                       <td><button className="link-btn" onClick={() => showPid(r.pid)}>PID 상세 ›</button></td>

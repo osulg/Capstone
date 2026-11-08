@@ -41,7 +41,7 @@ export default function HoneypotView({ data, events, onFile, onPid }: Props) {
                     <td className="mono">{fmtTime(f.mtime)}</td>
                     <td className={`num${hits.length ? " high" : ""}`}>{hits.length}회</td>
                     <td>{last
-                      ? <>{last.time.slice(11)} · {last.process} (<button className="link-btn" onClick={() => onPid(last.pid)}>PID {last.pid}</button>) · {last.action}</>
+                      ? <>{last.time.slice(11, 19)} · {last.process} (<button className="link-btn" onClick={() => onPid(last.pid)}>PID {last.pid}</button>) · {last.action}</>
                       : <span className="muted">없음</span>}</td>
                     <td><button className="link-btn" onClick={() => onFile(targetFor(events, folder.path, f.path))}>상세 ›</button></td>
                   </tr>
