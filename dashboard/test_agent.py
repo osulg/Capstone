@@ -203,3 +203,23 @@ def test_lineage_session_leader_stop_skipped():
         "[LINEAGE] pid=7100 세션 리더 → SIGSTOP 보류(로그만). 자식 신규 write는 차단됨.",
     ])
     assert [(e["action"], e["result"]) for e in evs] == [("ESCALATE", "HIGH"), ("SIGSTOP", "SKIPPED")]
+
+
+def test_precheck_rename_block_is_reported():
+    # 알려진 랜섬웨어 확장자(.akiranew)로 이름 변경 → Stage1 사전 차단
+    evs = feed_all([
+        "[STATE] pid=8000 ProcState.LOW → ProcState.MEDIUM",
+        "[PRECHECK] pid=8000 op=rename path=/u/sim_akira/a/vm_000.vmdk "
+        "new_path=/u/sim_akira/a/vm_000.vmdk.akiranew reason=ExtChangeDetector blocked",
+    ])
+    assert [(e["level"], e["action"], e["result"]) for e in evs] == [
+        ("MEDIUM", "ESCALATE", "MEDIUM"), ("MEDIUM", "RENAME", "BLOCKED")]
+    assert evs[1]["target"] == "/u/sim_akira/a/vm_000.vmdk → /u/sim_akira/a/vm_000.vmdk.akiranew"
+    assert evs[1]["reason"].startswith("ExtChangeDetector")
+
+
+def test_precheck_without_medium_is_detect_level():
+    evs = feed_all([
+        "[PRECHECK] pid=8100 op=rename path=/u/x.doc new_path=/u/x.doc.lockbit reason=ExtChangeDetector blocked",
+    ])
+    assert [(e["level"], e["result"]) for e in evs] == [("SUSPICIOUS", "BLOCKED")]

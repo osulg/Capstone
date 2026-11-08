@@ -200,6 +200,13 @@ RE_LOW_WATCH = re.compile(r"\[WATCH\] pid=(\d+) 관찰 종료")
 # passthrough.py: 허니팟 경로에 대한 open/read/write/truncate/unlink/rmdir/rename 차단
 RE_HONEYPOT = re.compile(r"\[HONEYPOT\] pid=(\d+) op=(\S+) blocked path=(.+?)(?: new_path=(.+))?$")
 
+# passthrough.py rename: Stage1 사전 검사(알려진 랜섬웨어 확장자·의심 이중 확장자로 이름 변경)에서 바로 차단
+RE_PRECHECK = re.compile(r"\[PRECHECK\] pid=(\d+) op=(\S+) path=(.+?) new_path=(.+?) reason=(\S+) blocked$")
+PRECHECK_REASON = {
+    "ExtChangeDetector": "ExtChangeDetector: 랜섬웨어 확장자(또는 의심 이중 확장자)로 이름 변경 → 사전 차단",
+    "HoneypotDetector": "HoneypotDetector: 허니팟(미끼) 파일 이름 변경 → 사전 차단",
+}
+
 HONEYPOT_REASON = "HoneypotDetector: 허니팟(미끼) 파일 접근 차단"
 HONEYPOT_DEDUP_SEC = 2.0
 
@@ -289,6 +296,15 @@ class StdoutParser:
             self.honeypot_seen[key] = now
             ev = self._ev(pid, "SUSPICIOUS", "BLOCKED", HONEYPOT_REASON, action=op.upper())
             ev["target"] = f"{path} → {new_path}" if new_path else path
+            return ev
+        m = RE_PRECHECK.search(line)
+        if m:
+            pid, op, path, new_path, det = int(m.group(1)), m.group(2), m.group(3), m.group(4), m.group(5)
+            # 사전 차단은 상태를 바꾸지 않는다. 이미 MEDIUM 이면 MEDIUM 으로, 아니면 탐지 단계로 표시.
+            level = "MEDIUM" if self.level.get(pid) == "MEDIUM" else "SUSPICIOUS"
+            ev = self._ev(pid, level, "BLOCKED", PRECHECK_REASON.get(det, f"{det}: 사전 차단"),
+                          action=op.upper())
+            ev["target"] = f"{path} → {new_path}"
             return ev
         m = RE_SUSPECT.search(line)
         if m:
