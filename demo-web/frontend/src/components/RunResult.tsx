@@ -27,6 +27,8 @@ export default function RunResult({ run }: RunResultProps) {
   const protectedFiles = protection?.status === "passed";
   const isHoneypot =
     run.scenario_id === "S03" && run.mode === "honeypot";
+  const isDelete = run.scenario_id === "S03" && run.mode === "delete";
+  const deletion = run.deletion_observation;
 
   // 접근 관찰 완료와 보호 검증 성공을 구분한다.
   const resultSuccess = !cancelled && (
@@ -35,6 +37,12 @@ export default function RunResult({ run }: RunResultProps) {
 
   const title = cancelled
     ? "테스트 프로세스 실행을 중단했습니다"
+    : isDelete
+      ? passed
+        ? "로그 삭제 시도와 파일 상태 관찰을 완료했습니다"
+        : run.status === "timed_out"
+          ? "로그 삭제 작업의 제한 시간을 초과했습니다"
+          : "로그 삭제 작업을 완료하지 못했습니다"
     : isHoneypot
       ? protectedFiles
         ? "허니팟 읽기 접근 차단을 확인했습니다"
@@ -55,6 +63,12 @@ export default function RunResult({ run }: RunResultProps) {
 
   const statusLabel = cancelled
     ? "프로세스 종료"
+    : isDelete
+      ? passed
+        ? "작업 관찰 완료"
+        : run.status === "timed_out"
+          ? "시간 초과"
+          : "실행 실패"
     : isHoneypot
       ? protectedFiles
         ? "접근 차단 확인"
@@ -110,6 +124,58 @@ export default function RunResult({ run }: RunResultProps) {
         </div>
       </dl>
 
+      {isDelete && (
+        <div className="result-policy-note">
+          <strong>
+            종료 후 파일 상태: {deletion?.status === "observed" ? "확인 완료" : "전체 확인 불가"}
+          </strong>
+          <p>
+            내용 일치는 준비한 더미 로그와의 일치를 뜻합니다.
+            파일 없음은 삭제 성공이나 정책 차단 여부를 단독으로 증명하지 않습니다.
+          </p>
+          {(["mount", "underlay"] as const).map((side) => {
+            const counts = deletion?.counts[side];
+            return (
+              <p key={side}>
+                <strong>{side}</strong>
+                {" · "}내용 일치 {counts?.matched ?? "—"}개
+                {" · "}변경 {counts?.changed ?? "—"}개
+                {" · "}파일 없음 {counts?.missing ?? "—"}개
+                {" · "}확인 불가 {counts?.unreadable ?? "—"}개
+              </p>
+            );
+          })}
+          {deletion?.observed_at && (
+            <p>관찰 시각: {new Date(deletion.observed_at).toLocaleString("ko-KR")}</p>
+          )}
+          {deletion?.issues.map((issue, index) => (
+            <p key={`${index}-${issue}`}>{issue}</p>
+          ))}
+          {deletion && deletion.files.length > 0 && (
+            <details>
+              <summary>파일별 상태 보기</summary>
+              <ul>
+                {deletion.files.map((file) => {
+                  const labels = {
+                    matched: "내용 일치",
+                    changed: "변경",
+                    missing: "파일 없음",
+                    unreadable: "확인 불가",
+                  };
+                  return (
+                    <li key={file.name}>
+                      {file.name}{" · mount: "}{labels[file.mount]}
+                      {" · underlay: "}{labels[file.underlay]}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          )}
+          <p>작업 관찰 완료는 전체 파일 보존이나 보호 성공을 의미하지 않습니다.</p>
+        </div>
+      )}
+
       {protection && (
         <div className="result-policy-note">
           <strong>보호 검증: {protection.status === "passed" ? "완료" : protection.status === "failed" ? "실패" : "판정 불가"}</strong>
@@ -153,7 +219,7 @@ export default function RunResult({ run }: RunResultProps) {
         </div>
       ) : run.error ? (
         <div className="result-error" role="alert">
-          <strong>공격 실행 결과: {run.status === "timed_out" ? "시간 초과" : run.status}</strong>
+          <strong>작업 실행 결과: {run.status === "timed_out" ? "시간 초과" : run.status}</strong>
           <p>{run.error}</p>
         </div>
       ) : null}

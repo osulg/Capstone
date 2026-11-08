@@ -560,7 +560,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                   <div className="huntress-panel">
                     <fieldset className="huntress-tabs">
                       <legend className="sr-only">Huntress 실행 모드</legend>
-                      {(scenario.modes ?? []).map((mode) => (
+                      {(scenario.modes ?? []).filter((mode) => mode.id !== "delete").map((mode) => (
                         <label
                           key={mode.id}
                           className={`huntress-tab ${selectedMode === mode.id ? "is-selected" : ""}`}

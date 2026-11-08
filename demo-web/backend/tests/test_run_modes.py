@@ -75,13 +75,23 @@ class RunModeTests(unittest.TestCase):
 
 
 class HuntressModeAvailabilityTests(unittest.IsolatedAsyncioTestCase):
-    async def test_unimplemented_modes_are_rejected(self):
-        # S03 자체가 활성화된 경우에도 모드별 제한이 적용되는지 검사한다.
+    async def test_disabled_mode_is_rejected(self):
+        original = get_scenario("S03")
+        reason = "테스트에서 비활성화한 모드입니다."
+
+        # 실제 카탈로그는 유지하고 테스트에서만 삭제 모드를 비활성화한다.
         scenario = replace(
-            get_scenario("S03"),
-            enabled=True,
-            disabled_reason=None,
-            module="scenarios.s03_huntress",
+            original,
+            modes=tuple(
+                replace(
+                    mode,
+                    enabled=False,
+                    disabled_reason=reason,
+                )
+                if mode.id == "delete"
+                else mode
+                for mode in original.modes
+            ),
         )
         runner = ScenarioRunner()
 
@@ -90,19 +100,10 @@ class HuntressModeAvailabilityTests(unittest.IsolatedAsyncioTestCase):
                 "app.services.runner.get_scenario",
                 return_value=scenario,
             ):
-                for mode in ("honeypot", "delete"):
-                    with self.subTest(mode=mode):
-                        with self.assertRaises(ScenarioUnavailableError) as caught:
-                            runner.start("S03", mode=mode)
+                with self.assertRaises(ScenarioUnavailableError) as caught:
+                    runner.start("S03", mode="delete")
 
-                        self.assertEqual(
-                            str(caught.exception),
-                            next(
-                                item.disabled_reason
-                                for item in scenario.modes
-                                if item.id == mode
-                            ),
-                        )
+                self.assertEqual(str(caught.exception), reason)
 
             self.assertIsNone(runner._active_task)
             self.assertEqual(runner._runs, {})

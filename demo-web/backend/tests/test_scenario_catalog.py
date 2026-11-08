@@ -47,12 +47,14 @@ class ScenarioCatalogTests(unittest.TestCase):
                     self.assertFalse(item["enabled"])
                     self.assertTrue(item["disabled_reason"])
 
-    def test_only_huntress_read_mode_is_enabled(self):
+    def test_huntress_delete_mode_is_disabled(self):
         scenario = get_scenario("S03")
+
         self.assertEqual(
             [(mode.id, mode.enabled) for mode in scenario.modes],
-            [("read", True), ("honeypot", False), ("delete", False)],
+            [("read", True), ("honeypot", True), ("delete", False)],
         )
+        self.assertTrue(scenario.modes[2].disabled_reason)
 
     def test_icefire_module_and_steps_are_connected(self):
         scenario = get_scenario("S01")

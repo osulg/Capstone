@@ -133,6 +133,38 @@ SCENARIOS = (
             ScenarioMode(
                 id="delete",
                 name="더미 로그 삭제",
+                enabled=False,
+                disabled_reason="최종 삭제 차단 한계로 웹 시연에서 제외했습니다.",
+                steps=(
+                    ScenarioStep(
+                        id="precheck",
+                        name="실행 환경 확인",
+                        operation_names=("PRECHECK",),
+                    ),
+                    ScenarioStep(
+                        id="prepare",
+                        name="더미 로그 준비",
+                        operation_names=("PREPARE",),
+                    ),
+                    ScenarioStep(
+                        id="verify_ready",
+                        name="로그 공개 확인",
+                        operation_names=("VERIFY_READY",),
+                    ),
+                    ScenarioStep(
+                        id="delete",
+                        name="로그 삭제 시도",
+                        operation_names=("DELETE",),
+                    ),
+                    ScenarioStep(
+                        id="inspect",
+                        name="남은 파일 확인",
+                        operation_names=(
+                            "INSPECT_MOUNT",
+                            "INSPECT_UNDERLAY",
+                        ),
+                    ),
+                ),
             ),
         ),
         steps=(

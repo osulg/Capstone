@@ -148,3 +148,4 @@ class RunResponse(BaseModel):
     workspace: RunWorkspace | None = None
     event_collection: RunEventCollection | None = None
     protection_verification: dict[str, Any] | None = None
+    deletion_observation: dict[str, Any] | None = None

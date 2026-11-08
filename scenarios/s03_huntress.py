@@ -1,7 +1,7 @@
-"""S03 Huntress 일반 읽기·허니팟 접근 관리자.
+"""S03 Huntress 일반 읽기·허니팟 접근·로그 삭제 관리자.
 
 등록 응답을 제공하는 runner에서 실행한다.
-허니팟의 접근 관찰과 정책 차단 판정은 구분한다. 삭제 모드는 아직 지원하지 않는다.
+파일 작업의 관찰 완료와 정책 차단 판정은 구분한다.
 """
 
 import argparse
@@ -22,14 +22,16 @@ from scenarios.common import (
     timestamp,
 )
 from scenarios.huntress_config import (
+    DELETE_DELAY_SECONDS,
+    DELETE_FILES,
     HONEYPOT_FILES,
     PREPARE_TIMEOUT_SECONDS,
     READ_FILES,
     TOTAL_TIMEOUT_SECONDS,
     WORKER_PYTHON,
 )
-from scenarios.results import validate_result_details
 from scenarios.huntress_honeypot_tasks import honeypot_paths
+from scenarios.results import validate_result_details
 from scenarios.s01_normal import check_health, find_guardfs_pid
 from scenarios.workers import registered_worker
 
@@ -197,7 +199,7 @@ def parse_args():
     mount, underlay = get_runtime_paths()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("read", "honeypot"), required=True)
+    parser.add_argument("--mode", choices=("read", "honeypot", "delete"), required=True)
     parser.add_argument("--mount", type=Path, default=mount)
     parser.add_argument("--underlay", type=Path, default=underlay)
     parser.add_argument(
@@ -474,13 +476,85 @@ def run(args):
 
         check_health(mount, holdfs_pid)
 
+    def run_delete_task(action, role, directory):
+        limit = min(args.prepare_timeout, remaining())
+        command = [
+            str(worker_python), "-u", "-m", "scenarios.huntress_delete_tasks",
+            action, "--root", str(directory), "--timeout", str(limit),
+        ]
+
+        with registered_worker(
+            SCENARIO_ID, role, command,
+            registration_timeout=min(5.0, remaining()),
+            capture_stdout=True,
+        ) as (process, metadata):
+            report["processes"].append(metadata)
+            if action == "delete":
+                # 등록 승인과 START 이후이며 삭제 성공을 의미하지 않는다.
+                report["delete_observation"]["delete_started"] = True
+            if process.stdin is not None and process.stdin.closed:
+                process.stdin = None
+            stdout, _ = process.communicate(timeout=min(limit + 1.0, remaining()))
+
+            try:
+                payload = json.loads(stdout.decode("utf-8"))
+                if not isinstance(payload, dict) or payload.get("action") != action:
+                    raise ValueError("작업 결과 또는 작업 종류가 올바르지 않습니다.")
+                status = payload.get("status")
+                if status not in ("passed", "failed", "timed_out"):
+                    raise ValueError("작업 상태가 올바르지 않습니다.")
+                counts = [payload.get(key) for key in ("planned", "attempted", "completed")]
+                if any(type(value) is not int for value in counts):
+                    raise ValueError("작업 수는 정수여야 합니다.")
+                planned, attempted, completed = counts
+                if not (planned == len(DELETE_FILES) and 0 <= completed <= attempted <= planned):
+                    raise ValueError("작업 수가 일치하지 않습니다.")
+                operations = payload.get("operations")
+                if not isinstance(operations, list) or len(operations) != completed:
+                    raise ValueError("완료 수와 작업 기록 수가 다릅니다.")
+                allowed_values = {
+                    "prepare": ("created",),
+                    "verify": ("matched",),
+                    "delete": ("unlink_succeeded", "permission_denied", "missing", "delete_error"),
+                    "inspect": ("matched", "changed", "missing", "unreadable"),
+                }
+                for name, item in zip(DELETE_FILES, operations):
+                    if not isinstance(item, dict):
+                        raise ValueError("작업 기록이 객체가 아닙니다.")
+                    if item.get("name") != name or item.get("path") != str(directory / name):
+                        raise ValueError("작업 순서 또는 경로가 다릅니다.")
+                    field = "state" if action == "inspect" else "outcome"
+                    if item.get(field) not in allowed_values[action]:
+                        raise ValueError("작업 관찰 결과가 올바르지 않습니다.")
+                if status == "passed":
+                    if completed != planned or attempted != planned:
+                        raise ValueError("완료된 작업 수가 부족합니다.")
+                    if payload.get("failure") is not None or process.returncode != 0:
+                        raise ValueError("완료 결과와 실패 정보 또는 종료 코드가 다릅니다.")
+                elif not isinstance(payload.get("failure"), dict):
+                    raise ValueError("실패 원인이 없습니다.")
+            except (UnicodeDecodeError, ValueError) as error:
+                raise RuntimeError(f"{role} 결과 검증 실패: {error}") from error
+
+            # 역할과 PID는 자식 JSON이 아닌 등록 정보에서 가져온다.
+            task = {**payload, "role": role, "pid": metadata["pid"]}
+            report["task_results"].append(task)
+            if status == "timed_out":
+                raise TimeoutError(f"{role} 제한 시간을 초과했습니다.")
+            if status != "passed":
+                raise RuntimeError(
+                    f"{role} 실패: {payload['failure'].get('message', '작업 실패')}"
+                )
+        check_health(mount, holdfs_pid)
+        return task
+
     try:
         progress("running")
 
         if sys.platform != "linux":
             raise RuntimeError("Linux에서 실행해야 합니다.")
 
-        if args.mode not in ("read", "honeypot"):
+        if args.mode not in ("read", "honeypot", "delete"):
             raise RuntimeError("현재 지원하지 않는 실행 모드입니다.")
 
         if holdfs_pid is None:
@@ -521,6 +595,68 @@ def run(args):
             complete()
 
             # 접근 결과 관찰 완료이며 정책 차단 성공을 뜻하지 않는다.
+            report["status"] = "passed"
+            report["termination_reason"] = "completed"
+            return report
+
+        if args.mode == "delete":
+            report["execution_settings"] = {
+                "worker_python": str(worker_python),
+                "files": len(DELETE_FILES),
+                "delay_seconds": DELETE_DELAY_SECONDS,
+                "total_timeout_seconds": args.total_timeout,
+            }
+            report["delete_observation"] = {
+                "delete_started": False,
+                "policy_verification": "not_checked",
+            }
+            current_name = "PREPARE"
+            current_path = workdir
+            progress("running")
+            workdir.mkdir(exist_ok=False)
+            run_delete_task("prepare", "huntress_delete_prepare", workdir)
+            complete()
+
+            current_name = "VERIFY_READY"
+            progress("running")
+            run_delete_task("verify", "huntress_delete_verify_mount", workdir)
+            run_delete_task("verify", "huntress_delete_verify_underlay", underlay_workdir)
+            complete()
+
+            current_name = "DELETE"
+            progress("running")
+            deletion = run_delete_task("delete", "huntress_delete", workdir)
+            complete()
+
+            # 삭제 자식이 종료된 뒤 별도 PID로 실제 파일 상태를 확인한다.
+            current_name = "INSPECT_MOUNT"
+            progress("running")
+            mount_result = run_delete_task("inspect", "huntress_delete_inspect_mount", workdir)
+            complete()
+            current_name = "INSPECT_UNDERLAY"
+            current_path = underlay_workdir
+            progress("running")
+            underlay_result = run_delete_task(
+                "inspect", "huntress_delete_inspect_underlay", underlay_workdir,
+            )
+            complete()
+
+            report["delete_observation"].update(
+                unlink_succeeded=sum(
+                    item["outcome"] == "unlink_succeeded" for item in deletion["operations"]
+                ),
+                permission_denied=sum(
+                    item["outcome"] == "permission_denied" for item in deletion["operations"]
+                ),
+                files=[
+                    {"name": name, "mount": mount_item["state"], "underlay": underlay_item["state"]}
+                    for name, mount_item, underlay_item in zip(
+                        DELETE_FILES, mount_result["operations"], underlay_result["operations"],
+                    )
+                ],
+                observed_at=timestamp(),
+            )
+            # 관찰 완료이며 전체 파일 보존이나 정책 차단 성공은 아니다.
             report["status"] = "passed"
             report["termination_reason"] = "completed"
             return report

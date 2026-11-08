@@ -339,13 +339,12 @@ class HuntressReadTests(unittest.TestCase):
         self.assertEqual(len(children), 1)
         self.assertEqual(report["task_results"], [])
 
-    def test_other_modes_are_not_executed(self):
-        for mode in ("delete",):
-            with self.subTest(mode=mode):
-                report, _, children = self.run_case(mode=mode)
+    def test_unknown_mode_is_not_executed(self):
+        # 지원되는 삭제 모드 대신 알 수 없는 모드의 실행 거부를 검사한다.
+        report, _, children = self.run_case(mode="unknown")
 
-                self.assertEqual(report["status"], "failed")
-                self.assertEqual(children, [])
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(children, [])
 
 
 if __name__ == "__main__":

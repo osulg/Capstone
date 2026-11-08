@@ -108,7 +108,8 @@ class HuntressModeStepTests(unittest.IsolatedAsyncioTestCase):
 
         mode = next(item for item in public["modes"] if item["id"] == "honeypot")
 
-        self.assertFalse(mode["enabled"])
+        self.assertTrue(mode["enabled"])
+        self.assertIsNone(mode["disabled_reason"])
         self.assertEqual(
             [step["id"] for step in mode["steps"]],
             [

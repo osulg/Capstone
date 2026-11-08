@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from experiments.simulators.sim_scn_huntress import CRED_FILES, lib
+from experiments.simulators.sim_scn_huntress import CRED_FILES, LOG_FILES, lib
 
 READ_FILES = tuple(CRED_FILES)
 FILE_SIZE = max(len(lib.PLAINTEXT_LINE), 256)
@@ -32,3 +32,11 @@ HONEYPOT_FILES = (
 )
 
 HONEYPOT_DELAY_SECONDS = 0.1
+
+# 기존 Actor B CLI의 기본 시연 조건을 사용한다.
+DELETE_FILE_COUNT = 12
+DELETE_FILES = tuple(LOG_FILES[:DELETE_FILE_COUNT])
+DELETE_DELAY_SECONDS = 0.1
+
+if len(DELETE_FILES) != DELETE_FILE_COUNT:
+    raise ValueError("로그 삭제 대상은 12개여야 합니다.")

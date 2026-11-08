@@ -45,6 +45,8 @@ from .holdfs_events import (
     capture_log,
     collect_events,
 )
+from .huntress_delete_observation import observe_deleted_files
+from .huntress_delete_validation import validate_delete_success
 from .huntress_validation import validate_honeypot_success
 from .huntress_verification import verify_honeypot_protection
 from .icefire_verification import verify_protection
@@ -1163,7 +1165,36 @@ class ScenarioRunner:
                                 "scope": "이번 실행의 허니팟 읽기 접근 차단",
                             }
 
-                    # 모든 시나리오의 정리·이벤트 수집·보호 검증이 끝난 뒤
+                    elif (
+                        scenario.module == "scenarios.s03_huntress"
+                        and record.mode == "delete"
+                    ):
+                        try:
+                            # 시간 초과·사용자 중단도 정리 후 파일 상태를 확인한다.
+                            record.deletion_observation = await asyncio.to_thread(
+                                observe_deleted_files,
+                                record.model_copy(deep=True),
+                                cleanup_confirmed=(
+                                    process is not None
+                                    and not self._cleanup_blocked
+                                    and communication is not None
+                                    and communication.done()
+                                ),
+                            )
+                        except Exception as error:
+                            logger.exception(
+                                "Huntress 로그 사후 확인 실패: %s",
+                                record.run_id,
+                            )
+                            record.deletion_observation = {
+                                "status": "unknown",
+                                "observed_at": now().isoformat(),
+                                "files": [],
+                                "counts": {},
+                                "issues": [f"{type(error).__name__}: {error}"],
+                            }
+
+                    # 모든 시나리오의 정리·이벤트 수집·사후 확인이 끝난 뒤
                     # 조회 응답에서 최종 상태를 공개한다.
                     record.finished_at = now()
 
@@ -1199,13 +1230,16 @@ class ScenarioRunner:
             if result.get("result_version") != 2:
                 raise ValueError("Huntress는 상세 결과 버전 2가 필요합니다.")
             if (
-                record.mode not in ("read", "honeypot")
+                record.mode not in ("read", "honeypot", "delete")
                 or result.get("mode") != record.mode
             ):
                 raise ValueError("Huntress 실행 모드가 일치하지 않습니다.")
 
             if result["status"] == "passed" and record.mode == "honeypot":
                 validate_honeypot_success(result, record)
+
+            if result["status"] == "passed" and record.mode == "delete":
+                validate_delete_success(result, record)
 
             if result["status"] == "passed" and record.mode == "read":
                 from scenarios.s03_huntress import validate_task_result

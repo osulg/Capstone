@@ -64,6 +64,31 @@ export interface RunProcess {
   registered_at: string;
 }
 
+export type FileObservationState =
+  | "matched"
+  | "changed"
+  | "missing"
+  | "unreadable";
+
+export interface DeletionObservation {
+  status: "observed" | "unknown";
+  observed_at?: string | null;
+  cleanup_confirmed?: boolean;
+  files: {
+    name: string;
+    mount: FileObservationState;
+    underlay: FileObservationState;
+  }[];
+  counts: Partial<
+    Record<
+      "mount" | "underlay",
+      Record<FileObservationState, number>
+    >
+  >;
+  issues: string[];
+  scope?: string;
+}
+
 export interface Run extends RunCreated {
   pid: number | null;
   holdfs_pid: number | null;
@@ -80,4 +105,5 @@ export interface Run extends RunCreated {
     observed_at?: string;
   } | null;
   error: string | null;
+  deletion_observation?: DeletionObservation | null;
 }
