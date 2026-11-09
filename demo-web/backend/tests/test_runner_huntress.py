@@ -105,7 +105,7 @@ class HuntressRunnerTests(unittest.IsolatedAsyncioTestCase):
 
         return {
             "result_version": 2,
-            "scenario_id": "S03",
+            "scenario_id": "S02",
             "mode": "read",
             "pid": 123,
             "holdfs_pid": 999,
@@ -137,12 +137,12 @@ class HuntressRunnerTests(unittest.IsolatedAsyncioTestCase):
         missing_role=None,
     ):
         """실제 runner를 실행하고 외부 프로세스만 대체한다."""
-        scenario = get_scenario("S03")
+        scenario = get_scenario("S02")
         self.assertIsNotNone(scenario)
         self.assertTrue(scenario.enabled)
         self.assertEqual(
             scenario.module,
-            "scenarios.s03_huntress",
+            "scenarios.s02_huntress",
         )
 
         runner = ScenarioRunner()
@@ -220,7 +220,7 @@ class HuntressRunnerTests(unittest.IsolatedAsyncioTestCase):
                         level="ERROR",
                     ):
                         created = runner.start(
-                            "S03",
+                            "S02",
                             mode="read",
                         )
                         await asyncio.wait_for(
@@ -229,7 +229,7 @@ class HuntressRunnerTests(unittest.IsolatedAsyncioTestCase):
                         )
                 else:
                     created = runner.start(
-                        "S03",
+                        "S02",
                         mode="read",
                     )
                     await asyncio.wait_for(
@@ -245,7 +245,7 @@ class HuntressRunnerTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(
                     command[command.index("-m") + 1],
-                    "scenarios.s03_huntress",
+                    "scenarios.s02_huntress",
                 )
                 self.assertEqual(command.count("--mode"), 1)
                 self.assertEqual(
@@ -258,7 +258,7 @@ class HuntressRunnerTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(
                     record.workspace.name,
-                    f"s03_{created.run_id}",
+                    f"s02_{created.run_id}",
                 )
                 self.assertEqual(
                     float(command[command.index("--total-timeout") + 1]),

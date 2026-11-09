@@ -28,7 +28,7 @@ class HuntressValidationTests(unittest.TestCase):
         root = Path(self.directory.name)
         mount = root / "mount"
         underlay = root / "underlay"
-        workspace = "s03_" + "a" * 32
+        workspace = "s02_" + "a" * 32
 
         mount_root, underlay_root = honeypot_paths(
             mount,

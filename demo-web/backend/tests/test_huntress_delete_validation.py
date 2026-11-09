@@ -22,8 +22,8 @@ class HuntressDeleteValidationTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
 
         root = Path(directory.name)
-        mount = root / "mount" / "s03_test"
-        underlay = root / "underlay" / "s03_test"
+        mount = root / "mount" / "s02_test"
+        underlay = root / "underlay" / "s02_test"
 
         definitions = (
             ("huntress_delete_prepare", "prepare", mount),

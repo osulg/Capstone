@@ -16,8 +16,8 @@ def verify_honeypot_protection(record, *, cleanup_confirmed: bool) -> dict:
         "scope": "이번 실행의 허니팟 읽기 접근 차단",
     }
 
-    if record.scenario_id != "S03" or record.mode != "honeypot":
-        result["reason"] = "S03 허니팟 실행이 아닙니다."
+    if record.scenario_id != "S02" or record.mode != "honeypot":
+        result["reason"] = "S02 허니팟 실행이 아닙니다."
         return result
 
     if not cleanup_confirmed or record.status == "cancelled":

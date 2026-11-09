@@ -141,7 +141,7 @@ class ScenarioRunner:
                 scenario.disabled_reason or "실행할 수 없는 시나리오입니다."
             )
 
-        if scenario.id in ("S03", "S04"):
+        if scenario.id in ("S02", "S03"):
             selected_mode = next(
                 (item for item in scenario.modes if item.id == mode),
                 None,
@@ -723,7 +723,7 @@ class ScenarioRunner:
             report.issues.append("등록된 작업 프로세스가 없어 수집하지 않았습니다.")
             return report
 
-        if record.scenario_id == "S03" and record.mode == "honeypot":
+        if record.scenario_id == "S02" and record.mode == "honeypot":
             # 사전 확인 PID와 실제 접근 PID를 구분한다.
             access_processes = [
                 process
@@ -1133,7 +1133,7 @@ class ScenarioRunner:
                             )
 
                     elif (
-                        scenario.module == "scenarios.s03_huntress"
+                        scenario.module == "scenarios.s02_huntress"
                         and record.mode == "honeypot"
                     ):
                         try:
@@ -1168,7 +1168,7 @@ class ScenarioRunner:
                             }
 
                     elif (
-                        scenario.module == "scenarios.s03_huntress"
+                        scenario.module == "scenarios.s02_huntress"
                         and record.mode == "delete"
                     ):
                         try:
@@ -1196,7 +1196,7 @@ class ScenarioRunner:
                                 "issues": [f"{type(error).__name__}: {error}"],
                             }
 
-                    elif scenario.module == "scenarios.s04_akira":
+                    elif scenario.module == "scenarios.s03_akira":
                         try:
                             # 공격 차단·시간 초과·중단도 정리 후 파일 상태를 조회한다.
                             record.akira_observation = await asyncio.to_thread(
@@ -1293,7 +1293,7 @@ class ScenarioRunner:
 
         validate_result_details(result)
 
-        if scenario.module == "scenarios.s04_akira":
+        if scenario.module == "scenarios.s03_akira":
             if (
                 result.get("result_version") != 2
                 or record.mode not in ("head", "tail")
@@ -1304,7 +1304,7 @@ class ScenarioRunner:
             if result["status"] == "passed":
                 validate_akira_success(result, record)
 
-        if scenario.module == "scenarios.s03_huntress":
+        if scenario.module == "scenarios.s02_huntress":
             if result.get("result_version") != 2:
                 raise ValueError("Huntress는 상세 결과 버전 2가 필요합니다.")
             if (
@@ -1320,7 +1320,7 @@ class ScenarioRunner:
                 validate_delete_success(result, record)
 
             if result["status"] == "passed" and record.mode == "read":
-                from scenarios.s03_huntress import validate_task_result
+                from scenarios.s02_huntress import validate_task_result
 
                 tasks = result.get("task_results")
                 if not isinstance(tasks, list):

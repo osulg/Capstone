@@ -22,7 +22,7 @@ from scenarios.catalog import get_scenario
 
 class RunnerHoneypotVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def run_case(self, *, mode="honeypot", verdict=None, error=None):
-        original = get_scenario("S03")
+        original = get_scenario("S02")
 
         # 실제 카탈로그는 변경하지 않고 테스트에서만 허니팟을 허용한다.
         scenario = replace(
@@ -41,7 +41,7 @@ class RunnerHoneypotVerificationTests(unittest.IsolatedAsyncioTestCase):
         snapshots = []
 
         payload = {
-            "scenario_id": "S03",
+            "scenario_id": "S02",
             "mode": mode,
             "pid": process.pid,
             "status": "passed",
@@ -138,13 +138,13 @@ class RunnerHoneypotVerificationTests(unittest.IsolatedAsyncioTestCase):
                         "app.services.runner",
                         level="ERROR",
                     ):
-                        created = runner.start("S03", mode=mode)
+                        created = runner.start("S02", mode=mode)
                         await asyncio.wait_for(
                             runner._active_task,
                             timeout=5,
                         )
                 else:
-                    created = runner.start("S03", mode=mode)
+                    created = runner.start("S02", mode=mode)
                     await asyncio.wait_for(
                         runner._active_task,
                         timeout=5,

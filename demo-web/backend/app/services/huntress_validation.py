@@ -4,7 +4,7 @@ from pathlib import Path
 
 from scenarios.huntress_config import HONEYPOT_FILES
 from scenarios.huntress_honeypot_tasks import honeypot_paths
-from scenarios.s03_huntress import validate_honeypot_result
+from scenarios.s02_huntress import validate_honeypot_result
 
 
 def validate_honeypot_success(result, record):

@@ -51,10 +51,10 @@ export default function RunResult({ run }: RunResultProps) {
   const protection = run.protection_verification;
   const protectedFiles = protection?.status === "passed";
   const isHoneypot =
-    run.scenario_id === "S03" && run.mode === "honeypot";
-  const isDelete = run.scenario_id === "S03" && run.mode === "delete";
+    run.scenario_id === "S02" && run.mode === "honeypot";
+  const isDelete = run.scenario_id === "S02" && run.mode === "delete";
   const deletion = run.deletion_observation;
-  const isAkira = run.scenario_id === "S04";
+  const isAkira = run.scenario_id === "S03";
   const akira = run.akira_observation;
   const protectedIcefireTimeout =
     run.scenario_id === "S01" && protectedFiles && run.status === "timed_out";

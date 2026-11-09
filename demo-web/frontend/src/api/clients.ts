@@ -62,7 +62,7 @@ export function startRun(
   mode: ScenarioRunMode | null = null,
 ): Promise<RunCreated> {
   const payload =
-    scenarioId === "S03" || scenarioId === "S04"
+    scenarioId === "S02" || scenarioId === "S03"
       ? { scenario_id: scenarioId, mode }
       : { scenario_id: scenarioId };
 

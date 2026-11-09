@@ -21,13 +21,13 @@ from scenarios.huntress_config import DELETE_FILES
 class HuntressDeleteObservationTests(unittest.TestCase):
     def setUp(self):
         self.record = SimpleNamespace(
-            scenario_id="S03",
+            scenario_id="S02",
             mode="delete",
             run_id="test",
             workspace=SimpleNamespace(
-                name="s03_test",
-                mount_path="/runtime/mount/s03_test",
-                underlay_path="/runtime/underlay/s03_test",
+                name="s02_test",
+                mount_path="/runtime/mount/s02_test",
+                underlay_path="/runtime/underlay/s02_test",
             ),
         )
 
@@ -151,7 +151,7 @@ class HuntressDeleteObservationTests(unittest.TestCase):
         self.assertEqual(result["status"], "unknown")
 
     def test_wrong_workspace_prevents_inspection(self):
-        self.record.workspace.name = "s03_other"
+        self.record.workspace.name = "s02_other"
 
         with patch(
             "app.services.huntress_delete_observation.subprocess.run",

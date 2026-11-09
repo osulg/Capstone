@@ -12,11 +12,11 @@ export function isModeForScenario(
   scenarioId: string,
   value: unknown,
 ): value is ScenarioRunMode {
-  if (scenarioId === "S03") {
+  if (scenarioId === "S02") {
     return isHuntressMode(value);
   }
 
-  return scenarioId === "S04" && (value === "head" || value === "tail");
+  return scenarioId === "S03" && (value === "head" || value === "tail");
 }
 
 export function isHuntressMode(value: unknown): value is HuntressMode {

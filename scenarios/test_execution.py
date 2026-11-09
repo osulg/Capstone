@@ -32,13 +32,20 @@ class ExecutionTests(unittest.TestCase):
             "scenarios.s01_icefire",
         )
 
-    def test_other_simulators_are_not_allowed_yet(self):
+    def test_removed_execution_modules_are_rejected(self):
         for scenario_id, module in (
             ("S02", "scenarios.s02_darkradiation"),
             ("S04", "scenarios.s04_akira"),
+            ("S03", "scenarios.s03_huntress"),
         ):
             with self.subTest(scenario_id=scenario_id):
                 self.assertIsNone(get_execution(scenario_id, module))
+
+    def test_akira_execution_contract(self):
+        spec = get_execution("S03", "scenarios.s03_akira")
+        self.assertIsNotNone(spec)
+        self.assertEqual(spec.workspace_name("test-run"), "s03_test-run")
+        self.assertEqual(spec.timeout_seconds, 120.0)
 
     def test_normal_command_preserves_execution_contract(self):
         spec = get_execution("S01", "scenarios.s01_normal")
@@ -72,23 +79,23 @@ class ExecutionTests(unittest.TestCase):
         )
 
     def test_huntress_execution_contract(self):
-        spec = get_execution("S03", "scenarios.s03_huntress")
+        spec = get_execution("S02", "scenarios.s02_huntress")
         self.assertIsNotNone(spec)
         self.assertEqual(spec.timeout_seconds, 120.0)
         self.assertEqual(
             spec.workspace_name("test-run"),
-            "s03_test-run",
+            "s02_test-run",
         )
 
         command = spec.build_command(
             mount=Path("/runtime/mount"),
             underlay=Path("/runtime/underlay"),
-            work_dir_name="s03_" + "a" * 32,
+            work_dir_name="s02_" + "a" * 32,
         )
 
         self.assertEqual(
             command[command.index("-m") + 1],
-            "scenarios.s03_huntress",
+            "scenarios.s02_huntress",
         )
         self.assertEqual(
             float(command[command.index("--total-timeout") + 1]),

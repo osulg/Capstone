@@ -223,7 +223,7 @@ summary:focus-visible {
   font-size: 11px;
 }
 
-/* S03을 선택하면 해당 카드 안에서 모드와 설명을 펼친다. */
+/* S02을 선택하면 해당 카드 안에서 모드와 설명을 펼친다. */
 .scenario-group { min-width: 0; }
 .scenario-group.is-expanded {
   border: 1px solid #bdbdbd;

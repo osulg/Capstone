@@ -14,7 +14,7 @@ export function hasConfirmedPolicyBlock(run: Run): boolean {
   const block = run.result?.policy_block;
 
   return (
-    (run.scenario_id === "S01" || run.scenario_id === "S04") &&
+    (run.scenario_id === "S01" || run.scenario_id === "S03") &&
     block !== null &&
     typeof block === "object" &&
     "confirmed" in block &&
@@ -43,7 +43,7 @@ export function getRunPresentation(run: Run): {
 
   const protection = run.protection_verification?.status;
   const honeypot =
-    run.scenario_id === "S03" && run.mode === "honeypot";
+    run.scenario_id === "S02" && run.mode === "honeypot";
 
   if (protection === "passed") {
     return {

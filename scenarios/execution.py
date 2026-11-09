@@ -56,18 +56,18 @@ _EXECUTIONS = MappingProxyType(
             module="scenarios.s01_icefire",
             extra_args=("--run-attack",),
         ),
-        "scenarios.s03_huntress": ExecutionSpec(
-            scenario_id="S03",
-            module="scenarios.s03_huntress",
+        "scenarios.s02_huntress": ExecutionSpec(
+            scenario_id="S02",
+            module="scenarios.s02_huntress",
             extra_args=(
                 "--total-timeout",
                 str(TOTAL_TIMEOUT_SECONDS),
             ),
             timeout_seconds=TOTAL_TIMEOUT_SECONDS,
         ),
-        "scenarios.s04_akira": ExecutionSpec(
-            scenario_id="S04",
-            module="scenarios.s04_akira",
+        "scenarios.s03_akira": ExecutionSpec(
+            scenario_id="S03",
+            module="scenarios.s03_akira",
             extra_args=(
                 "--total-timeout",
                 str(AKIRA_TIMEOUT_SECONDS),

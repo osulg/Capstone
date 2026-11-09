@@ -134,10 +134,10 @@ def observe_akira_files(record, *, cleanup_confirmed):
     workspace = record.workspace
     if (
         not cleanup_confirmed
-        or record.scenario_id != "S04"
+        or record.scenario_id != "S03"
         or record.mode not in ("head", "tail")
         or workspace is None
-        or workspace.name != f"s04_{record.run_id}"
+        or workspace.name != f"s03_{record.run_id}"
     ):
         result["issues"].append("실행 경로 또는 프로세스 정리를 확인하지 못했습니다.")
         return result
@@ -223,7 +223,7 @@ def verify_akira_protection(record):
     }
 
     if (
-        record.scenario_id != "S04"
+        record.scenario_id != "S03"
         or record.mode not in ("head", "tail")
         or record.status == "cancelled"
         or record.workspace is None

@@ -76,17 +76,6 @@ SCENARIOS = (
     ),
     Scenario(
         id="S02",
-        name="DarkRadiation",
-        category="시스템 도구 기반 파일 변환",
-        description=(
-            "시스템 openssl로 더미 파일을 변환하고 확장자를 변경하는 작업을 시도합니다."
-        ),
-        expected_result=("작업 PID별 파일 변경과 HoldFS 이벤트를 관찰합니다."),
-        enabled=False,
-        disabled_reason="웹 실행 연결 및 Ubuntu 검증 예정입니다.",
-    ),
-    Scenario(
-        id="S03",
         name="Huntress",
         category="읽기·허니팟·로그 삭제",
         description=(
@@ -99,7 +88,7 @@ SCENARIOS = (
         ),
         enabled=True,
         disabled_reason=None,
-        module="scenarios.s03_huntress",
+        module="scenarios.s02_huntress",
         modes=(
             ScenarioMode(
                 id="read",
@@ -196,7 +185,7 @@ SCENARIOS = (
         ),
     ),
     Scenario(
-        id="S04",
+        id="S03",
         name="Akira",
         category="부분 덮어쓰기",
         description=(
@@ -208,7 +197,7 @@ SCENARIOS = (
         ),
         enabled=True,
         disabled_reason=None,
-        module="scenarios.s04_akira",
+        module="scenarios.s03_akira",
         modes=(
             ScenarioMode(
                 id="head",

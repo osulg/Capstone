@@ -24,31 +24,26 @@ if HAS_PYDANTIC:
 
 
 class ScenarioCatalogTests(unittest.TestCase):
-    def test_catalog_contains_new_four_scenarios(self):
+    def test_catalog_contains_three_final_scenarios(self):
         scenarios = list_scenarios()
 
         self.assertEqual(
             [(item["id"], item["name"]) for item in scenarios],
             [
                 ("S01", "IceFire"),
-                ("S02", "DarkRadiation"),
-                ("S03", "Huntress"),
-                ("S04", "Akira"),
+                ("S02", "Huntress"),
+                ("S03", "Akira"),
             ],
         )
 
-    def test_icefire_and_huntress_are_enabled(self):
+    def test_all_final_scenarios_are_enabled(self):
         for item in list_scenarios():
             with self.subTest(scenario_id=item["id"]):
-                if item["id"] in ("S01", "S03"):
-                    self.assertTrue(item["enabled"])
-                    self.assertIsNone(item["disabled_reason"])
-                else:
-                    self.assertFalse(item["enabled"])
-                    self.assertTrue(item["disabled_reason"])
+                self.assertTrue(item["enabled"])
+                self.assertIsNone(item["disabled_reason"])
 
     def test_huntress_delete_mode_is_disabled(self):
-        scenario = get_scenario("S03")
+        scenario = get_scenario("S02")
 
         self.assertEqual(
             [(mode.id, mode.enabled) for mode in scenario.modes],
@@ -72,19 +67,23 @@ class ScenarioCatalogTests(unittest.TestCase):
 )
 class ScenarioRequestTests(unittest.TestCase):
     def test_request_accepts_current_ids(self):
-        for scenario_id in ("S01", "S02", "S03", "S04"):
+        for scenario_id in ("S01", "S02", "S03"):
             with self.subTest(scenario_id=scenario_id):
                 payload = {"scenario_id": scenario_id}
 
-                if scenario_id == "S03":
+                if scenario_id == "S02":
                     payload["mode"] = "read"
+                elif scenario_id == "S03":
+                    payload["mode"] = "head"
 
                 request = RunRequest(**payload)
                 self.assertEqual(request.scenario_id, scenario_id)
 
     def test_request_rejects_removed_id(self):
-        with self.assertRaises(ValidationError):
-            RunRequest(scenario_id="S05")
+        for scenario_id in ("S04", "S05"):
+            with self.subTest(scenario_id=scenario_id):
+                with self.assertRaises(ValidationError):
+                    RunRequest(scenario_id=scenario_id)
 
 
 @unittest.skipUnless(
@@ -92,11 +91,11 @@ class ScenarioRequestTests(unittest.TestCase):
     "백엔드 Pydantic 환경이 필요합니다.",
 )
 class ScenarioAvailabilityTests(unittest.IsolatedAsyncioTestCase):
-    async def test_disabled_scenarios_do_not_schedule_execution(self):
+    async def test_removed_scenarios_do_not_schedule_execution(self):
         runner = ScenarioRunner()
 
         try:
-            for scenario_id in ("S02", "S04"):
+            for scenario_id in ("S04", "S05"):
                 with self.subTest(scenario_id=scenario_id):
                     with self.assertRaises(ScenarioUnavailableError):
                         runner.start(scenario_id)

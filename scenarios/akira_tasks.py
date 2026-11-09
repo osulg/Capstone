@@ -136,7 +136,7 @@ def execute_task(action, root, mode, timeout):
         if mode not in ("head", "tail"):
             raise ValueError("지원하지 않는 덮어쓰기 위치입니다.")
 
-        if not root.is_absolute() or not re.fullmatch(r"s04_[0-9a-f]{32}", root.name):
+        if not root.is_absolute() or not re.fullmatch(r"s03_[0-9a-f]{32}", root.name):
             raise ValueError("Akira 실행별 작업 경로가 필요합니다.")
 
         if not stat.S_ISDIR(root.lstat().st_mode):

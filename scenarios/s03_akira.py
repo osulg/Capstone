@@ -1,4 +1,4 @@
-"""S04 Akira 실행 관리자."""
+"""S03 Akira 실행 관리자."""
 
 import argparse
 import json
@@ -32,7 +32,7 @@ from scenarios.common import (
 from scenarios.s01_normal import check_health, find_guardfs_pid
 from scenarios.workers import registered_worker
 
-SCENARIO_ID = "S04"
+SCENARIO_ID = "S03"
 
 
 def parse_args():
@@ -49,7 +49,7 @@ def parse_args():
     )
     parser.add_argument(
         "--work-dir-name",
-        default=f"s04_{uuid.uuid4().hex}",
+        default=f"s03_{uuid.uuid4().hex}",
     )
     parser.add_argument("--worker-python", type=Path, default=WORKER_PYTHON)
     parser.add_argument(
@@ -63,7 +63,7 @@ def parse_args():
     if not args.wait_registration_ack:
         parser.error("runner의 등록 응답 통로가 필요합니다.")
 
-    if not re.fullmatch(r"s04_[0-9a-f]{32}", args.work_dir_name):
+    if not re.fullmatch(r"s03_[0-9a-f]{32}", args.work_dir_name):
         parser.error("작업 폴더 이름이 올바르지 않습니다.")
 
     if not math.isfinite(args.total_timeout) or args.total_timeout <= 0:

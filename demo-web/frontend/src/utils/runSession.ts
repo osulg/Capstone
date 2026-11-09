@@ -8,7 +8,8 @@ export interface SavedRun {
   mode: ScenarioRunMode | null;
 }
 
-const STORAGE_KEY = "holdfs.demo.savedRun.v1";
+// 이전 번호 체계의 실행 ID를 다른 시나리오로 복원하지 않는다.
+const STORAGE_KEY = "holdfs.demo.savedRun.v2";
 
 export function readSavedRun(): SavedRun | null {
   try {
@@ -31,6 +32,12 @@ export function readSavedRun(): SavedRun | null {
     }
 
     const storedMode = "mode" in value ? value.mode : null;
+
+    if (!["S01", "S02", "S03"].includes(value.scenarioId)) return null;
+    if (
+      value.scenarioId !== "S01" &&
+      !isModeForScenario(value.scenarioId, storedMode)
+    ) return null;
 
     return {
       runId: value.runId,

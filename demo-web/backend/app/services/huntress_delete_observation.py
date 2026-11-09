@@ -23,8 +23,8 @@ def observe_deleted_files(record, *, cleanup_confirmed):
         "scope": "프로세스 정리 이후 관찰 시점의 파일 상태",
     }
 
-    if record.scenario_id != "S03" or record.mode != "delete":
-        result["issues"].append("S03 로그 삭제 실행이 아닙니다.")
+    if record.scenario_id != "S02" or record.mode != "delete":
+        result["issues"].append("S02 로그 삭제 실행이 아닙니다.")
         return result
 
     if not cleanup_confirmed:
@@ -32,7 +32,7 @@ def observe_deleted_files(record, *, cleanup_confirmed):
         return result
 
     workspace = record.workspace
-    if workspace is None or workspace.name != f"s03_{record.run_id}":
+    if workspace is None or workspace.name != f"s02_{record.run_id}":
         result["issues"].append("실행 작업 경로를 확인하지 못했습니다.")
         return result
 

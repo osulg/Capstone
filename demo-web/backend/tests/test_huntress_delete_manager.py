@@ -20,7 +20,7 @@ sys.path.insert(0, str(BACKEND))
 from app.services.huntress_delete_validation import validate_delete_success
 from app.services.runner import ScenarioRunner
 
-from scenarios import s03_huntress as manager
+from scenarios import s02_huntress as manager
 from scenarios.catalog import get_scenario
 from scenarios.huntress_config import DELETE_FILES
 from scenarios.results import validate_result_details
@@ -40,7 +40,7 @@ class HuntressDeleteManagerTests(unittest.TestCase):
                 mount=mount,
                 underlay=underlay,
                 worker_python=Path(sys.executable),
-                work_dir_name="s03_" + "a" * 32,
+                work_dir_name="s02_" + "a" * 32,
                 holdfs_pid=999,
                 prepare_timeout=5.0,
                 total_timeout=120.0,
@@ -177,7 +177,7 @@ class HuntressDeleteManagerTests(unittest.TestCase):
         validate_delete_success(report, record)
 
         # runnerが使用する削除モードの段階定義で検証する。
-        scenario = get_scenario("S03")
+        scenario = get_scenario("S02")
         mode = next(item for item in scenario.modes if item.id == "delete")
         effective_scenario = replace(scenario, steps=mode.steps)
 

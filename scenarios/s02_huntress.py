@@ -1,4 +1,4 @@
-"""S03 Huntress 일반 읽기·허니팟 접근·로그 삭제 관리자.
+"""S02 Huntress 일반 읽기·허니팟 접근·로그 삭제 관리자.
 
 등록 응답을 제공하는 runner에서 실행한다.
 파일 작업의 관찰 완료와 정책 차단 판정은 구분한다.
@@ -35,7 +35,7 @@ from scenarios.results import validate_result_details
 from scenarios.s01_normal import check_health, find_guardfs_pid
 from scenarios.workers import registered_worker
 
-SCENARIO_ID = "S03"
+SCENARIO_ID = "S02"
 
 
 def validate_task_result(payload, action, returncode):
@@ -210,7 +210,7 @@ def parse_args():
     )
     parser.add_argument(
         "--work-dir-name",
-        default=f"s03_{uuid.uuid4().hex}",
+        default=f"s02_{uuid.uuid4().hex}",
     )
     parser.add_argument(
         "--worker-python",
@@ -236,8 +236,8 @@ def parse_args():
     if not args.wait_registration_ack:
         parser.error("runner의 등록 응답 통로가 필요합니다.")
 
-    if re.fullmatch(r"s03_[0-9a-f]{32}", args.work_dir_name) is None:
-        parser.error("작업 폴더 이름은 s03_ 뒤에 16진수 32자리입니다.")
+    if re.fullmatch(r"s02_[0-9a-f]{32}", args.work_dir_name) is None:
+        parser.error("작업 폴더 이름은 s02_ 뒤에 16진수 32자리입니다.")
 
     for value in (args.prepare_timeout, args.total_timeout):
         if not math.isfinite(value) or value <= 0:

@@ -66,6 +66,11 @@ function isFinished(status: RunStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
 
+function visibleModes(scenario: Scenario) {
+  // 번호와 무관하게 서버의 모드를 표시하고 로그 삭제만 숨긴다.
+  return (scenario.modes ?? []).filter((mode) => mode.id !== "delete");
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
@@ -130,10 +135,10 @@ export default function Demo({ onReplayIntro }: DemoProps) {
     run?.status === "cancelling";
 
   const selected = scenarios.find((item) => item.id === selectedId);
-  const hasModes = selected?.id === "S03" || selected?.id === "S04";
+  const hasModes = selected !== undefined && visibleModes(selected).length > 0;
   const selectedModeDefinition =
     hasModes
-      ? (selected.modes ?? []).find((mode) => mode.id === selectedMode)
+      ? (selected?.modes ?? []).find((mode) => mode.id === selectedMode)
       : undefined;
   const modeUnavailable =
     hasModes && selectedModeDefinition?.enabled !== true;
@@ -256,7 +261,8 @@ export default function Demo({ onReplayIntro }: DemoProps) {
 
     clearSavedRun();
     setSelectedId(id);
-    setSelectedMode(id === "S04" ? "head" : "read");
+    const scenario = scenarios.find((item) => item.id === id);
+    setSelectedMode(scenario ? visibleModes(scenario)[0]?.id ?? "read" : "read");
     setRunId(null);
     setRun(null);
     setStartError("");
@@ -293,7 +299,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
     setStartError("");
 
     try {
-      const mode = selected.id === "S03" || selected.id === "S04" ? selectedMode : null;
+      const mode = hasModes ? selectedMode : null;
       const created = await startRun(selected.id, mode);
 
       const stored = saveRun({
@@ -316,9 +322,11 @@ export default function Demo({ onReplayIntro }: DemoProps) {
     } catch (error: unknown) {
       setStartError(errorMessage(error));
 
-      // 기존의 보수적인 중복 실행 방지 정책을 유지한다.
-      // 응답을 받지 못한 POST의 실행 ID 복구는 별도 기능이 필요하다.
-      setStartUncertain(true);
+      // 요청이 거절됐다고 확인되면 모드를 수정해 다시 실행할 수 있다.
+      // 연결 오류와 서버 오류는 실제 접수 여부가 불명확하므로 잠금을 유지한다.
+      const rejected = error instanceof ApiError &&
+        [400, 404, 405, 409, 422].includes(error.status);
+      setStartUncertain(!rejected);
     } finally {
       submittingRef.current = false;
       setSubmitting(false);
@@ -488,7 +496,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
               {scenarios.map((scenario) => (
                 <div
                   key={scenario.id}
-                  className={`scenario-group ${(scenario.id === "S03" || scenario.id === "S04") && selectedId === scenario.id ? "is-expanded" : ""}`}
+                  className={`scenario-group ${visibleModes(scenario).length > 0 && selectedId === scenario.id ? "is-expanded" : ""}`}
                 >
                 <label
                   className={`scenario-option ${
@@ -518,11 +526,11 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                     {selectedId === scenario.id ? "✓" : ""}
                   </span>
                 </label>
-                {(scenario.id === "S03" || scenario.id === "S04") && selectedId === scenario.id && (
+                {visibleModes(scenario).length > 0 && selectedId === scenario.id && (
                   <div className="huntress-panel">
                     <fieldset className="huntress-tabs">
                       <legend className="sr-only">{scenario.name} 실행 모드</legend>
-                      {(scenario.modes ?? []).filter((mode) => mode.id !== "delete").map((mode) => (
+                      {visibleModes(scenario).map((mode) => (
                         <label
                           key={mode.id}
                           className={`huntress-tab ${selectedMode === mode.id ? "is-selected" : ""}`}
@@ -641,7 +649,7 @@ export default function Demo({ onReplayIntro }: DemoProps) {
                           ? "검증 진행 중"
                           : run
                             ? "다시 실행"
-                            : selected.id === "S03"
+                            : selected.id === "S02"
                               ? `${selectedMode === "read" ? "일반 읽기" : selectedMode === "honeypot" ? "허니팟 접근" : "로그 삭제"} 실행`
                               : "시연 시작"}
                   </span>

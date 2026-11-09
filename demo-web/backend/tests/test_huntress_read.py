@@ -15,7 +15,7 @@ ROOT = BACKEND.parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(BACKEND))
 
-from scenarios import s03_huntress
+from scenarios import s02_huntress
 from scenarios.huntress_config import READ_FILES
 from scenarios.results import validate_result_details
 
@@ -62,7 +62,7 @@ class HuntressReadTests(unittest.TestCase):
             mount.mkdir()
             underlay.mkdir()
 
-            workspace = "s03_" + "a" * 32
+            workspace = "s02_" + "a" * 32
             workdir = mount / workspace
 
             args = SimpleNamespace(
@@ -82,7 +82,7 @@ class HuntressReadTests(unittest.TestCase):
                 role,
                 timeout_seconds,
             ):
-                self.assertEqual(scenario_id, "S03")
+                self.assertEqual(scenario_id, "S02")
                 self.assertFalse(workdir.exists())
                 events.append(("manager", role))
 
@@ -179,7 +179,7 @@ class HuntressReadTests(unittest.TestCase):
                 pid,
                 timeout_seconds,
             ):
-                self.assertEqual(scenario_id, "S03")
+                self.assertEqual(scenario_id, "S02")
 
                 child = next(item for item in children if item.pid == pid)
                 child.role = role
@@ -202,16 +202,16 @@ class HuntressReadTests(unittest.TestCase):
             with ExitStack() as stack:
                 stack.enter_context(
                     patch.object(
-                        s03_huntress.sys,
+                        s02_huntress.sys,
                         "platform",
                         "linux",
                     )
                 )
-                stack.enter_context(patch.object(s03_huntress, "check_health"))
-                stack.enter_context(patch.object(s03_huntress, "emit_progress"))
+                stack.enter_context(patch.object(s02_huntress, "check_health"))
+                stack.enter_context(patch.object(s02_huntress, "emit_progress"))
                 stack.enter_context(
                     patch.object(
-                        s03_huntress,
+                        s02_huntress,
                         "register_process_and_wait",
                         side_effect=register_manager,
                     )
@@ -229,7 +229,7 @@ class HuntressReadTests(unittest.TestCase):
                     )
                 )
 
-                report = s03_huntress.run(args)
+                report = s02_huntress.run(args)
 
             validate_result_details(report)
             self.assertIsNotNone(report["finished_at"])

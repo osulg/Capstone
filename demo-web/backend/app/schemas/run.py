@@ -36,14 +36,14 @@ ScenarioRunMode = HuntressMode | AkiraMode
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    scenario_id: str = Field(pattern=r"^S0[1-4]$")
+    scenario_id: str = Field(pattern=r"^S0[1-3]$")
     mode: ScenarioRunMode | None = None
 
     @model_validator(mode="after")
     def validate_mode(self):
         allowed_modes = {
-            "S03": {"read", "honeypot", "delete"},
-            "S04": {"head", "tail"},
+            "S02": {"read", "honeypot", "delete"},
+            "S03": {"head", "tail"},
         }
 
         if self.scenario_id in allowed_modes:

@@ -18,7 +18,7 @@ from scenarios.catalog import get_scenario, to_public_dict
 
 class HuntressModeStepTests(unittest.IsolatedAsyncioTestCase):
     async def check_mode(self, mode, expected_operations):
-        original = get_scenario("S03")
+        original = get_scenario("S02")
 
         # 실제 catalog를 바꾸지 않고 검사할 모드만 허용한다.
         scenario = replace(
@@ -49,7 +49,7 @@ class HuntressModeStepTests(unittest.IsolatedAsyncioTestCase):
                     new=AsyncMock(),
                 ) as execute,
             ):
-                created = runner.start("S03", mode=mode)
+                created = runner.start("S02", mode=mode)
                 await runner._active_task
 
                 record, selected_scenario = execute.await_args.args
@@ -73,7 +73,7 @@ class HuntressModeStepTests(unittest.IsolatedAsyncioTestCase):
 
             # 실행별 단계 선택이 공용 시나리오를 변경하면 안 된다.
             self.assertEqual(
-                get_scenario("S03").steps,
+                get_scenario("S02").steps,
                 original.steps,
             )
         finally:
@@ -103,7 +103,7 @@ class HuntressModeStepTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_public_mode_steps_exclude_internal_operation_names(self):
-        scenario = get_scenario("S03")
+        scenario = get_scenario("S02")
         public = to_public_dict(scenario)
 
         mode = next(item for item in public["modes"] if item["id"] == "honeypot")

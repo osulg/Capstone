@@ -22,7 +22,7 @@ from scenarios.catalog import get_scenario
 
 class RunnerDeleteObservationTests(unittest.IsolatedAsyncioTestCase):
     async def run_case(self, *, status="passed", observation_error=False):
-        original = get_scenario("S03")
+        original = get_scenario("S02")
         scenario = replace(
             original,
             modes=tuple(
@@ -46,7 +46,7 @@ class RunnerDeleteObservationTests(unittest.IsolatedAsyncioTestCase):
             "issues": [],
         }
         payload = {
-            "scenario_id": "S03",
+            "scenario_id": "S02",
             "mode": "delete",
             "pid": 123,
             "status": status,
@@ -129,13 +129,13 @@ class RunnerDeleteObservationTests(unittest.IsolatedAsyncioTestCase):
                         "app.services.runner",
                         level="ERROR",
                     ):
-                        created = runner.start("S03", mode="delete")
+                        created = runner.start("S02", mode="delete")
                         await asyncio.wait_for(
                             runner._active_task,
                             timeout=5,
                         )
                 else:
-                    created = runner.start("S03", mode="delete")
+                    created = runner.start("S02", mode="delete")
                     await asyncio.wait_for(
                         runner._active_task,
                         timeout=5,

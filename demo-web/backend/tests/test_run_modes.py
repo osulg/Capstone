@@ -1,4 +1,4 @@
-"""S03 모드 요청 검증과 실행 응답의 모드 보존 검사."""
+"""S02 모드 요청 검증과 실행 응답의 모드 보존 검사."""
 
 import sys
 import unittest
@@ -23,25 +23,25 @@ from scenarios.catalog import get_scenario
 
 
 class RunModeTests(unittest.TestCase):
-    def test_s03_accepts_three_modes(self):
+    def test_s02_accepts_three_modes(self):
         for mode in ("read", "honeypot", "delete"):
             with self.subTest(mode=mode):
                 request = RunRequest(
-                    scenario_id="S03",
+                    scenario_id="S02",
                     mode=mode,
                 )
                 self.assertEqual(request.mode, mode)
 
-    def test_s03_requires_mode(self):
+    def test_s02_requires_mode(self):
         with self.assertRaises(ValidationError):
-            RunRequest(scenario_id="S03")
+            RunRequest(scenario_id="S02")
 
     def test_unknown_mode_is_rejected(self):
         with self.assertRaises(ValidationError):
-            RunRequest(scenario_id="S03", mode="unknown")
+            RunRequest(scenario_id="S02", mode="unknown")
 
     def test_other_scenarios_reject_mode(self):
-        for scenario_id in ("S01", "S02", "S04"):
+        for scenario_id in ("S01", "S03", "S04"):
             with self.subTest(scenario_id=scenario_id):
                 with self.assertRaises(ValidationError):
                     RunRequest(
@@ -53,10 +53,25 @@ class RunModeTests(unittest.TestCase):
         request = RunRequest(scenario_id="S01")
         self.assertIsNone(request.mode)
 
+    def test_s03_accepts_akira_modes(self):
+        for mode in ("head", "tail"):
+            with self.subTest(mode=mode):
+                self.assertEqual(RunRequest(scenario_id="S03", mode=mode).mode, mode)
+
+    def test_s03_requires_akira_mode(self):
+        with self.assertRaises(ValidationError):
+            RunRequest(scenario_id="S03")
+
+    def test_huntress_rejects_akira_modes(self):
+        for mode in ("head", "tail"):
+            with self.subTest(mode=mode):
+                with self.assertRaises(ValidationError):
+                    RunRequest(scenario_id="S02", mode=mode)
+
     def test_mode_survives_response_serialization(self):
         created = RunCreatedResponse(
             run_id="test-run",
-            scenario_id="S03",
+            scenario_id="S02",
             mode="honeypot",
             status="queued",
         )
@@ -76,7 +91,7 @@ class RunModeTests(unittest.TestCase):
 
 class HuntressModeAvailabilityTests(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_mode_is_rejected(self):
-        original = get_scenario("S03")
+        original = get_scenario("S02")
         reason = "테스트에서 비활성화한 모드입니다."
 
         # 실제 카탈로그는 유지하고 테스트에서만 삭제 모드를 비활성화한다.
@@ -101,7 +116,7 @@ class HuntressModeAvailabilityTests(unittest.IsolatedAsyncioTestCase):
                 return_value=scenario,
             ):
                 with self.assertRaises(ScenarioUnavailableError) as caught:
-                    runner.start("S03", mode="delete")
+                    runner.start("S02", mode="delete")
 
                 self.assertEqual(str(caught.exception), reason)
 
