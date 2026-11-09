@@ -74,6 +74,11 @@ _EXECUTIONS = MappingProxyType(
             ),
             timeout_seconds=AKIRA_TIMEOUT_SECONDS,
         ),
+        "scenarios.s04_lolbin": ExecutionSpec(
+            scenario_id="S04",
+            module="scenarios.s04_lolbin",
+            timeout_seconds=155.0,
+        ),
     }
 )
 

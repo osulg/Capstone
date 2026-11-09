@@ -33,9 +33,9 @@ export function readSavedRun(): SavedRun | null {
 
     const storedMode = "mode" in value ? value.mode : null;
 
-    if (!["S01", "S02", "S03"].includes(value.scenarioId)) return null;
+    if (!["S01", "S02", "S03", "S04"].includes(value.scenarioId)) return null;
     if (
-      value.scenarioId !== "S01" &&
+      (value.scenarioId === "S02" || value.scenarioId === "S03") &&
       !isModeForScenario(value.scenarioId, storedMode)
     ) return null;
 

@@ -36,7 +36,7 @@ ScenarioRunMode = HuntressMode | AkiraMode
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    scenario_id: str = Field(pattern=r"^S0[1-3]$")
+    scenario_id: str = Field(pattern=r"^S0[1-4]$")
     mode: ScenarioRunMode | None = None
 
     @model_validator(mode="after")

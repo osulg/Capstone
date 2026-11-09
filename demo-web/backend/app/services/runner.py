@@ -1293,6 +1293,11 @@ class ScenarioRunner:
 
         validate_result_details(result)
 
+        if scenario.module == "scenarios.s04_lolbin" and result["status"] == "passed":
+            from scenarios.lolbin_results import validate_lolbin_success
+
+            validate_lolbin_success(result, record)
+
         if scenario.module == "scenarios.s03_akira":
             if (
                 result.get("result_version") != 2

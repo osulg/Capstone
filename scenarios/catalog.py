@@ -220,6 +220,49 @@ SCENARIOS = (
             ScenarioStep("inspect", "파일 상태 확인", ("INSPECT",)),
         ),
     ),
+    Scenario(
+        id="S04",
+        name="LOLBin",
+        category="신뢰 프로세스의 고엔트로피 쓰기",
+        description=(
+            "시스템 Python과 신뢰 경로의 실험 스크립트로 "
+            "더미 파일의 읽기·고엔트로피 덮어쓰기·이름 변경을 시도합니다."
+        ),
+        expected_result=(
+            "공격 PID의 동적 점수 변화와 HIGH 격상 사유를 확인해 "
+            "ML 판단과 보호 규칙에 의한 차단을 구분합니다."
+        ),
+        enabled=True,
+        disabled_reason=None,
+        module="scenarios.s04_lolbin",
+        steps=(
+            ScenarioStep(
+                id="precheck",
+                name="시스템 Python·신뢰 경로 확인",
+                operation_names=("PRECHECK",),
+            ),
+            ScenarioStep(
+                id="prepare",
+                name="더미 파일 준비",
+                operation_names=("PREPARE",),
+            ),
+            ScenarioStep(
+                id="verify_ready",
+                name="파일 공개 확인",
+                operation_names=("VERIFY_READY",),
+            ),
+            ScenarioStep(
+                id="action",
+                name="고엔트로피 쓰기 및 ML 평가 관찰",
+                operation_names=("ACTION",),
+            ),
+            ScenarioStep(
+                id="inspect",
+                name="종료 후 파일 상태 관찰",
+                operation_names=("INSPECT",),
+            ),
+        ),
+    ),
 )
 
 

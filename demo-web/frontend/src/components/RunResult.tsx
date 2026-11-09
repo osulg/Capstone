@@ -55,6 +55,11 @@ export default function RunResult({ run }: RunResultProps) {
   const isDelete = run.scenario_id === "S02" && run.mode === "delete";
   const deletion = run.deletion_observation;
   const isAkira = run.scenario_id === "S03";
+  const isLolbin = run.scenario_id === "S04";
+  const lolbinOutcome = run.result?.worker_outcome;
+  const lolbinDenied = isLolbin && lolbinOutcome !== null &&
+    typeof lolbinOutcome === "object" && "status" in lolbinOutcome &&
+    lolbinOutcome.status === "permission_denied";
   const akira = run.akira_observation;
   const protectedIcefireTimeout =
     run.scenario_id === "S01" && protectedFiles && run.status === "timed_out";
@@ -74,6 +79,8 @@ export default function RunResult({ run }: RunResultProps) {
 
   const title = cancelled
     ? "테스트 프로세스 실행을 중단했습니다"
+    : isLolbin
+      ? passed ? "LOLBin 실행과 파일 상태 관찰을 완료했습니다" : "LOLBin 실행 관찰을 완료하지 못했습니다"
     : policyBlocked
       ? protectedFiles
         ? "공격 차단과 원본 보존을 확인했습니다"
@@ -110,6 +117,8 @@ export default function RunResult({ run }: RunResultProps) {
 
   const statusLabel = cancelled
     ? "프로세스 종료"
+    : isLolbin
+      ? passed ? "작업 관찰 완료" : run.status === "timed_out" ? "시간 초과" : "실행 실패"
     : policyBlocked
       ? protectedFiles ? "보호 검증 완료" : "정책 차단 종료"
     : isAkira
@@ -166,6 +175,14 @@ export default function RunResult({ run }: RunResultProps) {
           <dd>{durationLabel(run)}</dd>
         </div>
       </dl>
+
+      {isLolbin && (
+        <div className="result-note">
+          {lolbinDenied && <p>공격 작업의 접근 거부를 관찰하고, 이후 파일 상태를 확인했습니다. 거부 원인이 ML 판단인지는 별도 근거로 확인해야 합니다.</p>}
+          <p>작업 관찰 완료는 ML 차단 성공이나 원본 보존 성공을 뜻하지 않습니다.</p>
+          <p>상세 JSON의 worker_outcome과 task_results에서 공격 종료·회수 결과와 양쪽 파일 상태를 확인하세요. ML 격상 여부는 공격 PID의 TRIGGER HIGH 사유와 대조합니다.</p>
+        </div>
+      )}
 
       {isAkira && (
         <div className="result-policy-note">

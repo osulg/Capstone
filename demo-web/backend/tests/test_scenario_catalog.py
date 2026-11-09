@@ -24,7 +24,7 @@ if HAS_PYDANTIC:
 
 
 class ScenarioCatalogTests(unittest.TestCase):
-    def test_catalog_contains_three_final_scenarios(self):
+    def test_catalog_contains_four_scenarios(self):
         scenarios = list_scenarios()
 
         self.assertEqual(
@@ -33,6 +33,7 @@ class ScenarioCatalogTests(unittest.TestCase):
                 ("S01", "IceFire"),
                 ("S02", "Huntress"),
                 ("S03", "Akira"),
+                ("S04", "LOLBin"),
             ],
         )
 
@@ -67,7 +68,7 @@ class ScenarioCatalogTests(unittest.TestCase):
 )
 class ScenarioRequestTests(unittest.TestCase):
     def test_request_accepts_current_ids(self):
-        for scenario_id in ("S01", "S02", "S03"):
+        for scenario_id in ("S01", "S02", "S03", "S04"):
             with self.subTest(scenario_id=scenario_id):
                 payload = {"scenario_id": scenario_id}
 
@@ -80,7 +81,7 @@ class ScenarioRequestTests(unittest.TestCase):
                 self.assertEqual(request.scenario_id, scenario_id)
 
     def test_request_rejects_removed_id(self):
-        for scenario_id in ("S04", "S05"):
+        for scenario_id in ("S05",):
             with self.subTest(scenario_id=scenario_id):
                 with self.assertRaises(ValidationError):
                     RunRequest(scenario_id=scenario_id)
@@ -95,7 +96,7 @@ class ScenarioAvailabilityTests(unittest.IsolatedAsyncioTestCase):
         runner = ScenarioRunner()
 
         try:
-            for scenario_id in ("S04", "S05"):
+            for scenario_id in ("S05",):
                 with self.subTest(scenario_id=scenario_id):
                     with self.assertRaises(ScenarioUnavailableError):
                         runner.start(scenario_id)
