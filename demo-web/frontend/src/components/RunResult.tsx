@@ -48,7 +48,6 @@ export default function RunResult({ run }: RunResultProps) {
   const passed = run.status === "passed";
   const cancelled = run.status === "cancelled";
   const completed = run.steps.filter((step) => step.status === "passed").length;
-  const detection = run.detection_verification;
   const protection = run.protection_verification;
   const protectedFiles = protection?.status === "passed";
   const isHoneypot =
@@ -166,14 +165,6 @@ export default function RunResult({ run }: RunResultProps) {
           <dt>소요 시간</dt>
           <dd>{durationLabel(run)}</dd>
         </div>
-        <div>
-          <dt>탐지·오탐 검증</dt>
-          <dd className={detection === "not_checked" ? "is-muted" : ""}>
-            {detection === "not_checked"
-              ? "미검증"
-              : detection === "passed" ? "성공" : "실패"}
-          </dd>
-        </div>
       </dl>
 
       {isAkira && (
@@ -289,7 +280,7 @@ export default function RunResult({ run }: RunResultProps) {
               ? "등록된 접근 PID와 허니팟 경로의 접근 거부·차단 근거를 확인한 결과입니다. 미끼 내용 보존과 Stage 2 상태 판정은 검증 범위에 포함하지 않습니다."
               : isAkira
                 ? "등록된 공격 PID의 차단·회수와 mount·underlay 원본 VM 더미 파일 8개의 내용 일치를 확인한 결과입니다."
-              : "관찰 시점의 문서 내용과 차단 근거를 확인한 결과입니다. 후속 지연 작업 완료나 일반적인 탐지·오탐 성능을 보장하지 않습니다."}
+              : "관찰 시점의 문서 내용과 차단 근거를 확인한 결과입니다. 후속 지연 작업 완료를 보장하지 않습니다."}
           </p>
         </div>
       )}
@@ -304,12 +295,6 @@ export default function RunResult({ run }: RunResultProps) {
         <p className="result-note">
           테스트가 중단되어 전체 파일 작업 검증을 완료하지 못했습니다.
           완료한 단계 수는 중단 전에 검증을 마친 단계만 집계합니다.
-        </p>
-      )}
-
-      {detection === "not_checked" && (
-        <p className="result-note">
-          탐지·오탐 여부는 별도로 검증해야 합니다.
         </p>
       )}
 
