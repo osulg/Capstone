@@ -91,10 +91,17 @@ fi
 import socket
 for port in (5000, 8000, 5173):
     with socket.socket() as server:
+        # 종료된 서버의 TIME_WAIT 연결만으로 빈 포트를 사용 중으로
+        # 오판하지 않는다. 실제 LISTEN 중인 서버의 포트는 계속 거부한다.
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             server.bind(("127.0.0.1", port))
         except OSError as error:
-            raise SystemExit(f"포트 {port}를 사용할 수 없습니다: {error}")
+            raise SystemExit(
+                f"포트 {port}를 사용할 수 없습니다: {error}\n"
+                f"사용 중인 서버 확인: ss -ltnp 'sport = :{port}'\n"
+                "이전 서비스 터미널에서 Ctrl+C로 종료한 뒤 다시 실행하세요."
+            )
 PY
 
 open_terminal() {
