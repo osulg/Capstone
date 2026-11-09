@@ -3,6 +3,9 @@
 from pathlib import Path
 
 from experiments.simulators.sim_scn_akira import (
+    NEW_EXT as NEW_EXT,
+    NOTE_BODY as NOTE_BODY,
+    NOTE_NAME as NOTE_NAME,
     VM_EXTS,
     lib,
 )
