@@ -223,44 +223,63 @@ def document_bytes(name: str, size: int) -> bytes:
     raise ValueError(f"unsupported fixture extension: {ext}")
 
 
-def prepare_documents(workdir, names, size, timeout) -> bool:
+def create_documents(workdir, names, size) -> int:
+    """현재 프로세스에서 더미 문서를 생성한다."""
+    for name in names:
+        body = document_bytes(name, size)
+        path = os.path.join(workdir, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        with open(path, "wb") as handle:
+            handle.write(body)
+
+    return 0
+
+
+def verify_documents(workdir, names, size, timeout) -> int:
+    """현재 프로세스에서 문서 내용이 공개됐는지 확인한다."""
     expected = {name: document_bytes(name, size) for name in names}
+    deadline = time.monotonic() + timeout
 
-    def make() -> int:
-        for name, body in expected.items():
-            path = os.path.join(workdir, name)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "wb") as handle:
-                handle.write(body)
-        return 0
+    while True:
+        ready = True
 
-    return lib.run_in_child(make, "document preparation", timeout)
-
-
-def wait_for_documents(workdir, names, size, timeout) -> bool:
-    expected = {name: document_bytes(name, size) for name in names}
-
-    def ready() -> bool:
         for name, body in expected.items():
             try:
                 with open(os.path.join(workdir, name), "rb") as handle:
                     if handle.read(size + 1) != body:
-                        return False
+                        ready = False
+                        break
             except FileNotFoundError:
-                return False
-        return True
+                ready = False
+                break
 
-    def wait() -> int:
-        deadline = time.monotonic() + timeout
-        while True:
-            if ready():
-                return 0
-            if time.monotonic() >= deadline:
-                lib.err("document visibility timed out; attack will not start")
-                return 1
-            time.sleep(0.1)
+        if ready:
+            return 0
 
-    return lib.run_in_child(wait, "document visibility", timeout)
+        if time.monotonic() >= deadline:
+            lib.err("문서 공개 확인 시간 초과: 공격을 시작하지 않습니다.")
+            return 1
+
+        time.sleep(0.1)
+
+
+def prepare_documents(workdir, names, size, timeout) -> bool:
+    """기존 CLI에서는 별도 준비 자식을 사용한다."""
+    return lib.run_in_child(
+        lambda: create_documents(workdir, names, size),
+        "document preparation",
+        timeout,
+    )
+
+
+def wait_for_documents(workdir, names, size, timeout) -> bool:
+    """기존 CLI에서는 별도 공개 확인 자식을 사용한다."""
+    return lib.run_in_child(
+        lambda: verify_documents(workdir, names, size, timeout),
+        "document visibility",
+        timeout,
+    )
 
 
 def parse_args():

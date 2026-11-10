@@ -45,8 +45,10 @@
 """
 
 import argparse
+import json
 import math
 import os
+import re
 import signal
 import sys
 import time
@@ -57,6 +59,7 @@ PLAINTEXT_LINE = b"This is a plain text test document for GuardFS simulation.\n"
 def parse_args():
     p = argparse.ArgumentParser(description="고엔트로피 쓰기 부하 시뮬레이터")
     p.add_argument("target", help="GuardFS 마운트 안의 대상 폴더 (없으면 생성)")
+    p.add_argument("--web-action", choices=("prepare", "verify", "attack", "inspect"))
     p.add_argument("--files", type=int, default=20, help="테스트 파일 개수")
     p.add_argument("--size-kb", type=int, default=64, help="파일당 크기(KB)")
     p.add_argument(
@@ -109,7 +112,8 @@ def _wait_for_child(pid, timeout, phase):
     while True:
         done, status = os.waitpid(pid, os.WNOHANG)
         if done:
-            return os.waitstatus_to_exitcode(status) == 0
+            # 구버전 시스템 Python에서도 정상 종료 여부를 확인한다.
+            return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
         if time.monotonic() >= deadline:
             print(f"[SIM] {phase} 시간 초과: PID={pid}", file=sys.stderr, flush=True)
             try:
@@ -202,8 +206,72 @@ def overwrite_with_random(path, size, chunk):
     return written
 
 
+def run_web_task(args):
+    """웹에서는 작업별 PID를 외부 관리자가 등록하므로 추가 fork를 하지 않는다."""
+    root = os.path.abspath(os.path.expanduser(args.target))
+    if not re.fullmatch(r"s04_[0-9a-f]{32}", os.path.basename(root)):
+        raise ValueError("웹 작업 폴더 이름이 올바르지 않습니다.")
+    if os.path.islink(root):
+        raise ValueError("심볼릭 링크 작업 폴더는 허용하지 않습니다.")
+    size = args.size_kb * 1024
+    expected = (PLAINTEXT_LINE * (size // len(PLAINTEXT_LINE) + 1))[:size]
+    deadline = time.monotonic() + args.duration
+    report = {"action": args.web_action, "pid": os.getpid(), "status": "failed",
+              "files": [], "error": None, "failure": None}
+    operation = args.web_action
+    path = root
+
+    def check_time():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("작업 제한 시간을 초과했습니다.")
+
+    def observe(path):
+        try:
+            with open(path, "rb") as stream:
+                data = stream.read(size + 1)
+            return "matched" if data == expected else "changed"
+        except FileNotFoundError:
+            return "missing"
+
+    try:
+        if args.web_action == "prepare":
+            os.mkdir(root)
+        for index in range(args.files):
+            check_time()
+            name = "file_{:03d}.txt".format(index)
+            path = os.path.join(root, name)
+            if args.web_action == "prepare":
+                with open(path, "xb") as stream:
+                    stream.write(expected)
+            elif args.web_action == "verify":
+                while observe(path) != "matched":
+                    check_time()
+                    time.sleep(0.1)
+            elif args.web_action == "attack":
+                operation = "read_overwrite"
+                overwrite_with_random(path, size, args.chunk_kb * 1024)
+                operation = "rename"
+                os.rename(path, path + ".locked")
+                time.sleep(args.delay)
+            report["files"].append({
+                "name": name,
+                **({"original": observe(path), "renamed": observe(path + ".locked")}
+                   if args.web_action == "inspect" else {}),
+            })
+        report["status"] = "passed"
+    except (OSError, ValueError) as error:
+        report["status"] = "timed_out" if isinstance(error, TimeoutError) else "failed"
+        report["error"] = str(error)
+        report["failure"] = {"operation": operation, "path": path,
+                             "errno": getattr(error, "errno", None), "message": str(error)}
+    print(json.dumps(report, ensure_ascii=False), flush=True)
+    return 0 if report["status"] == "passed" else 1
+
+
 def main():
     args = parse_args()
+    if args.web_action:
+        return run_web_task(args)
 
     target = os.path.realpath(os.path.expanduser(args.target))
     if target in ("/", os.path.realpath(os.path.expanduser("~"))):

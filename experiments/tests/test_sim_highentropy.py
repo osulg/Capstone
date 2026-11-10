@@ -60,7 +60,8 @@ class PreparationTests(unittest.TestCase):
         fake_os = SimpleNamespace(
             WNOHANG=1,
             waitpid=lambda *args: (123, 0),
-            waitstatus_to_exitcode=lambda status: status,
+            WIFEXITED=lambda status: status == 0,
+            WEXITSTATUS=lambda status: status >> 8,
         )
         with patch.object(sim, "os", fake_os):
             self.assertTrue(sim._wait_for_child(123, 1, "test"))
@@ -86,6 +87,7 @@ class PreparationTests(unittest.TestCase):
     def test_visibility_failure_never_starts_attack_or_deletes_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             args = SimpleNamespace(
+                web_action=None,
                 target=tmp,
                 files=1,
                 size_kb=1,
