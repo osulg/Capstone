@@ -57,9 +57,15 @@ export function highReasonText(code: string, th: Thresholds): string {
   return code;
 }
 
-// HIGH 격상 이벤트(agent 가 만든 'HIGH사유, stage1=…, dyn=…' 문장)에서 HIGH 사유만 꺼내 풀어 쓴다
-export const highEscalateText = (reason: string, th: Thresholds) =>
-  highReasonText((reason || "").split(", ")[0], th);
+// HIGH 격상 이벤트(agent 가 만든 'HIGH사유, stage1=…, dyn=… stat=… score=…' 문장)에서 HIGH 사유를 풀어 쓰고,
+// 사유에 점수가 없으면(고엔트로피 쓰기 등 MEDIUM 보호 규칙) 그 PID 의 마지막 Stage2 ML 점수를 덧붙인다.
+//   예) "고엔트로피 쓰기, ML 점수 0.329"
+export function highEscalateText(reason: string, th: Thresholds): string {
+  const r = reason || "";
+  const text = highReasonText(r.split(", ")[0], th);
+  const sc = r.match(/\bscore=([\d.]+)/);
+  return sc && !text.includes("점수") ? `${text}, ML 점수 ${score(sc[1])}` : text;
+}
 
 // HIGH 를 일으킨 쓰기·반영 기록 (medium.py 의 ESCALATED_TO_HIGH / VALIDATION_FAILED)
 export const isHighCause = (e: EdrEvent) =>
