@@ -157,6 +157,7 @@ label.field { display: inline-flex; align-items: center; gap: 6px; }
 /* ── 5) 파일 현황 ── */
 /* 보호 결과 요약: 큰 숫자 두 칸 */
 .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.result-grid.single { grid-template-columns: 1fr; }
 .result-box { border: 1px solid #000; border-radius: 6px; padding: 14px 16px; background: #fff; }
 .result-title { font-weight: 700; }
 .result-num { margin-top: 6px; line-height: 1; }
@@ -244,3 +245,7 @@ label.field { display: inline-flex; align-items: center; gap: 6px; }
   .num-grid { grid-template-columns: 1fr 1fr; }
   .pid-flow li { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* 파일 상세: 지금 파일 앞부분 미리보기 */
+.file-preview { margin: 0; max-height: 180px; overflow: auto; border: 1px solid var(--border); background: #fff;
+  padding: 8px 10px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }

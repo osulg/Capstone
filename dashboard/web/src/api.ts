@@ -1,5 +1,6 @@
 import type {
-  ChatResponse, ChatTurn, EventsResponse, FilesResponse, FolderKey, Health, Preview, SystemStatus,
+  ChatResponse, ChatTurn, EventsResponse, FilesResponse, FolderKey, Health, Preview, RunDetailResponse,
+  RunsResponse, SystemStatus,
 } from "./types";
 
 async function getJson<T>(url: string): Promise<T> {
@@ -13,6 +14,14 @@ export const fetchEvents = (sinceId: number, gen: number) =>
 export const fetchHealth = () => getJson<Health>("/api/health");
 
 export const fetchFiles = () => getJson<FilesResponse>("/api/files");
+
+export const fetchRuns = () => getJson<RunsResponse>("/api/runs");
+
+// 없는 실행 폴더면 null
+export async function fetchRun(name: string): Promise<RunDetailResponse | null> {
+  const res = await fetch(`/api/runs/${encodeURIComponent(name)}`);
+  return res.ok ? ((await res.json()) as RunDetailResponse) : null;
+}
 
 export const fetchSystem = () => getJson<SystemStatus>("/api/system");
 

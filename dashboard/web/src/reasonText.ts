@@ -132,6 +132,9 @@ export function describeEvent(e: EdrEvent, th: Thresholds, setattrFrom?: EdrEven
   }
 
   switch (e.result) {
+    case "APPLIED":
+      if (e.action === "WRITE") return { action: "쓰기 반영", detail: "LOW 상태라 차단·보류 없이 원본에 반영" };
+      break;
     case "ESCALATED_TO_HIGH": return { action: "위험 쓰기 감지", detail: `${causeText(e)}, HIGH 격상` };
     case "VALIDATION_FAILED": return { action: "반영 전 파일 구조 문제 발견", detail: "반영 거부, HIGH 격상" };
     case "BUFFERED":

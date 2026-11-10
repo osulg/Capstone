@@ -16,8 +16,12 @@ export function sameFile(target: string, rel: string): boolean {
 }
 
 // 파일 상세 화면에 넘길 대상 문자열: 이벤트에 실제로 찍힌 경로를 우선 쓴다.
+// 이름이 바뀐 파일(예: file_000.txt.sb0nji)은 HoldFS 기록에 원래 이름(file_000.txt)으로 남으므로,
+// 그대로 찾지 못하면 마지막 확장자를 뗀 이름으로 한 번 더 찾는다.
 export function targetFor(events: EdrEvent[], root: string, rel: string): string {
-  const hit = events.find((e) => e.target && !e.target.includes(" → ") && sameFile(e.target, rel));
+  const find = (r: string) => events.find((e) => e.target && !e.target.includes(" → ") && sameFile(e.target, r));
+  const base = rel.replace(/(\.[^./]+)\.[^./]+$/, "$1");
+  const hit = find(rel) ?? (base !== rel ? find(base) : undefined);
   return hit ? hit.target : `${root.replace(/\/$/, "")}/${rel}`;
 }
 

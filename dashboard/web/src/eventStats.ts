@@ -22,6 +22,10 @@ export function inPeriod(events: EdrEvent[], period: Period, now = new Date()): 
   return events.filter((e) => eventDate(e).getTime() >= from);
 }
 
+// 실행 폴더 안에서 LOW 상태로 차단·보류 없이 반영된 쓰기 (agent.py RE_WRITE).
+// 위협 판정이 아니라 기록용이라 '보안 위협 이벤트 수' 그래프에서는 뺀다.
+export const isLowWrite = (e: EdrEvent) => e.level === "LOW" && e.action === "WRITE" && e.result === "APPLIED";
+
 // 버퍼가 폐기된(원본이 보존된) PID 집합
 export const droppedPids = (events: EdrEvent[]) =>
   new Set(events.filter((e) => e.result === "BUFFER_DROPPED").map((e) => e.pid));
@@ -142,7 +146,7 @@ export function fileStatus(rows: EdrEvent[], dropped: Set<number>): FileStatus {
     else if (e.result === "BLOCKED") st = "차단";
     else if (e.result === "ESCALATED_TO_HIGH" || e.result === "VALIDATION_FAILED" || e.result === "RESTORED") st = "원본 보존";
     else if (e.result === "BUFFERED" || e.result === "STAGED") st = dropped.has(e.pid) ? "원본 보존" : "판정 대기";
-    else if (e.result === "FILE_APPLIED" || (e.action === "SETATTR" && e.result === "CONFIRMED")) st = "반영됨";
+    else if (e.result === "FILE_APPLIED" || isLowWrite(e) || (e.action === "SETATTR" && e.result === "CONFIRMED")) st = "반영됨";
     else if (e.action === "UNLINK" && e.result === "CONFIRMED") st = "삭제됨";
     else if (NEEDS_CHECK.has(e.result)) st = "확인 필요";
   }

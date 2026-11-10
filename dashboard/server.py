@@ -246,6 +246,21 @@ def list_files():
     return jsonify(file_scan.scan_all())
 
 
+@app.route("/api/runs")
+def list_runs():
+    """실행별 로그 조회: 웹 시연 실행 폴더(s01_~s04_)와 폴더별 감염 의심 수."""
+    return jsonify(file_scan.list_runs())
+
+
+@app.route("/api/runs/<name>")
+def run_detail(name):
+    """실행별 상세: 실행 폴더 하나의 파일 전체."""
+    data = file_scan.scan_run(name)
+    if data is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(data)
+
+
 @app.route("/api/files/preview")
 def file_preview():
     data = file_scan.preview(request.args.get("folder", ""), request.args.get("path", ""))

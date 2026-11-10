@@ -223,3 +223,35 @@ def test_precheck_without_medium_is_detect_level():
         "[PRECHECK] pid=8100 op=rename path=/u/x.doc new_path=/u/x.doc.lockbit reason=ExtChangeDetector blocked",
     ])
     assert [(e["level"], e["result"]) for e in evs] == [("SUSPICIOUS", "BLOCKED")]
+
+
+RUN = "/home/u/guardfs_runtime/underlay/s04_" + "a" * 32
+
+
+def test_low_write_in_run_folder_is_reported_once_per_file():
+    evs = feed_all([
+        f"[WRITE] pid=25497 state=ProcState.LOW path={RUN}/file_000.txt",
+        f"[WRITE] pid=25497 state=ProcState.LOW path={RUN}/file_000.txt",
+        f"[WRITE] pid=25497 state=ProcState.LOW path={RUN}/file_001.txt",
+    ])
+    assert [(e["level"], e["action"], e["result"], e["target"]) for e in evs] == [
+        ("LOW", "WRITE", "APPLIED", f"{RUN}/file_000.txt"),
+        ("LOW", "WRITE", "APPLIED", f"{RUN}/file_001.txt"),
+    ]
+
+
+def test_low_write_outside_run_folder_and_other_states_are_ignored():
+    evs = feed_all([
+        "[WRITE] pid=1 state=ProcState.LOW path=/home/u/guardfs_runtime/underlay/notes.txt",
+        "[WRITE] pid=1 state=ProcState.LOW path=/home/u/guardfs_runtime/underlay/sim_icefire/a.txt",
+        f"[WRITE] pid=1 state=ProcState.MEDIUM path={RUN}/file_000.txt",
+        f"[WRITE] pid=1 state=ProcState.HIGH path={RUN}/file_000.txt",
+    ])
+    assert evs == []
+
+
+def test_low_write_does_not_reset_escalation_tracking():
+    p = StdoutParser()
+    p.feed("[STATE] pid=7 ProcState.LOW → ProcState.MEDIUM")
+    p.feed(f"[WRITE] pid=7 state=ProcState.LOW path={RUN}/file_000.txt")
+    assert p.level[7] == "MEDIUM"

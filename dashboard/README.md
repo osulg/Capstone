@@ -16,7 +16,7 @@ HoldFS 코드(`guardfs/`)는 수정하지 않는다. 에이전트가 HoldFS가 �
 | `server.py` | Flask 서버. 이벤트 수신/조회 API, 대시보드 페이지, AI 분석 API |
 | `agent.py` | HoldFS 로그 tail → JSON 변환 → 서버 전송. `--demo` 샘플 전송 |
 | `rag.py` | 이벤트·지식 검색(RAG), LLM 미연결 시 규칙 기반 로컬 분석 |
-| `files.py` | 파일 상태 탭: 보호/비보호 폴더 읽기 전용 스캔, 엔트로피 판정 |
+| `files.py` | 파일 현황: 실행 폴더·미끼 폴더 읽기 전용 스캔, 엔트로피 판정 |
 | `web/` | 대시보드 화면 (React + TypeScript + Vite). 빌드 결과 `web/dist/`를 `server.py`가 서빙한다 |
 
 ## 빠른 실행 (권장): `run_all.sh`
@@ -162,24 +162,21 @@ HoldFS가 허니팟 접근을 차단하면 출력하는 `[HONEYPOT] pid=… op=�
 허니팟 안 create/mkdir 처럼 차단 없이 관찰되는 접근은 Stage1 `HoneypotDetector` 탐지(`DETECT`) 행으로 표시한다.
 같은 PID·동작·경로는 2초 안에 한 번만 표시한다. 이벤트 표의 **허니팟** 필터로 모아 볼 수 있다.
 
-## 파일 상태 탭
+## 실행별 로그 조회 · 파일 현황
 
-왼쪽 📁 탭에서 두 폴더를 나란히 비교한다 (2초마다 갱신, 읽기 전용).
+웹 시연 시나리오는 실행마다 보호 폴더(underlay) 최상위에 `s01_`~`s04_<32자리 16진수>` 폴더를 만든다.
 
-| 폴더 | 기본 경로 | 환경변수 |
-|---|---|---|
-| 보호 폴더 (HoldFS underlay) | `~/guardfs_runtime/underlay` | `DASH_PROTECTED_DIR` |
-| 보호 없는 폴더 (비교용) | `~/guardfs_demo/unprotected` | `DASH_UNPROTECTED_DIR` |
-
-- 파일 앞부분 4KB 엔트로피가 HoldFS 기준(`ENTROPY_THRESHOLD`, 7.0) 이상이면 "암호화 의심", 64B 미만은 "판정 불가".
-- `.locked` / `.enc` 등은 "의심 확장자"로 표시. 숨김 파일, 심볼릭 링크는 제외.
-- 보호 폴더의 `honeypot/` 파일은 "🍯 미끼 파일"로 목록 맨 위에 따로 표시하고, 정상/암호화 개수에서는 뺀다.
-- 시연: 같은 시뮬레이터를 두 경로에 각각 실행한다.
-  ```bash
-  python3 experiments/simulators/sim_highentropy.py ~/guardfs_runtime/mount/sim_target --keep      # 보호
-  python3 experiments/simulators/sim_highentropy.py ~/guardfs_demo/unprotected/sim_target --keep   # 비보호
-  ```
-  보호 폴더는 반드시 **마운트 경로**로 실행해야 HoldFS가 개입한다(탭은 그 결과가 저장되는 underlay를 보여준다).
+- **보안 이벤트 현황 › 실행별 로그 조회**: 실행 폴더 목록과 `감염 의심 / 전체` 파일 수 (2초마다 갱신, 읽기 전용).
+  `상세 보기`를 누르면 파일 현황 › 실행별 상세로 넘어간다.
+- **파일 현황 › 실행별 상세**: 그 실행 폴더의 보호 결과 요약과 파일 전체 목록. 주소 `/?run=s04_…`로도 열 수 있다.
+- **감염 의심**: 파일 앞부분 4KB 엔트로피가 HoldFS 기준(`ENTROPY_THRESHOLD`, 7.0) 이상인 파일. 확장자 변경은 세지 않는다.
+  64B 미만은 "판정 불가". 숨김 파일, 심볼릭 링크는 제외.
+- 파일 상세에는 HoldFS 기록과 함께 지금 파일 상태(엔트로피·크기·미리보기)를 보여준다.
+  이름이 바뀐 파일(`file_000.txt.xxxxxx`)은 원래 이름의 기록과 연결한다.
+- 실행 폴더 안에서 LOW 상태로 차단·보류 없이 반영된 쓰기는, HoldFS 실행 출력의 `[WRITE] … state=ProcState.LOW`
+  줄을 에이전트가 PID·파일당 한 번 `LOW / WRITE / APPLIED`로 보낸다(`--stdout-log` 필요).
+  위협 판정이 아니라서 보안 위협 이벤트 그래프에서는 뺀다. LOW 상태 이름 변경은 HoldFS가 출력하지 않아 기록이 없다.
+- **파일 현황 › 미끼 파일 상태**: 보호 폴더 `honeypot/` 미끼 파일 (기존과 같음).
 
 ## API
 
@@ -190,6 +187,8 @@ HoldFS가 허니팟 접근을 차단하면 출력하는 `[HONEYPOT] pid=… op=�
 | DELETE | `/api/events` | 이벤트 전체 삭제 |
 | POST | `/api/chat` | `{"message": "...", "history": [...]}` → `{"reply", "mode", "sources"}` |
 | GET | `/api/files` | 파일 상태 탭: 두 폴더 스캔 결과 |
+| GET | `/api/runs` | 실행별 로그 조회: 실행 폴더 목록과 감염 의심 수 |
+| GET | `/api/runs/<name>` | 실행별 상세: 실행 폴더 하나의 파일 전체 |
 | GET | `/api/files/preview?folder=&path=` | 파일 앞부분 미리보기 (텍스트 또는 hex) |
 | GET | `/api/health` | LLM 연결 여부 |
 

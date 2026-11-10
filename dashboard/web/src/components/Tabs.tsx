@@ -1,8 +1,8 @@
 export type View = "events" | "files" | "system" | "ai";
-export type FilesSub = "compare" | "honeypot";
+export type FilesSub = "runs" | "honeypot";
 
 export const FILES_SUBS: [FilesSub, string][] = [
-  ["compare", "보호 결과 비교"],
+  ["runs", "실행별 상세"],
   ["honeypot", "미끼 파일 상태"],
 ];
 

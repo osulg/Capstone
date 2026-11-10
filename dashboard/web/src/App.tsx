@@ -20,7 +20,12 @@ export default function App() {
   // 주소로 받은 PID 상세는 한 번만 연다. 메뉴를 옮겼다가 돌아오면 목록부터 보여준다.
   const [initialPid, setInitialPid] = useState<number | null>(link.pid);
   const setView = useCallback((v: View) => { setInitialPid(null); setViewState(v); }, []);
-  const [filesSub, setFilesSub] = useState<FilesSub>("compare");
+  const [filesSub, setFilesSub] = useState<FilesSub>("runs");
+  // 파일 현황 › 실행별 상세에서 연 실행 폴더 (주소의 ?run= 으로도 연다)
+  const [run, setRun] = useState<string | null>(link.run);
+  // 보안 이벤트 현황의 실행별 로그 조회 '상세 보기' → 파일 현황 › 실행별 상세
+  const openRun = (name: string) => { setRun(name); setFilesSub("runs"); setView("files"); };
+  const onFilesSub = (s: FilesSub) => { setRun(null); setFilesSub(s); };
 
   // AI 분석관: 대화는 여기서 들고 있어서 메뉴를 옮겨도 남는다.
   // 다른 화면을 보는 동안 답변이 오면 메뉴에 ● 표시를 켠다.
@@ -41,12 +46,14 @@ export default function App() {
   return (
     <div className="window">
       <Header />
-      <Tabs view={view} onView={setView} filesSub={filesSub} onFilesSub={setFilesSub}
+      <Tabs view={view} onView={setView} filesSub={filesSub} onFilesSub={onFilesSub}
         aiDot={aiDot} />
       <div className="main-layout">
         <section className="panel">
-          {view === "events" && <EventsView events={events} onAskAi={askAiPid} initialPid={initialPid} />}
-          <FilesView visible={view === "files"} sub={filesSub} events={events} onAskAi={askAiPid} />
+          {view === "events" && <EventsView events={events} onAskAi={askAiPid} initialPid={initialPid}
+            onRun={openRun} />}
+          <FilesView visible={view === "files"} sub={filesSub} events={events} onAskAi={askAiPid}
+            run={run} onRun={setRun} />
           {view === "system" && <SystemView events={events} onAskAi={askAiPid} />}
           {view === "ai" && <AiView messages={chat.messages} busy={chat.busy} status={chat.status} onAsk={chat.ask} />}
         </section>

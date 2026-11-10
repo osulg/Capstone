@@ -207,6 +207,15 @@ PRECHECK_REASON = {
     "HoneypotDetector": "HoneypotDetector: 허니팟(미끼) 파일 이름 변경 → 사전 차단",
 }
 
+# passthrough.py write: 상태와 상관없이 모든 쓰기를 '[WRITE] pid=… state=… path=…'로 남긴다.
+# LOW 상태 쓰기는 정책 기록(filesecurity.log)이 없어, 차단·보류 없이 반영된 변경(예: 암호화 성공)이
+# 대시보드 파일 상세에 나타나지 않았다. 웹 시연 실행 폴더(s01_~s04_) 안의 LOW 쓰기만 이벤트로 보낸다.
+# (그 밖의 경로까지 보내면 평소 파일 작업으로 기록이 넘친다)
+RE_WRITE = re.compile(r"\[WRITE\] pid=(\d+) state=ProcState\.LOW path=(.+)$")
+RE_RUN_PATH = re.compile(r"/s0[1-4]_[0-9a-f]{32}/")
+LOW_WRITE_REASON = "LOW 상태 쓰기 반영 (정책 차단·보류 없음)"
+LOW_WRITE_SEEN_MAX = 50000
+
 HONEYPOT_REASON = "HoneypotDetector: 허니팟(미끼) 파일 접근 차단"
 HONEYPOT_DEDUP_SEC = 2.0
 
@@ -224,6 +233,7 @@ class StdoutParser:
         self.line_time = None     # 지금 읽는 줄에 붙은 HoldFS 출력 시각 (없으면 agent가 읽은 시각)
         self.prev_was_score = {}  # pid -> 이 PID 의 바로 앞 줄이 Stage2/관찰 창 점수 줄이었는지
         self.medium_sent = set()  # 이번 감시 구간에 MEDIUM 격상 이벤트를 이미 보낸 PID (정상 복귀 시 해제)
+        self.low_write_seen = set()  # (pid, path): 같은 파일의 여러 번 쓰기는 한 번만 보낸다
 
     def _ev(self, pid, level, result, reason, action="ESCALATE"):
         if level != "SUSPICIOUS":  # 허니팟 표시 행이 MEDIUM/HIGH 추적을 덮어쓰지 않도록
@@ -285,7 +295,24 @@ class StdoutParser:
         self.prev_was_score[pid] = bool(re.match(r"\[(?:STAGE2|WATCH)\] pid=\d+ dyn=", line))
         return self._parse(line, prev_score)
 
+    def _low_write(self, pid: int, path: str):
+        """실행 폴더 안의 LOW 쓰기 반영 이벤트. 상태 추적(self.level)은 바꾸지 않는다."""
+        if not RE_RUN_PATH.search(path):
+            return None
+        key = (pid, path)
+        if key in self.low_write_seen:
+            return None
+        if len(self.low_write_seen) >= LOW_WRITE_SEEN_MAX:
+            self.low_write_seen.clear()
+        self.low_write_seen.add(key)
+        return {"time": self.line_time or now_str(), "level": "LOW", "pid": pid, "process": process_name(pid),
+                "target": path, "action": "WRITE", "result": "APPLIED", "reason": LOW_WRITE_REASON,
+                "source": "stdout"}
+
     def _parse(self, line: str, prev_score):
+        m = RE_WRITE.search(line)
+        if m:
+            return self._low_write(int(m.group(1)), m.group(2).strip())
         m = RE_HONEYPOT.search(line)
         if m:
             pid, op, path, new_path = int(m.group(1)), m.group(2), m.group(3), m.group(4)

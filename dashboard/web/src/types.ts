@@ -88,3 +88,31 @@ export interface SystemStatus {
   llm: { connected: boolean; model: string };
   protected: boolean;
 }
+
+// 실행별 로그 조회: 웹 시연 시나리오가 실행마다 만드는 폴더(s01_~s04_<32자리 16진수>)
+export interface RunSummary {
+  name: string;
+  scenario: string;      // "S04"
+  label: string;         // "S04 LOLBin"
+  total: number;         // 폴더 안 파일 수
+  suspect: number;       // 감염 의심(엔트로피 기준 이상) 파일 수. 확장자 변경은 세지 않는다
+  ok: number;
+  mtime: number;
+}
+
+export interface RunsResponse {
+  threshold: number;
+  root: string;
+  exists: boolean;
+  runs: RunSummary[];
+  truncated: boolean;
+}
+
+export interface RunDetailResponse {
+  threshold: number;
+  root: string;
+  folder: FolderKey;     // 미리보기 API에 넘길 폴더 키 (보호 폴더)
+  summary: RunSummary;
+  files: FileInfo[];     // path 는 보호 폴더 기준 상대경로 ("s04_…/file_000.txt")
+  truncated: boolean;
+}

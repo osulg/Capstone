@@ -7,12 +7,20 @@ interface Props {
   onDetail: (pid: number) => void;
 }
 
+// 상태 필터: 그 PID 가 도달한 최고 위험도 기준
+const LEVEL_FILTERS: [string, string][] = [
+  ["ALL", "전체"], ["HIGH", "HIGH"], ["MEDIUM", "MEDIUM"], ["SUSPICIOUS", "SUSPICIOUS"], ["LOW", "LOW"],
+];
+
 export default function PidLog({ rows, onDetail }: Props) {
   const [query, setQuery] = useState("");
   const [applied, setApplied] = useState("");
+  const [level, setLevel] = useState("ALL");
   const [selected, setSelected] = useState<number | null>(null);
   const q = applied.trim().toLowerCase();
-  const shown = q ? rows.filter((r) => String(r.pid).includes(q) || r.process.toLowerCase().includes(q)) : rows;
+  const shown = rows.filter((r) =>
+    (level === "ALL" || r.level === level) &&
+    (!q || String(r.pid).includes(q) || r.process.toLowerCase().includes(q)));
 
   return (
     <fieldset>
@@ -23,6 +31,11 @@ export default function PidLog({ rows, onDetail }: Props) {
             onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") setApplied(query); }} />
         </label>
         <button className="btn" onClick={() => setApplied(query)}>검색</button>
+        <label className="field">상태:
+          <select value={level} onChange={(e) => setLevel(e.target.value)} aria-label="상태 필터">
+            {LEVEL_FILTERS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+          </select>
+        </label>
       </div>
       <div className="list">
         <table>
