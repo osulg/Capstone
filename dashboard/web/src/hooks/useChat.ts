@@ -57,14 +57,8 @@ export function useChat(onReply: () => void) {
 
     try {
       const data = await postChat(text, history.current);
-      const src = data.sources || {};
-      const meta = [
-        data.mode === "llm" ? "LLM 분석" : "로컬 규칙 기반 분석",
-        src.pids && src.pids.length ? `참조 PID: ${src.pids.join(", ")}` : "",
-        src.events ? `이벤트 ${src.events}건` : "",
-        src.docs && src.docs.length ? `지식: ${src.docs.join(" · ")}` : "",
-      ].filter(Boolean).join(" | ");
-      settle(markdown(data.reply) + `<div class="sources">${esc(meta)}</div>`);
+      // 근거로 함께 보낸 PID·문서 목록(sources)은 답변과 무관해 보일 수 있어 화면에 표시하지 않는다.
+      settle(markdown(data.reply));
       onReply();
       history.current = [...history.current, { role: "user" as const, content: text },
         { role: "assistant" as const, content: data.reply }].slice(-16);
