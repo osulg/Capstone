@@ -73,7 +73,7 @@ export default function RunLog({ runs, error, onDetail, title = "실행별 로�
                 <tr key={r.name} title={`${r.label} · ${r.name}`}>
                   <td className="mono"><b>{r.scenario}</b> {shortRun(r.name)}</td>
                   <td className="mono">{fmtTime(r.mtime)}</td>
-                  <td className={r.suspect > 0 ? "high" : ""}><b>{r.suspect}</b> / {r.total}</td>
+                  <td><b className={r.suspect > 0 ? "high" : ""}>{r.suspect}</b> / {r.total}</td>
                   <td><button className="link-btn" onClick={() => onDetail(r.name)}>상세 보기 ›</button></td>
                 </tr>
               ))}

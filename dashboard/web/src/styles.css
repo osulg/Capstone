@@ -245,7 +245,3 @@ label.field { display: inline-flex; align-items: center; gap: 6px; }
   .num-grid { grid-template-columns: 1fr 1fr; }
   .pid-flow li { grid-template-columns: 1fr; gap: 2px; }
 }
-
-/* 파일 상세: 지금 파일 앞부분 미리보기 */
-.file-preview { margin: 0; max-height: 180px; overflow: auto; border: 1px solid var(--border); background: #fff;
-  padding: 8px 10px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -1,10 +1,7 @@
-import { useEffect, useState } from "react";
-
-import { fetchPreview } from "../api";
 import { displayLevel, droppedPids, fileKey, fileStatus, LEVEL_RANK, shortPath } from "../eventStats";
 import { fmtTime } from "../fileStats";
 import { describeEvent, isHiddenEvent, rawText, setattrSources, useThresholds } from "../reasonText";
-import type { EdrEvent, FileInfo, Preview } from "../types";
+import type { EdrEvent, FileInfo } from "../types";
 
 interface Props {
   target: string;
@@ -18,14 +15,8 @@ const STATE_LABEL: Record<string, string> = {
   encrypted: "암호화 의심", ok: "정상", unreadable: "읽기 실패", unknown: "판정 불가", honeypot: "미끼 파일",
 };
 
-// 지금 디스크(underlay)에 있는 파일 상태와 앞부분 미리보기. HoldFS 기록이 없어도 보여준다.
+// 지금 디스크(underlay)에 있는 파일 상태. HoldFS 기록이 없어도 보여준다.
 function CurrentFile({ file, noEvents }: { file: FileInfo; noEvents: boolean }) {
-  const [preview, setPreview] = useState<Preview | null>(null);
-  useEffect(() => {
-    let alive = true;
-    fetchPreview("protected", file.path).then((p) => { if (alive) setPreview(p); });
-    return () => { alive = false; };
-  }, [file.path]);
   const bad = file.state === "encrypted";
   return (
     <fieldset>
@@ -46,12 +37,6 @@ function CurrentFile({ file, noEvents }: { file: FileInfo; noEvents: boolean }) 
           HoldFS 정책 기록이 없습니다. 차단·보류 없이 LOW 상태로 반영됐거나(이름 변경 포함), 이 파일에는 작업이 없었습니다.
         </p>
       )}
-      <p className="caption" style={{ margin: "10px 0 4px" }}>앞부분 미리보기</p>
-      <pre className="file-preview">
-        {preview === null ? "불러오는 중…"
-          : preview.kind === "error" ? "미리보기를 불러오지 못했습니다."
-          : preview.content}
-      </pre>
     </fieldset>
   );
 }
