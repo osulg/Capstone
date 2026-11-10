@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { dashboardUrl } from "../utils/dashboard";
+
 interface IntroProps {
   onComplete: () => void;
 }
@@ -123,6 +125,18 @@ export default function Intro({ onComplete }: IntroProps) {
             </h1>
 
             <p className="intro-description">{slide.description}</p>
+
+            {/* 마지막 장면에서 대시보드를 미리 열어 둘 수 있게 한다. */}
+            {isLast && (
+              <a
+                className="intro-dashboard-link"
+                href={dashboardUrl()}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                대시보드 열기 ↗
+              </a>
+            )}
           </div>
 
           <button

@@ -7,13 +7,19 @@ import Header from "./components/Header";
 import StatusBar from "./components/StatusBar";
 import SystemView from "./components/SystemView";
 import Tabs, { type FilesSub, type View } from "./components/Tabs";
+import { readDeepLink } from "./deepLink";
 import { byPid } from "./eventStats";
 import { useChat } from "./hooks/useChat";
 import { useEvents } from "./hooks/useEvents";
 
 export default function App() {
   const { events, online, lastUpdate } = useEvents();
-  const [view, setView] = useState<View>("events");
+  // 처음 열 때만 주소 파라미터(?view=, ?pid=)를 반영한다
+  const [link] = useState(() => readDeepLink());
+  const [view, setViewState] = useState<View>(link.view);
+  // 주소로 받은 PID 상세는 한 번만 연다. 메뉴를 옮겼다가 돌아오면 목록부터 보여준다.
+  const [initialPid, setInitialPid] = useState<number | null>(link.pid);
+  const setView = useCallback((v: View) => { setInitialPid(null); setViewState(v); }, []);
   const [filesSub, setFilesSub] = useState<FilesSub>("compare");
 
   // AI 분석관: 대화는 여기서 들고 있어서 메뉴를 옮겨도 남는다.
@@ -39,7 +45,7 @@ export default function App() {
         aiDot={aiDot} />
       <div className="main-layout">
         <section className="panel">
-          {view === "events" && <EventsView events={events} onAskAi={askAiPid} />}
+          {view === "events" && <EventsView events={events} onAskAi={askAiPid} initialPid={initialPid} />}
           <FilesView visible={view === "files"} sub={filesSub} events={events} onAskAi={askAiPid} />
           {view === "system" && <SystemView events={events} onAskAi={askAiPid} />}
           {view === "ai" && <AiView messages={chat.messages} busy={chat.busy} status={chat.status} onAsk={chat.ask} />}

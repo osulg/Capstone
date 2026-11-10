@@ -73,6 +73,7 @@ flock -n 9 || fail '다른 실행기가 준비 중입니다.'
 [ -x "$PROJECT_ROOT/venv/bin/python" ] || fail 'HoldFS venv가 없습니다. scripts/setup.sh로 먼저 준비하세요.'
 [ -x "$BACKEND_PYTHON" ] || fail '웹 백엔드 .venv를 먼저 준비하세요.'
 [ -f "$PROJECT_ROOT/demo-web/frontend/node_modules/vite/bin/vite.js" ] || fail '프런트 의존성이 없습니다. frontend 폴더에서 npm ci를 먼저 실행하세요.'
+[ -f "$PROJECT_ROOT/dashboard/web/dist/index.html" ] || fail '대시보드 화면 빌드가 없습니다. bash scripts/setup_demo_web.sh를 먼저 실행하세요.'
 load_node
 
 "$PROJECT_ROOT/venv/bin/python" -c 'import pyfuse3, trio, flask' || fail 'HoldFS/대시보드 의존성을 확인하세요.'
@@ -132,6 +133,10 @@ wait_ready() {
 
 open_terminal 'HoldFS · Dashboard' holdfs
 wait_ready 'HoldFS / 대시보드' 'http://127.0.0.1:5000/api/health' yes
+# API만 살아 있고 화면 빌드가 없으면 대시보드 첫 화면이 503이 된다.
+curl --noproxy '*' -fsS --connect-timeout 1 --max-time 3 \
+    'http://127.0.0.1:5000/' >/dev/null 2>&1 \
+    || fail '대시보드 화면을 불러오지 못했습니다. dashboard/web/dist 빌드를 확인하세요. 이미 열린 서비스는 자동 종료하지 않습니다.'
 open_terminal 'HoldFS · FastAPI' api
 wait_ready 'FastAPI' 'http://127.0.0.1:8000/api/scenarios'
 open_terminal 'HoldFS · React' frontend

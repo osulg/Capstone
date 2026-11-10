@@ -134,7 +134,7 @@ npm ci            # 처음 한 번
 
 ```bash
 python dashboard/server.py --port 5000     # 터미널 1: API 서버 (저장소 루트에서)
-cd dashboard/web && npm run dev            # 터미널 2: 화면 개발 서버 → http://127.0.0.1:5173
+cd dashboard/web && npm run dev            # 터미널 2: 화면 개발 서버 → http://127.0.0.1:5174
 ```
 
 `npm run dev`는 `/api` 요청을 5000 포트로 넘긴다. 데이터가 필요하면 `python dashboard/agent.py --demo`를 실행한다.

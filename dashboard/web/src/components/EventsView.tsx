@@ -12,14 +12,16 @@ import PidLog from "./PidLog";
 interface Props {
   events: EdrEvent[];
   onAskAi?: (pid: number) => void;
+  initialPid?: number | null;   // 주소의 ?pid= 로 열었을 때 처음 보여줄 PID 상세
 }
 
 // 값이 있으면 목록 대신 그 PID 또는 파일의 상세 화면을 보여준다
 type Detail = { kind: "pid"; pid: number } | { kind: "file"; target: string } | null;
 
-export default function EventsView({ events, onAskAi }: Props) {
+export default function EventsView({ events, onAskAi, initialPid = null }: Props) {
   const [period, setPeriod] = useState<Period>("1h");
-  const [detail, setDetail] = useState<Detail>(null);
+  const [detail, setDetail] = useState<Detail>(
+    initialPid !== null ? { kind: "pid", pid: initialPid } : null);
   // 그래프·목록이 같은 기록을 세도록 화면에 보여줄 기록만 남긴다 (상세 화면과 같은 기준)
   const scoped = useMemo(() => shownEvents(inPeriod(events, period)), [events, period]);
 
