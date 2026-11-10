@@ -17,7 +17,7 @@ HoldFS 코드(`guardfs/`)는 수정하지 않는다. 에이전트가 HoldFS가 �
 | `agent.py` | HoldFS 로그 tail → JSON 변환 → 서버 전송. `--demo` 샘플 전송 |
 | `rag.py` | 이벤트·지식 검색(RAG), LLM 미연결 시 규칙 기반 로컬 분석 |
 | `files.py` | 파일 상태 탭: 보호/비보호 폴더 읽기 전용 스캔, 엔트로피 판정 |
-| `templates/index.html` | 대시보드 UI |
+| `web/` | 대시보드 화면 (React + TypeScript + Vite). 빌드 결과 `web/dist/`를 `server.py`가 서빙한다 |
 
 ## 빠른 실행 (권장): `run_all.sh`
 
@@ -53,7 +53,21 @@ python dashboard/server.py --port 5000
 ```
 
 브라우저에서 http://127.0.0.1:5000 을 연다.
-다른 PC에서 접속하려면 `--host 0.0.0.0`으로 실행한다. 인증 기능이 없으므로 신뢰할 수 있는 네트워크에서만 쓴다.
+서버는 기본적으로 이 컴퓨터에서만 접속된다(`127.0.0.1`). 인증 기능이 없으므로, 열어 두면 같은 네트워크의
+누구나 AI 분석관(외부 LLM API 요금)과 이벤트 추가·삭제를 쓸 수 있다.
+
+- 다른 PC에서 볼 때는 SSH 포트 포워딩을 권장한다: `ssh -L 5000:127.0.0.1:5000 <사용자>@<VM IP>` 후 `http://127.0.0.1:5000`
+- 꼭 네트워크에 열어야 하면 `--host 0.0.0.0`(run_all.sh 는 `DASH_HOST=0.0.0.0`)으로 실행하고 신뢰할 수 있는 망에서만 쓴다.
+
+AI 분석관 남용 방지 (환경변수로 변경 가능):
+
+| 항목 | 기본값 | 환경변수 |
+|---|---|---|
+| 질문 최대 길이 | 2000자 | `DASH_CHAT_MAX_CHARS` |
+| 답변 최대 길이 | 1000 토큰 | `DASH_CHAT_MAX_TOKENS` |
+| LLM 호출 횟수 | 분당 10회 (서버 전체) | `DASH_CHAT_RATE_PER_MIN` |
+
+로컬 규칙 모드(키 없음)는 외부로 보내지 않으므로 횟수 제한을 두지 않는다.
 
 ## 3-a. 샘플 이벤트로 바로 확인
 
@@ -80,7 +94,7 @@ python dashboard/agent.py --stdout-log ~/guardfs_stdout.log
 | 소스 | 내용 | 대시보드 표시 |
 |---|---|---|
 | `~/filesecurity.log` | `log_medium_event` / `log_high_event` 블록 | WRITE BUFFERED, DELETE BLOCKED, DROP BUFFER_DROPPED, UNLINK STAGED ... |
-| `--stdout-log` | `[STAGE2]`, `[WATCH]`, `[REEVAL]`, `[TRIGGER HIGH]`, `[TRUST]`, `[HONEYPOT]` 줄 | `ESCALATE → MEDIUM/HIGH` 행. 탐지 사유에 Stage1 탐지기 + dyn/stat/score + HIGH 사유 표시, `SIGSTOP`, `RETURN → LOW` |
+| `--stdout-log` | `[STAGE2]`, `[WATCH]`, `[REEVAL]`, `[TRIGGER HIGH]`, `[STATE]`(선제 MEDIUM), `[HONEYPOT]` 줄 | `ESCALATE → MEDIUM/HIGH` 행. 탐지 사유에 Stage1 탐지기 + dyn/stat/score + HIGH 사유 표시, `SIGSTOP`, `RETURN → LOW` |
 
 - `PYTHONUNBUFFERED=1`이 없으면 파이프에서 stdout이 버퍼링돼 이벤트가 늦게 들어온다.
 - `--stdout-log`를 생략하면 정책 결과(BUFFERED/BLOCKED 등)만 표시되고 격상 행은 나오지 않는다.
@@ -106,6 +120,40 @@ rm -f /tmp/guardfs_state_*
 
 강제 상태는 ML을 거치지 않으므로 `ESCALATE` 행(격상 이유)은 나오지 않는다.
 격상 이유까지 보려면 실제 탐지 시나리오(예: `scripts/run_sample.sh`)를 돌린다.
+
+## 화면 개발 (React)
+
+화면 소스는 `dashboard/web/src/`에 있다. Node.js 20.19+ / 22.12+ 가 필요하다.
+
+```bash
+cd dashboard/web
+npm ci            # 처음 한 번
+```
+
+개발할 때는 터미널 두 개를 쓴다. 저장하면 브라우저가 새로고침 없이 바로 바뀐다.
+
+```bash
+python dashboard/server.py --port 5000     # 터미널 1: API 서버 (저장소 루트에서)
+cd dashboard/web && npm run dev            # 터미널 2: 화면 개발 서버 → http://127.0.0.1:5173
+```
+
+`npm run dev`는 `/api` 요청을 5000 포트로 넘긴다. 데이터가 필요하면 `python dashboard/agent.py --demo`를 실행한다.
+
+수정을 마치면 빌드해서 `web/dist/`를 함께 커밋한다. `run_all.sh`와 `server.py`는 빌드된 `dist/`를 쓰므로,
+Node.js가 없는 VM(인터넷 격리)에서도 그대로 실행된다.
+
+```bash
+cd dashboard/web && npm run build          # 타입 검사 + dist/ 생성
+```
+
+| 파일 | 역할 |
+|---|---|
+| `src/App.tsx` | 전체 레이아웃, 탭 전환, AI 패널 열기/닫기 |
+| `src/hooks/useEvents.ts` | `/api/events` 2초 증분 폴링 |
+| `src/hooks/useChat.ts` | AI 분석관 대화, `/api/chat`, LLM 상태 |
+| `src/components/` | `Header`, `SideRail`, `EventsView`, `FilesView`·`FolderPanel`, `AiPane` |
+| `src/markdown.ts` | LLM 응답 마크다운 렌더링 (이스케이프 후 허용 태그만 생성) |
+| `src/styles.css` | 전체 스타일 |
 
 ## 허니팟 접근 표시
 

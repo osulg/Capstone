@@ -14,7 +14,10 @@
 #   bash dashboard/run_all.sh --no-guardfs # HoldFS 없이 서버+에이전트만 (화면 확인용)
 #
 # 환경변수:
-#   DASH_PORT (기본 5000), DASH_HOST (기본 0.0.0.0)
+#   DASH_PORT (기본 5000), DASH_HOST (기본 127.0.0.1 = 이 VM 에서만 접속)
+#   대시보드에는 인증이 없어 외부에 열면 누구나 AI 분석관(API 요금)·이벤트 추가/삭제를 쓸 수 있다.
+#   다른 PC 에서 볼 때는 SSH 포트 포워딩을 권장한다:  ssh -L 5000:127.0.0.1:5000 <사용자>@<VM IP>
+#   꼭 네트워크에 열어야 하면:  DASH_HOST=0.0.0.0 bash dashboard/run_all.sh  (신뢰할 수 있는 망에서만)
 # ============================================================
 set -uo pipefail
 
@@ -24,7 +27,7 @@ RUNTIME_DIR="$HOME/guardfs_runtime"
 MOUNT_DIR="$RUNTIME_DIR/mount"
 LOG_DIR="$RUNTIME_DIR/dashboard_logs"
 PORT="${DASH_PORT:-5000}"
-HOST="${DASH_HOST:-0.0.0.0}"
+HOST="${DASH_HOST:-127.0.0.1}"
 
 SERVER_LOG="$LOG_DIR/server.log"
 GUARDFS_LOG="$LOG_DIR/guardfs_stdout.log"
@@ -159,7 +162,11 @@ say "서버 준비 완료: $HEALTH"
 AGENT_ARGS=( --server "http://127.0.0.1:$PORT" )
 if [ "$NO_GUARDFS" -eq 0 ]; then
     say "HoldFS 시작 (mount: $MOUNT_DIR)"
-    PYTHONUNBUFFERED=1 bash "$PROJECT_ROOT/scripts/run_guardfs.sh" > "$GUARDFS_LOG" 2>&1 &
+    # 실행 출력 각 줄 앞에 출력된 시각을 붙여 기록한다. 에이전트가 이 시각을 이벤트 시각으로 쓴다
+    # (filesecurity.log 의 시각과 같은 기준이 되어 대시보드에서 순서가 뒤바뀌지 않는다).
+    # 프로세스 치환을 써서 $! 는 그대로 HoldFS 실행 스크립트의 PID 가 된다.
+    PYTHONUNBUFFERED=1 bash "$PROJECT_ROOT/scripts/run_guardfs.sh" \
+        > >(python3 -u "$PROJECT_ROOT/dashboard/stamp_lines.py" > "$GUARDFS_LOG") 2>&1 &
     GUARDFS_PID=$!
 
     for _ in $(seq 1 40); do
@@ -188,12 +195,17 @@ if [ "$DEMO" -eq 1 ]; then
 fi
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+if [ "$HOST" = "127.0.0.1" ] || [ "$HOST" = "localhost" ]; then
+    EXTERNAL_NOTE="(이 VM 에서만 접속. 호스트에서 보려면: ssh -L $PORT:127.0.0.1:$PORT <사용자>@${IP:-<VM IP>})"
+else
+    EXTERNAL_NOTE="${IP:+(외부: http://$IP:$PORT — 인증 없음, 신뢰할 수 있는 망에서만)}"
+fi
 cat <<EOF
 
 ========================================================
  실행 중   (Ctrl+C = 전부 종료)
 --------------------------------------------------------
- 대시보드  : http://127.0.0.1:$PORT   ${IP:+(외부: http://$IP:$PORT)}
+ 대시보드  : http://127.0.0.1:$PORT   $EXTERNAL_NOTE
  로그      : $LOG_DIR/{server,guardfs_stdout,agent}.log
  테스트    : (다른 터미널에서)
    cd $PROJECT_ROOT && source venv/bin/activate
