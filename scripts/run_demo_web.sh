@@ -28,7 +28,7 @@ load_node() {
 }
 
 if [ "${1:-}" = '--help' ] || [ "${1:-}" = '-h' ]; then
-    printf '사용법: bash scripts/run_demo_web.sh\nUbuntu GNOME 데스크톱에서 준비된 서비스를 터미널 3개로 실행합니다.\n'
+    printf '사용법: bash scripts/run_demo_web.sh\nUbuntu GNOME 데스크톱에서 준비된 서비스를 터미널 3개로 실행합니다.\nHoldFS 창에서 AI 분석관 LLM 제공자와 API 키를 입력합니다. 묻지 않고 로컬 모드로 띄우려면 HOLDFS_DEMO_LLM=local.\n'
     exit 0
 fi
 
@@ -41,9 +41,16 @@ if [ "${1:-}" = '--service' ]; then
     trap 'service_rc=$?; printf "\n서비스 종료 (코드 %s).\n" "$service_rc"; read -r -p "Enter를 누르면 창을 닫습니다." _ || true; exit "$service_rc"' EXIT
     case "${2:-}" in
         holdfs)
-            # 기존 실행기를 재사용하며 LLM 선택은 4번(키 없는 로컬 모드).
-            printf '4\n' | DASH_HOST=127.0.0.1 DASH_PORT=5000 \
-                bash "$PROJECT_ROOT/dashboard/run_all.sh"
+            # 기존 실행기를 재사용한다. 기본은 이 창에서 AI 분석관의 LLM 제공자와 API 키를
+            # 직접 입력받는다(run_all.sh 가 키를 화면에 표시하지 않고 대시보드 서버에만 넘기며
+            # 파일·셸 기록에 남기지 않는다). HOLDFS_DEMO_LLM=local 이면 묻지 않고 로컬 모드.
+            if [ "${HOLDFS_DEMO_LLM:-ask}" = local ]; then
+                printf '4\n' | DASH_HOST=127.0.0.1 DASH_PORT=5000 \
+                    bash "$PROJECT_ROOT/dashboard/run_all.sh"
+            else
+                DASH_HOST=127.0.0.1 DASH_PORT=5000 \
+                    bash "$PROJECT_ROOT/dashboard/run_all.sh"
+            fi
             ;;
         api)
             export PYTHONPATH="$PROJECT_ROOT:$PROJECT_ROOT/demo-web/backend${PYTHONPATH:+:$PYTHONPATH}"
@@ -73,6 +80,7 @@ flock -n 9 || fail '다른 실행기가 준비 중입니다.'
 [ -x "$PROJECT_ROOT/venv/bin/python" ] || fail 'HoldFS venv가 없습니다. scripts/setup.sh로 먼저 준비하세요.'
 [ -x "$BACKEND_PYTHON" ] || fail '웹 백엔드 .venv를 먼저 준비하세요.'
 [ -f "$PROJECT_ROOT/demo-web/frontend/node_modules/vite/bin/vite.js" ] || fail '프런트 의존성이 없습니다. frontend 폴더에서 npm ci를 먼저 실행하세요.'
+[ -f "$PROJECT_ROOT/dashboard/web/dist/index.html" ] || fail '대시보드 화면 빌드가 없습니다. bash scripts/setup_demo_web.sh를 먼저 실행하세요.'
 load_node
 
 "$PROJECT_ROOT/venv/bin/python" -c 'import pyfuse3, trio, flask' || fail 'HoldFS/대시보드 의존성을 확인하세요.'
@@ -111,8 +119,8 @@ open_terminal() {
 }
 
 wait_ready() {
-    local label="$1" url="$2" require_mount="${3:-no}"
-    local deadline=$((SECONDS + 90))
+    local label="$1" url="$2" require_mount="${3:-no}" limit="${4:-90}"
+    local deadline=$((SECONDS + limit))
     printf '[HoldFS Demo] %s 준비 확인 중…\n' "$label"
     while (( SECONDS < deadline )); do
         if ! kill -0 "$TERMINAL_PID" 2>/dev/null; then
@@ -127,11 +135,22 @@ wait_ready() {
         fi
         sleep 1
     done
-    fail "$label 준비가 90초 내 확인되지 않았습니다. 열린 창을 확인하세요. 이미 열린 서비스는 자동 종료하지 않습니다."
+    fail "$label 준비가 ${limit}초 내 확인되지 않았습니다. 열린 창을 확인하세요. 이미 열린 서비스는 자동 종료하지 않습니다."
 }
 
 open_terminal 'HoldFS · Dashboard' holdfs
-wait_ready 'HoldFS / 대시보드' 'http://127.0.0.1:5000/api/health' yes
+if [ "${HOLDFS_DEMO_LLM:-ask}" = local ]; then
+    wait_ready 'HoldFS / 대시보드' 'http://127.0.0.1:5000/api/health' yes
+else
+    printf '[HoldFS Demo] 새로 열린 "HoldFS · Dashboard" 창에서 AI 분석관 LLM 제공자와 API 키를 입력하세요.\n'
+    printf '[HoldFS Demo] (키 없이 쓰려면 4번 또는 키 입력에서 Enter = 로컬 모드)\n'
+    # 사람이 입력하는 시간을 포함해 넉넉히 기다린다.
+    wait_ready 'HoldFS / 대시보드' 'http://127.0.0.1:5000/api/health' yes 300
+fi
+# API만 살아 있고 화면 빌드가 없으면 대시보드 첫 화면이 503이 된다.
+curl --noproxy '*' -fsS --connect-timeout 1 --max-time 3 \
+    'http://127.0.0.1:5000/' >/dev/null 2>&1 \
+    || fail '대시보드 화면을 불러오지 못했습니다. dashboard/web/dist 빌드를 확인하세요. 이미 열린 서비스는 자동 종료하지 않습니다.'
 open_terminal 'HoldFS · FastAPI' api
 wait_ready 'FastAPI' 'http://127.0.0.1:8000/api/scenarios'
 open_terminal 'HoldFS · React' frontend

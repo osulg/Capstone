@@ -4,12 +4,19 @@ import argparse
 import json
 import os
 import re
+import secrets
+import string
 import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
 
+from guardfs.stage1.ext_change import (
+    EXECUTABLE_EXTENSIONS,
+    NORMAL_EXTENSIONS,
+    SUSPICIOUS_EXTENSIONS,
+)
 from scenarios.blocked_worker import (
     capture_policy_position,
     find_blocking_event,
@@ -32,6 +39,23 @@ SOURCE_SCRIPT = (
 )
 FILE_COUNT = 20
 TOTAL_TIMEOUT = 150.0
+
+
+def random_rename_ext() -> str:
+    """실행마다 쓸 무작위 확장자(예: .k3x9qa)를 만든다.
+
+    알려진 랜섬웨어 확장자(.locked 등)는 Stage1 사전 검사가 첫 rename에서 바로
+    거부해, 공격이 첫 파일에서 끝나고 MEDIUM 재평가 동안의 행동이 남지 않는다.
+    실제 공격처럼 목록에 없는 확장자를 쓰는 변형으로, 사전 차단·정상·실행
+    확장자 목록과 겹치지 않는 값만 사용한다.
+    """
+    known = SUSPICIOUS_EXTENSIONS | NORMAL_EXTENSIONS | EXECUTABLE_EXTENSIONS
+    while True:
+        ext = "." + secrets.choice(string.ascii_lowercase) + "".join(
+            secrets.choice(string.ascii_lowercase + string.digits) for _ in range(5)
+        )
+        if ext not in known:
+            return ext
 
 
 def parse_args():
@@ -73,6 +97,8 @@ def run(args):
         "workspace": {"mount_path": str(workdir), "underlay_path": str(origin)},
     }
     current = "PRECHECK"
+    rename_ext = random_rename_ext()
+    report["rename_ext"] = rename_ext
 
     def remaining():
         value = deadline - time.monotonic()
@@ -115,6 +141,8 @@ def run(args):
             "30",
             "--delay",
             "0.15",
+            "--rename-ext",
+            rename_ext,
             "--keep",
         ]
         checkpoint = capture_policy_position() if action == "attack" else None
