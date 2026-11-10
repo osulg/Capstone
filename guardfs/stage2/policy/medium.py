@@ -26,7 +26,9 @@ def log_medium_event(
     pid: int, path: str, action: str, result: str, reason: str = ""
 ) -> None:
     log_path = FILESECURITY_LOG_PATH
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    # 같은 초 안의 순서를 구분할 수 있도록 밀리초까지 남긴다 (대시보드 이벤트 정렬용)
+    t = time.time()
+    now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t)) + f".{int(t * 1000) % 1000:03d}"
 
     log_msg = (
         "[MEDIUM]\n"

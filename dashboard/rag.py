@@ -16,7 +16,21 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from collections import Counter, OrderedDict
+
+# HoldFS와 같은 Stage2 임계값을 쓴다 (guardfs/common/config.py).
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+try:
+    from guardfs.common.config import (
+        STAGE2_DYN_ONLY_HIGH_THRESHOLD,
+        STAGE2_HIGH_THRESHOLD,
+        STAGE2_MEDIUM_THRESHOLD,
+    )
+except ImportError:
+    STAGE2_MEDIUM_THRESHOLD = 0.3
+    STAGE2_HIGH_THRESHOLD = 0.82
+    STAGE2_DYN_ONLY_HIGH_THRESHOLD = 0.6
 
 # --------------------------------------------------------------------------- #
 # 지식 베이스
@@ -33,7 +47,8 @@ KNOWLEDGE_BASE = [
             "ExtChangeDetector(짧은 시간 내 확장자 변경 반복), EntropyDetector / EntropyBurstDetector "
             "(고엔트로피 write, 5초 창 안에 서로 다른 파일 3개 이상·5회 이상의 고엔트로피 write), "
             "EntropyDeltaDetector(원본 대비 엔트로피 급증), stat_anomaly(1초 창의 write·삭제 빈도 이상), "
-            "stage1_sampling(비신뢰 경로 신규 PID 15% 확률 샘플링) 중 하나라도 걸리면 PID는 "
+            "stage1_sampling(비신뢰 경로 신규 PID 15% 확률 샘플링), lineage_burst(신뢰 도구를 파일마다 새로 "
+            "띄우는 반복 실행을 부모 프로세스 단위로 묶은 것) 중 하나라도 걸리면 PID는 "
             "LOW → SUSPICIOUS가 되고 Stage2 ML 평가 큐에 들어간다."
         ),
     },
@@ -44,8 +59,9 @@ KNOWLEDGE_BASE = [
                      "ml_score", "dyn_only", "watch", "reeval", "재평가", "격상", "threshold"],
         "text": (
             "Stage2는 동적 RF(PID 단위 22개 FUSE 행동 피처)와 정적 RF(실행 파일 byte 3-gram)를 "
-            "0.5/0.5 가중합한다. score ≥ 0.82 이거나 동적 점수 단독 ≥ 0.5면 HIGH, "
-            "0.3 ≤ score < 0.82면 MEDIUM, 그 미만이면 SUSPICIOUS 상태로 10초간 1초마다 재채점(WATCH)한다. "
+            f"0.5/0.5 가중합한다. score ≥ {STAGE2_HIGH_THRESHOLD} 이거나 "
+            f"동적 점수 단독 ≥ {STAGE2_DYN_ONLY_HIGH_THRESHOLD}면 HIGH, "
+            f"{STAGE2_MEDIUM_THRESHOLD} ≤ score < {STAGE2_HIGH_THRESHOLD}면 MEDIUM, 그 미만이면 SUSPICIOUS 상태로 10초간 1초마다 재채점(WATCH)한다. "
             "격상 사유 문자열: ml_score=X(최초 평가 가중합), dyn_only=X(동적 단독 확신), "
             "watch_score / watch_dyn_only(관찰 창 재채점), reeval_score / reeval_dyn_only(MEDIUM 1초 주기 재평가). "
             "동적 단독 규칙은 python3 같은 양성 인터프리터로 실행되는 스크립트형 랜섬웨어처럼 정적 점수가 "
@@ -345,6 +361,7 @@ _REASON_TABLE = {
     "EntropyDetector": "Stage1 고엔트로피 write 탐지",
     "stat_anomaly": "Stage1 write/삭제 빈도 통계 이상",
     "stage1_sampling": "Stage1 비신뢰 경로 신규 프로세스 샘플링",
+    "lineage_burst": "신뢰 도구 반복 실행을 부모(계보) 단위로 묶어 탐지",
 }
 
 
@@ -356,13 +373,13 @@ def _reason_ko(reason: str) -> str:
     if m:
         where = {"ml_score": "최초 Stage2 평가", "watch_score": "관찰 창 재채점",
                  "reeval_score": "MEDIUM 재평가"}[m.group(1)]
-        parts.append(f"{where}에서 ML 가중합 점수 {m.group(2)}가 HIGH 임계값(0.82) 이상")
+        parts.append(f"{where}에서 ML 가중합 점수 {m.group(2)}가 HIGH 임계값({STAGE2_HIGH_THRESHOLD}) 이상")
     m = re.search(r"(dyn_only|watch_dyn_only|reeval_dyn_only)=([\d.]+)", r)
     if m:
-        parts.append(f"동적(행동) 모델 단독 점수 {m.group(2)}가 단독 HIGH 임계값(0.5) 이상")
+        parts.append(f"동적(행동) 모델 단독 점수 {m.group(2)}가 단독 HIGH 임계값({STAGE2_DYN_ONLY_HIGH_THRESHOLD}) 이상")
     m = re.search(r"(Stage2 최초 평가|관찰 창 재채점) score=([\d.]+)", r)
     if m:
-        parts.append(f"{m.group(1)} 점수 {m.group(2)} (MEDIUM 구간 0.3 ~ 0.82)")
+        parts.append(f"{m.group(1)} 점수 {m.group(2)} (MEDIUM 구간 {STAGE2_MEDIUM_THRESHOLD} ~ {STAGE2_HIGH_THRESHOLD})")
     matched = []
     for k, v in _REASON_TABLE.items():
         # magic_mismatch_reeval 이 magic_mismatch 로, global_buffer_... 가 buffer_... 로

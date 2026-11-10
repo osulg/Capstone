@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Run } from "../types/api";
+import { dashboardUrl } from "../utils/dashboard";
 
 interface RunResultProps {
   run: Run;
@@ -323,7 +324,36 @@ export default function RunResult({ run }: RunResultProps) {
             이미 접수된 작업은 HoldFS 정책에 따라 이후 반영될 수 있습니다.
             이 중단 요청은 대기 작업을 폐기하거나 파일 변경을 되돌리지 않습니다.
           </p>
-          <p>최종 반영 내역은 대시보드에서 해당 작업 PID로 확인하세요.</p>
+          <p>
+            최종 반영 내역은{" "}
+            <a
+              className="dashboard-link"
+              href={dashboardUrl()}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              대시보드 ↗
+            </a>
+            에서 해당 작업 PID로 확인하세요.
+            {run.processes.length > 0 && (
+              <>
+                {" "}작업 PID:{" "}
+                {run.processes.map((process, index) => (
+                  <span key={`${process.pid}:${process.start_time_ticks}`}>
+                    {index > 0 && ", "}
+                    <a
+                      className="dashboard-link"
+                      href={dashboardUrl(process.pid)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {process.pid}
+                    </a>
+                  </span>
+                ))}
+              </>
+            )}
+          </p>
         </div>
       ) : policyBlocked ? (
         <div className="result-policy-note">
