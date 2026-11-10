@@ -43,6 +43,7 @@ export function summarize(events: EdrEvent[]) {
 export interface PidRow {
   pid: number;
   process: string;
+  comm?: string;          // 역할로 표시할 때 원래 프로세스 이름
   level: string;
   count: number;
   last: string;
@@ -90,6 +91,7 @@ export function byPid(events: EdrEvent[]): PidRow[] {
     for (const e of shown) {
       if ((LEVEL_RANK[e.level] ?? 0) > (LEVEL_RANK[r.level] ?? 0)) r.level = e.level;
       if (e.process && e.process !== "-") r.process = e.process;
+      if (e.comm) r.comm = e.comm;
     }
     const last = shown[shown.length - 1];
     r.last = `${last.action} ${last.result}`.trim();

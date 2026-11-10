@@ -27,6 +27,7 @@ try:
     )
     from dashboard import files as file_scan
     from dashboard import system as sys_status
+    from dashboard.roles import RoleIndex
 except ImportError:  # python dashboard/server.py 로 직접 실행한 경우
     from rag import (
         STAGE2_DYN_ONLY_HIGH_THRESHOLD,
@@ -37,6 +38,7 @@ except ImportError:  # python dashboard/server.py 로 직접 실행한 경우
     )
     import files as file_scan
     import system as sys_status
+    from roles import RoleIndex
 
 # MEDIUM 관찰 시간: 보류된 쓰기가 원본에 반영되기까지 (파일 현황 › 보류 중인 쓰기의 남은 시간)
 try:
@@ -55,6 +57,8 @@ WEB_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "dist
 app = Flask(__name__, static_folder=None)
 
 MAX_EVENTS = 5000
+# 웹 시연 작업 프로세스는 이름(python3) 대신 등록된 역할(lolbin_attack 등)로 보여준다
+roles = RoleIndex()
 events = []  # in-memory log store
 _events_lock = threading.Lock()
 _next_id = 1
@@ -157,6 +161,12 @@ def _normalize(raw: dict) -> dict:
         except ValueError:
             ts = None
     ev["ts"] = float(ts) if ts is not None else time.time()
+    info = roles.lookup(ev["pid"], ev["ts"]) if ev["pid"] else None
+    if info:
+        ev["comm"] = ev["process"]          # 원래 프로세스 이름 (python3 등)
+        ev["process"] = info["role"]
+        ev["role"] = info["role"]
+        ev["scenario"] = info.get("scenario_id")
     if not ev["time"]:
         ev["time"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ev["ts"]))
     return ev

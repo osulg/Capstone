@@ -45,7 +45,7 @@ export default function PidLog({ rows, onDetail }: Props) {
               <tr key={r.pid} className={selected === r.pid ? "sel" : ""}
                 onClick={() => setSelected(r.pid)}>
                 <td className="mono">{r.pid}</td>
-                <td>{r.process}</td>
+                <td title={r.comm ? `실행 파일: ${r.comm}` : undefined}>{r.process}</td>
                 <td className={r.level === "HIGH" ? "high" : ""}>{r.level}</td>
                 <td className="num">{r.count}</td>
                 <td>

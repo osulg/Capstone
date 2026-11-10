@@ -176,6 +176,9 @@ HoldFS가 허니팟 접근을 차단하면 출력하는 `[HONEYPOT] pid=… op=�
 - 실행 폴더 안에서 LOW 상태로 차단·보류 없이 반영된 쓰기는, HoldFS 실행 출력의 `[WRITE] … state=ProcState.LOW`
   줄을 에이전트가 PID·파일당 한 번 `LOW / WRITE / APPLIED`로 보낸다(`--stdout-log` 필요).
   위협 판정이 아니라서 보안 위협 이벤트 그래프에서는 뺀다. LOW 상태 이름 변경은 HoldFS가 출력하지 않아 기록이 없다.
+- 웹 시연 작업 프로세스는 프로세스 이름(`python3`) 대신 등록된 **역할**(`lolbin_attack`, `akira_prepare` 등)로 보여준다.
+  demo-web runner 가 등록할 때 `~/guardfs_runtime/process_roles.jsonl`(`guardfs/common/paths.PROCESS_ROLES_PATH`)에
+  PID·시작 tick·역할을 남기고, 서버가 이벤트의 PID·시각으로 찾는다(등록 후 2시간 안의 이벤트만). 원래 이름은 마우스를 올리면 보인다.
 - **파일 현황 › 미끼 파일 상태**: 보호 폴더 `honeypot/` 미끼 파일 (기존과 같음).
 
 ## API

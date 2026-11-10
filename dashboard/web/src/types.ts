@@ -3,7 +3,10 @@ export interface EdrEvent {
   time: string;
   level: string;
   pid: number;
-  process: string;
+  process: string;       // 웹 시연 작업 프로세스는 등록된 역할(lolbin_attack 등)
+  comm?: string;         // 역할로 바꾼 경우 원래 프로세스 이름 (python3 등)
+  role?: string;
+  scenario?: string;
   target: string;
   action: string;
   result: string;
