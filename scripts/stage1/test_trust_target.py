@@ -103,6 +103,56 @@ class IsTrustedPidTests(unittest.TestCase):
         self.assertTrue(self.run_case(("not_interpreter", "/usr/bin/cp"), exe="/usr/bin/cp"))
 
 
+class PackageCheckCacheTests(unittest.TestCase):
+    """dpkg 일시 오류(시간 초과 등)는 캐시하지 않고, 확정 결과만 캐시하는지 확인한다."""
+
+    def setUp(self):
+        trust._pkg_cache.clear()
+
+    def run_verified(self, fake_run):
+        with (patch.object(trust.subprocess, "run", side_effect=fake_run),
+              patch.object(trust.os.path, "getmtime", return_value=1.0)):
+            return trio.run(trust.is_package_verified, "/usr/bin/python3.12")
+
+    def test_timeout_is_not_cached(self):
+        calls = []
+
+        def slow(cmd, **kwargs):
+            calls.append(cmd)
+            raise trust.subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+        self.assertFalse(self.run_verified(slow))
+        self.assertNotIn(("/usr/bin/python3.12", 1.0), trust._pkg_cache)
+
+        # 다음 판정에서 다시 확인하고, 이번엔 정상이면 신뢰
+        def ok(cmd, **kwargs):
+            if cmd[1] == "-S":
+                return SimpleResult(0, "python3.12-minimal: /usr/bin/python3.12\n", "")
+            return SimpleResult(0, "", "")
+
+        self.assertTrue(self.run_verified(ok))
+        self.assertTrue(trust._pkg_cache[("/usr/bin/python3.12", 1.0)])
+
+    def test_unowned_file_is_cached_as_untrusted(self):
+        def unowned(cmd, **kwargs):
+            return SimpleResult(1, "", "dpkg-query: no path found matching pattern " + cmd[2])
+
+        self.assertFalse(self.run_verified(unowned))
+        self.assertFalse(trust._pkg_cache[("/usr/bin/python3.12", 1.0)])
+
+    def test_dpkg_error_other_than_unowned_is_transient(self):
+        def locked(cmd, **kwargs):
+            return SimpleResult(2, "", "dpkg: error: dpkg database is locked")
+
+        self.assertFalse(self.run_verified(locked))
+        self.assertNotIn(("/usr/bin/python3.12", 1.0), trust._pkg_cache)
+
+
+class SimpleResult:
+    def __init__(self, returncode, stdout, stderr):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
 class PassthroughTargetTests(unittest.TestCase):
     def test_passthrough_uses_same_target(self):
         try:

@@ -190,17 +190,35 @@ def is_trusted_script_path(path: str) -> bool:
     return any(path == p or path.startswith(p.rstrip("/") + "/") for p in TRUSTED_SCRIPT_PREFIXES)
 
 
+class _TransientCheckError(Exception):
+    """dpkg 조회가 일시적으로 실패함 (시간 초과, 실행 불가, 패키지 DB 잠금 등).
+
+    '패키지 소속 없음'·'변조됨' 같은 확정 결과와 달리 다음 판정 때 다시 확인해야 한다.
+    """
+
+
 def _dpkg_query_owner(exe_path: str) -> str | None:
-    """dpkg -S로 해당 경로 소속 패키지명을 조회. 못 찾으면 None."""
+    """dpkg -S로 해당 경로 소속 패키지명을 조회. 소속이 없으면 None.
+
+    시간 초과·실행 실패처럼 결과를 알 수 없으면 _TransientCheckError 를 올린다.
+    (부팅 직후 디스크 캐시가 비어 있거나 apt 가 도는 중이면 느리거나 실패할 수 있다)
+    """
     try:
         owner = subprocess.run(
             ["dpkg", "-S", exe_path], capture_output=True, text=True, timeout=2
         )
-        if owner.returncode != 0 or not owner.stdout.strip():
+    except (subprocess.TimeoutExpired, OSError) as error:
+        raise _TransientCheckError(f"dpkg -S {exe_path}: {error}") from error
+    if owner.returncode != 0:
+        # 소속 패키지가 없을 때 dpkg-query 는 'no path found matching pattern' 을 출력한다.
+        if "no path found" in (owner.stderr or ""):
             return None
-        return owner.stdout.split(":")[0].strip().split(",")[0].strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+        raise _TransientCheckError(
+            f"dpkg -S {exe_path}: rc={owner.returncode} {(owner.stderr or '').strip()[:200]}"
+        )
+    if not owner.stdout.strip():
         return None
+    return owner.stdout.split(":")[0].strip().split(",")[0].strip()
 
 
 def _check_package_sync(exe_path: str) -> bool:
@@ -233,9 +251,12 @@ def _check_package_sync(exe_path: str) -> bool:
         if package is None:
             return False  # 어떤 패키지에도 속하지 않음 → 서명/검증 불가로 간주
 
-        verify = subprocess.run(
-            ["dpkg", "-V", package], capture_output=True, text=True, timeout=5
-        )
+        try:
+            verify = subprocess.run(
+                ["dpkg", "-V", package], capture_output=True, text=True, timeout=5
+            )
+        except subprocess.TimeoutExpired as error:
+            raise _TransientCheckError(f"dpkg -V {package}: {error}") from error
 
         if verify.returncode != 0:
             return False  # 검증 명령 실패는 신뢰로 처리하지 않는다.
@@ -277,8 +298,10 @@ def _check_package_sync(exe_path: str) -> bool:
                 return False  # 같은 파일의 원래/대체 경로 이상 보고
 
         return True
-    except (OSError, subprocess.SubprocessError):
-        return False
+    except _TransientCheckError:
+        raise
+    except (OSError, subprocess.SubprocessError) as error:
+        raise _TransientCheckError(f"package check {exe_path}: {error}") from error
 
 
 async def is_package_verified(exe_path: str) -> bool:
@@ -292,7 +315,13 @@ async def is_package_verified(exe_path: str) -> bool:
     if key in _pkg_cache:
         return _pkg_cache[key]
 
-    verified = await trio.to_thread.run_sync(_check_package_sync, exe_path)
+    try:
+        verified = await trio.to_thread.run_sync(_check_package_sync, exe_path)
+    except _TransientCheckError as error:
+        # 일시 오류는 이번 판정만 비신뢰로 두고 캐시하지 않는다. 캐시하면 GuardFS 를
+        # 끌 때까지 같은 실행 파일(/usr/bin/python3.12 등)을 쓰는 모든 프로세스가 비신뢰가 된다.
+        print(f"[TRUST] 패키지 검증 일시 실패 → 이번 판정만 비신뢰, 다음에 재확인: {error}")
+        return False
     _pkg_cache[key] = verified
     return verified
 
