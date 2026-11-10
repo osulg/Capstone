@@ -6,7 +6,7 @@ import ClearControl from "./ClearControl";
 interface Props {
   rows: PidRow[];
   onDetail: (pid: number) => void;
-  clearedAt?: number | null;   // 화면 정리 시각(ms). 이후 기록만 목록에 넣는다 (EventsView 가 거른다)
+  clearedAt?: number | null;   // 로그 정리 시각(ms). 이후 기록만 목록에 넣는다 (EventsView 가 거른다)
   onClear?: () => void;
   onReset?: () => void;
 }

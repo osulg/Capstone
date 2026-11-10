@@ -46,7 +46,7 @@ interface Props {
 export default function RunLog({ runs, error, onDetail, title = "실행별 로그 조회", tall }: Props) {
   const [query, setQuery] = useState("");
   const [applied, setApplied] = useState("");
-  // 화면 정리: 정리 시각 이후 변경된 실행 폴더만 보여준다 (폴더·파일은 그대로)
+  // 로그 정리: 정리 시각 이후 변경된 실행 폴더만 보여준다 (폴더·파일은 그대로)
   const { mark, clear, reset } = useClearMark("holdfs.dashboard.clear.runs");
   const q = applied.trim().toLowerCase();
   const all = (runs ?? []).filter((r) => mark === null || r.mtime * 1000 > mark);
@@ -69,7 +69,7 @@ export default function RunLog({ runs, error, onDetail, title = "실행별 로�
           <div className="empty" style={{ border: 0, height: "100%" }}>{error ? "서버 연결 끊김" : "불러오는 중…"}</div>
         ) : all.length === 0 ? (
           <div className="empty" style={{ border: 0, height: "100%" }}>
-            {mark !== null ? "화면 정리 이후 새 실행이 없습니다." : "웹 시연에서 시나리오를 실행하면 실행 폴더가 여기에 나타납니다."}
+            {mark !== null ? "로그 정리 이후 새 실행이 없습니다." : "웹 시연에서 시나리오를 실행하면 실행 폴더가 여기에 나타납니다."}
           </div>
         ) : (
           <table>
