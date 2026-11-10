@@ -6,7 +6,6 @@ import argparse
 import errno
 import os
 import random
-import re
 import stat as stat_mod
 import sys
 import time
@@ -31,7 +30,6 @@ from guardfs.common.config import (
     DYNAMIC_EXT_RULE,
     ENTROPY_MAX_EVENT_SAMPLE_SIZE,
     ENTROPY_THRESHOLD,
-    INTERPRETER_BASENAMES,
     LINEAGE_AGGREGATION_ENABLED,
     LINEAGE_MIN_CHILD_PIDS,
     LINEAGE_MIN_FILES,
@@ -55,7 +53,12 @@ from guardfs.common.paths import (
 )
 from guardfs.stage1.detector import Stage1Detector
 from guardfs.stage1.logger import EventLogger
-from guardfs.stage1.trust import _get_parent_pid, _get_start_time, is_trusted_pid
+from guardfs.stage1.trust import (
+    _get_parent_pid,
+    _get_start_time,
+    interpreter_target,
+    is_trusted_pid,
+)
 from guardfs.stage2.stage2_worker import stage2_worker
 from guardfs.stage2.states import ProcState
 
@@ -64,9 +67,11 @@ def _resolve_trust_target(pid: int) -> str:
     """
     신뢰 판단 대상 경로를 계산한다.
     exe가 python/bash 등 인터프리터면 exe 자신이 아니라
-    cmdline에서 실제로 실행 중인 스크립트 경로를 반환한다.
+    cmdline에서 실제로 실행 중인 스크립트(또는 python -m 모듈) 경로를 반환한다.
     (그렇지 않으면 /usr/bin/python3로 실행되는 임의의 스크립트가
     전부 "신뢰 경로"로 오분류된다.)
+    대상을 확인할 수 없으면(인라인 코드, 대화형 셸, 찾을 수 없는 모듈) "" 를 반환한다.
+    해석 규칙은 trust.interpreter_target 과 공유한다(is_trusted_pid 와 같은 기준).
     """
 
     try:
@@ -74,25 +79,12 @@ def _resolve_trust_target(pid: int) -> str:
     except OSError:
         return ""
 
-    basename = re.sub(r"[\d.]+$", "", os.path.basename(path))
+    kind, target = interpreter_target(pid, path)
 
-    if basename not in INTERPRETER_BASENAMES:
+    if kind == "not_interpreter":
         return path
 
-    try:
-        with open(f"/proc/{pid}/cmdline", "rb") as f:
-            raw = f.read()
-    except OSError:
-        return ""
-
-    args = [a.decode("utf-8", "surrogateescape") for a in raw.split(b"\x00") if a]
-
-    for arg in args[1:]:
-        if arg.startswith("-"):
-            continue
-        return os.path.abspath(arg)
-
-    return ""
+    return target if kind == "script" else ""
 
 
 @dataclass
