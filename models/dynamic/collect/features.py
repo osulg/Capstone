@@ -11,6 +11,7 @@
 
 import os
 import posixpath
+import sys
 
 HIGH_ENTROPY = 7.0
 
@@ -58,12 +59,22 @@ def _ext(path):
     return posixpath.splitext(path)[1].lower()
 
 
+# 확장자 변경 rename 판정은 런타임 PidStats와 같은 코드를 쓴다(guardfs/common/ext_rule.py).
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if _REPO not in sys.path:
+    sys.path.insert(0, _REPO)
+from guardfs.common.ext_rule import is_ext_change as _is_ext_change  # noqa: E402
+
+
 def _safe_div(a, b):
     return a / b if b else 0.0
 
 
-def compute_features(records) -> dict:
-    """정렬 여부와 무관하게 동작하도록 내부에서 ts로 정렬한다."""
+def compute_features(records, ext_rule="v5") -> dict:
+    """정렬 여부와 무관하게 동작하도록 내부에서 ts로 정렬한다.
+
+    ext_rule: 확장자 변경 rename 판정 규칙("v5" 기본, "v6"은 _is_ext_change 참고).
+    """
     evs = sorted(records, key=lambda r: r.get("ts_ns", 0))
 
     op_counts = {}
@@ -126,11 +137,9 @@ def compute_features(records) -> dict:
 
         elif op == "RENAME":
             total_renames += 1
-            old_ext = _ext(path)
-            new_ext = _ext(e.get("new_path"))
-            if e.get("new_path") and old_ext != new_ext:
+            if _is_ext_change(path, e.get("new_path"), ext_rule):
                 ext_change_renames += 1
-                new_exts.add(new_ext)
+                new_exts.add(_ext(e.get("new_path")))
 
         elif op == "CRYPTO":
             crypto += 1
