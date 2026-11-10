@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
-import { byPid, buckets, inPeriod, isLowWrite, periodStart, PERIODS, shownEvents, type Period } from "../eventStats";
+import { byPid, buckets, eventDate, inPeriod, isLowWrite, periodStart, PERIODS, shownEvents, type Period } from "../eventStats";
+import { useClearMark } from "../hooks/useClearMark";
 import type { EdrEvent } from "../types";
 import EventChart from "./EventChart";
 import FileDetail from "./FileDetail";
@@ -28,6 +29,10 @@ export default function EventsView({ events, onAskAi, initialPid = null, onRun }
   // LOW 쓰기 반영 기록은 위협 이벤트가 아니므로 그래프에서는 뺀다 (PID 목록·상세에는 남긴다)
   const threats = useMemo(() => scoped.filter((e) => !isLowWrite(e)), [scoped]);
   const runList = useRuns(detail === null);
+  // PID별 로그 조회의 화면 정리: 정리 시각 이후 기록만 목록에 넣는다 (서버 기록·그래프는 그대로)
+  const pidClear = useClearMark("holdfs.dashboard.clear.pids");
+  const pidEvents = useMemo(() => pidClear.mark === null ? scoped
+    : scoped.filter((e) => eventDate(e).getTime() > (pidClear.mark as number)), [scoped, pidClear.mark]);
 
   // 차단 작업이 수행된 프로세스: 쓰기·이름 변경 등이 차단됐거나(BLOCKED) HIGH로 정지된 PID
   const blockedPids = new Set(scoped
@@ -66,7 +71,8 @@ export default function EventsView({ events, onAskAi, initialPid = null, onRun }
       </fieldset>
 
       <div className="grid2">
-        <PidLog rows={byPid(scoped)} onDetail={showPid} />
+        <PidLog rows={byPid(pidEvents)} onDetail={showPid}
+          clearedAt={pidClear.mark} onClear={pidClear.clear} onReset={pidClear.reset} />
         <RunLog runs={runList.runs} error={runList.error} onDetail={(name) => onRun?.(name)} />
       </div>
     </>

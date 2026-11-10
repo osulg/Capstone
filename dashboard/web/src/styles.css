@@ -245,3 +245,7 @@ label.field { display: inline-flex; align-items: center; gap: 6px; }
   .num-grid { grid-template-columns: 1fr 1fr; }
   .pid-flow li { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* 목록 화면 정리 (화면에서만 숨김) */
+.count-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.clear-control { margin-left: auto; display: inline-flex; gap: 8px; align-items: center; }

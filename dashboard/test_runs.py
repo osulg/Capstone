@@ -56,3 +56,14 @@ def test_scan_run_rejects_bad_names(tmp_path, monkeypatch):
     for name in ("", "honeypot", "sim_icefire", "../etc", "s05_" + "a" * 32, RUN_A + "/x"):
         assert file_scan.scan_run(name) is None
     assert file_scan.scan_run("s02_" + "c" * 32) is None  # 형식은 맞지만 없음
+
+
+def test_hidden_dummy_files_in_run_folder_are_counted(tmp_path, monkeypatch):
+    root = _setup(tmp_path, monkeypatch)
+    run = root / ("s02_" + "d" * 32)
+    (run / ".ssh").mkdir(parents=True)
+    (run / ".ssh" / "id_rsa").write_bytes(PLAIN)
+    (run / ".env").write_bytes(PLAIN)
+    data = file_scan.scan_run(run.name)
+    assert data["summary"]["total"] == 2 and data["summary"]["suspect"] == 0
+    assert sorted(f["path"] for f in data["files"]) == [f"{run.name}/.env", f"{run.name}/.ssh/id_rsa"]

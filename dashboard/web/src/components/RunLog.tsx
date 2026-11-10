@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 
 import { fetchRuns } from "../api";
 import { fmtTime } from "../fileStats";
+import { useClearMark } from "../hooks/useClearMark";
 import type { RunSummary } from "../types";
+import ClearControl from "./ClearControl";
 
 const RUN_POLL_MS = 2000;
 
@@ -44,8 +46,10 @@ interface Props {
 export default function RunLog({ runs, error, onDetail, title = "실행별 로그 조회", tall }: Props) {
   const [query, setQuery] = useState("");
   const [applied, setApplied] = useState("");
+  // 화면 정리: 정리 시각 이후 변경된 실행 폴더만 보여준다 (폴더·파일은 그대로)
+  const { mark, clear, reset } = useClearMark("holdfs.dashboard.clear.runs");
   const q = applied.trim().toLowerCase();
-  const all = runs ?? [];
+  const all = (runs ?? []).filter((r) => mark === null || r.mtime * 1000 > mark);
   const shown = q
     ? all.filter((r) => r.name.includes(q) || r.label.toLowerCase().includes(q) || r.scenario.toLowerCase() === q)
     : all;
@@ -64,7 +68,9 @@ export default function RunLog({ runs, error, onDetail, title = "실행별 로�
         {runs === null ? (
           <div className="empty" style={{ border: 0, height: "100%" }}>{error ? "서버 연결 끊김" : "불러오는 중…"}</div>
         ) : all.length === 0 ? (
-          <div className="empty" style={{ border: 0, height: "100%" }}>웹 시연에서 시나리오를 실행하면 실행 폴더가 여기에 나타납니다.</div>
+          <div className="empty" style={{ border: 0, height: "100%" }}>
+            {mark !== null ? "화면 정리 이후 새 실행이 없습니다." : "웹 시연에서 시나리오를 실행하면 실행 폴더가 여기에 나타납니다."}
+          </div>
         ) : (
           <table>
             <thead><tr><th>실행 폴더</th><th>시각</th><th>감염 의심 / 전체</th><th>상세</th></tr></thead>
@@ -81,7 +87,10 @@ export default function RunLog({ runs, error, onDetail, title = "실행별 로�
           </table>
         )}
       </div>
-      <div className="count-line">실행 {all.length}개 중 {shown.length}개 표시 · 감염 의심 = 엔트로피 기준 이상 파일</div>
+      <div className="count-line">
+        실행 {all.length}개 중 {shown.length}개 표시 · 감염 의심 = 엔트로피 기준 이상 파일
+        <ClearControl clearedAt={mark} onClear={clear} onReset={reset} />
+      </div>
     </fieldset>
   );
 }

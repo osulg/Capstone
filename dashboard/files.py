@@ -146,13 +146,15 @@ def _protected_root() -> str:
 
 
 def _scan_run_dir(root_real: str, run_real: str) -> tuple[list, bool]:
-    """실행 폴더 안의 파일 정보. 경로(path)는 보호 폴더 기준 상대경로라 미리보기 API를 그대로 쓴다."""
+    """실행 폴더 안의 파일 정보. 경로(path)는 보호 폴더 기준 상대경로라 미리보기 API를 그대로 쓴다.
+
+    실행 폴더는 시나리오가 만든 더미 파일만 들어 있으므로 숨김 파일도 센다
+    (S02 Huntress 더미 자격 파일: .ssh/id_rsa, .aws/credentials, .env 등).
+    """
     files, truncated = [], False
     for dirpath, dirnames, filenames in os.walk(run_real):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        dirnames[:] = sorted(dirnames)
         for fn in sorted(filenames):
-            if fn.startswith("."):
-                continue
             full = os.path.join(dirpath, fn)
             if os.path.islink(full) or not os.path.isfile(full):
                 continue
