@@ -28,6 +28,7 @@ from guardfs.collect.fuse_logger import (
     new_run_id,
 )
 from guardfs.common.config import (
+    DYNAMIC_EXT_RULE,
     ENTROPY_MAX_EVENT_SAMPLE_SIZE,
     ENTROPY_THRESHOLD,
     INTERPRETER_BASENAMES,
@@ -43,6 +44,7 @@ from guardfs.common.config import (
     STATS_WRITE_THRESHOLD,
     TRUSTED_EXE_PREFIXES,
 )
+from guardfs.common.ext_rule import ext_of, is_ext_change
 from guardfs.common.paths import (
     PID_OVERRIDE_FILE,
     STAGING_DIR,
@@ -2366,6 +2368,9 @@ class PidStats:
     값이어야 한다(그래야 학습 분포와 추론 분포가 일치). 아래 로직은
     compute_features 를 증분(incremental) 방식으로 그대로 옮긴 것이다.
 
+    확장자 변경 rename 판정은 compute_features 와 같은 guardfs/common/ext_rule.py 를
+    쓰며, 규칙(v5/v6)은 config.DYNAMIC_EXT_RULE 로 모델과 짝을 맞춘다.
+
     다른 점(의도적 제외):
       - proc_count : PID 단위라 항상 1 → 피처에서 제외
       - crypto_calls: FUSE엔 CRYPTO op이 없음 → 피처에서 제외
@@ -2375,10 +2380,6 @@ class PidStats:
     HIGH_ENTROPY = ENTROPY_THRESHOLD  # 7.0, features.py HIGH_ENTROPY와 동일
     MUTATING_OPS = {"WRITE", "CREATE", "RENAME", "UNLINK", "TRUNCATE", "CHMOD"}
     _OP_NAMES = {"ftruncate": "TRUNCATE"}  # fuse_logger와 동일한 op 정규화
-
-    @staticmethod
-    def _ext(path) -> str:
-        return os.path.splitext(path)[1].lower() if path else ""
 
     def __init__(self):
         # --- Stage1 1초 윈도우 게이트 전용 (reset마다 초기화) ---
@@ -2459,9 +2460,9 @@ class PidStats:
 
         elif op == "RENAME":
             self._total_renames += 1
-            if ev.new_path and self._ext(path) != self._ext(ev.new_path):
+            if is_ext_change(path, ev.new_path, DYNAMIC_EXT_RULE):
                 self._ext_change_renames += 1
-                self._new_exts.add(self._ext(ev.new_path))
+                self._new_exts.add(ext_of(ev.new_path))
 
         elif op in ("UNLINK", "RMDIR"):
             self.d_win += 1

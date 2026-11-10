@@ -20,6 +20,8 @@
 #   --timeout N    수집 시간(초). 기본 120
 #   --run NNN      run 번호 강제 지정
 #   --list         해당 패밀리 샘플 목록만 출력하고 종료
+#   --decoy-seed N 방법 B 미끼 트리(시드 N)로 수집 (collect_one.sh에 그대로 전달)
+#   --decoy-files N  [--decoy-seed와 함께] 파일 수 고정 (L 평가셋)
 #
 # 예:
 #   scripts/run_sample.sh HelloKitty
@@ -39,12 +41,15 @@ die() { echo "[run_sample] ERROR: $*" >&2; exit 1; }
 
 # ---------- 인자 파싱 ----------
 FAMILY=""; SHA8=""; AS_ROOT=0; TIMEOUT=120; RUN_FORCE=""; LIST_ONLY=0
+DECOY_OPTS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --root)    AS_ROOT=1; shift ;;
         --timeout) TIMEOUT="${2:-}"; shift 2 ;;
         --run)     RUN_FORCE="${2:-}"; shift 2 ;;
         --list)    LIST_ONLY=1; shift ;;
+        --decoy-seed)  DECOY_OPTS+=(--decoy-seed "${2:-}"); shift 2 ;;
+        --decoy-files) DECOY_OPTS+=(--decoy-files "${2:-}"); shift 2 ;;
         -h|--help) sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*)        die "알 수 없는 옵션: $1" ;;
         *) if [ -z "$FAMILY" ]; then FAMILY="$1"
@@ -191,7 +196,7 @@ fi
 echo "========================================================"
 
 # ---------- collect_one.sh 호출 ----------
-CMD=( "$COLLECT_ONE" --run-id "$RID" --timeout "$TIMEOUT" )
+CMD=( "$COLLECT_ONE" --run-id "$RID" --timeout "$TIMEOUT" "${DECOY_OPTS[@]}" )
 if [ "$AS_ROOT" -eq 1 ]; then
     # collector가 이미 root이므로 워크로드도 root로 실행됨
     CMD+=( -- "$ELF" "${ARGS[@]}" )

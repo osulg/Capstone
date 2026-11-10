@@ -8,6 +8,7 @@ import pandas as pd
 import trio
 
 from guardfs.common.config import (
+    DYNAMIC_EXT_RULE,
     DYNAMIC_MODEL_WEIGHT,
     STAGE2_DYN_ONLY_HIGH_THRESHOLD,
     STAGE2_HIGH_THRESHOLD,
@@ -28,7 +29,7 @@ from guardfs.stage2.static_analyzer import StaticAnalyzer
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
-# NOTE: 동적 피처 순서의 단일 출처는 models/dynamic/feature_cols_v5.json 이다
+# NOTE: 동적 피처 순서의 단일 출처는 paths.DYNAMIC_FEATURE_COLS_PATH 이다
 #       (FUSE-only · PID 단위, 22개). 런타임 PidStats.to_feature_row() 와
 #       학습 추출기(extract_perpid_fuse.py)가 같은 스키마를 공유한다.
 
@@ -54,7 +55,8 @@ def load_models():
                 f"model={len(expected)}개 / json={len(dyn_cols)}개"
             )
 
-        print(f"[ML] 동적 모델 로드 완료 (v5, FUSE·PID, {len(dyn_cols)} features)")
+        print(f"[ML] 동적 모델 로드 완료 ({os.path.basename(DYNAMIC_MODEL_PATH)}, "
+              f"FUSE·PID, ext_rule={DYNAMIC_EXT_RULE}, {len(dyn_cols)} features)")
 
     except Exception as e:
         raise RuntimeError(

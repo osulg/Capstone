@@ -1,0 +1,35 @@
+{
+  "threshold": 0.6,
+  "ext_rule": "v6",
+  "sklearn": "1.3.2",
+  "n_benign_pid": 3306,
+  "n_benign_run": 96,
+  "n_malware_pid": 31,
+  "excluded_families": [
+    "moneymessage"
+  ],
+  "features": [
+    "duration_sec",
+    "total_events",
+    "write_per_sec",
+    "unlink_per_sec",
+    "rename_per_sec",
+    "create_per_sec",
+    "write_ratio",
+    "unlink_ratio",
+    "rename_ratio",
+    "read_ratio",
+    "high_entropy_write_count",
+    "high_entropy_write_ratio",
+    "mean_write_entropy",
+    "entropy_available",
+    "read_then_overwrite_ratio",
+    "ext_change_rename_ratio",
+    "distinct_ext_after_rename",
+    "unique_files_touched",
+    "unique_dirs_touched",
+    "files_per_dir",
+    "total_write_bytes",
+    "mean_write_bytes"
+  ]
+}
