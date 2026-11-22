@@ -15,23 +15,50 @@ import os
 import threading
 import time
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, request, send_from_directory
 
 try:
-    from dashboard.rag import build_context, local_analysis
+    from dashboard.rag import (
+        STAGE2_DYN_ONLY_HIGH_THRESHOLD,
+        STAGE2_HIGH_THRESHOLD,
+        STAGE2_MEDIUM_THRESHOLD,
+        build_context,
+        local_analysis,
+    )
     from dashboard import files as file_scan
+    from dashboard import system as sys_status
+    from dashboard.roles import RoleIndex
 except ImportError:  # python dashboard/server.py 로 직접 실행한 경우
-    from rag import build_context, local_analysis
+    from rag import (
+        STAGE2_DYN_ONLY_HIGH_THRESHOLD,
+        STAGE2_HIGH_THRESHOLD,
+        STAGE2_MEDIUM_THRESHOLD,
+        build_context,
+        local_analysis,
+    )
     import files as file_scan
+    import system as sys_status
+    from roles import RoleIndex
+
+# MEDIUM 관찰 시간: 보류된 쓰기가 원본에 반영되기까지 (파일 현황 › 보류 중인 쓰기의 남은 시간)
+try:
+    from guardfs.common.config import STAGE2_MEDIUM_TIMEOUT_SEC
+except ImportError:
+    STAGE2_MEDIUM_TIMEOUT_SEC = 10.0
 
 try:
     from openai import OpenAI
 except ImportError:
     OpenAI = None
 
-app = Flask(__name__)
+# React 화면 빌드 결과 (dashboard/web 에서 npm run build)
+WEB_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "dist")
+
+app = Flask(__name__, static_folder=None)
 
 MAX_EVENTS = 5000
+# 웹 시연 작업 프로세스는 이름(python3) 대신 등록된 역할(lolbin_attack 등)로 보여준다
+roles = RoleIndex()
 events = []  # in-memory log store
 _events_lock = threading.Lock()
 _next_id = 1
@@ -39,18 +66,43 @@ _next_id = 1
 _generation = int(time.time() * 1000)
 
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+# AI 분석관 남용 방지 (외부 LLM 호출 = API 요금). 환경변수로 바꿀 수 있다.
+CHAT_MAX_QUESTION_CHARS = int(os.environ.get("DASH_CHAT_MAX_CHARS", "2000"))   # 질문 최대 길이
+CHAT_MAX_HISTORY_CHARS = 4000        # 이전 대화 한 턴의 최대 길이 (최근 8턴만 보냄)
+CHAT_MAX_TOKENS = int(os.environ.get("DASH_CHAT_MAX_TOKENS", "2048"))           # 답변 최대 길이(토큰)
+# Gemini 2.5 같은 '생각(thinking)' 모델은 생각 토큰도 max_tokens 에 포함돼, 그대로 두면 답이 첫 문장에서
+# 잘린다. OpenAI 호환 API 의 reasoning_effort 로 생각 단계를 끈다(Gemini 2.5 Flash: "none").
+# 다른 제공자에는 보내지 않는다. 값은 DASH_CHAT_REASONING 로 바꿀 수 있다("" = 보내지 않음).
+_IS_GEMINI = "generativelanguage.googleapis.com" in os.environ.get("OPENAI_BASE_URL", "")
+CHAT_REASONING = os.environ.get("DASH_CHAT_REASONING", "none" if _IS_GEMINI else "")
+CHAT_RATE_PER_MIN = int(os.environ.get("DASH_CHAT_RATE_PER_MIN", "10"))         # LLM 호출 분당 최대 횟수(서버 전체)
+_chat_calls: list[float] = []
+_chat_lock = threading.Lock()
+
+
+def _chat_rate_ok() -> bool:
+    """최근 60초 동안의 LLM 호출 수가 한도 미만이면 이번 호출을 기록하고 True."""
+    now = time.time()
+    with _chat_lock:
+        while _chat_calls and now - _chat_calls[0] > 60:
+            _chat_calls.pop(0)
+        if len(_chat_calls) >= CHAT_RATE_PER_MIN:
+            return False
+        _chat_calls.append(now)
+        return True
 _llm_client = None
 if OpenAI is not None and os.environ.get("OPENAI_API_KEY"):
     _llm_client = OpenAI()
 
-SYSTEM_PROMPT = """당신은 엔드포인트 보안 분석 전문가입니다. HoldFS EDR 시스템의 보안 이벤트 로그를 분석하여 보안팀에게 인사이트를 제공합니다.
+SYSTEM_PROMPT = f"""당신은 엔드포인트 보안 분석 전문가입니다. HoldFS EDR 시스템의 보안 이벤트 로그를 분석하여 보안팀에게 인사이트를 제공합니다.
 
 HoldFS 시스템 개요:
 - FUSE 기반 실시간 파일 보호 정책 엔진
 - Stage1: 엔트로피 탐지 / 삭제 빈도 / 허니팟 접근 → score ≥ 1이면 ML 평가
 - Stage2: 동적 RF + 정적 RF 앙상블 (가중치 0.5/0.5)
-- MEDIUM (score 0.3~0.82): write 버퍼링 + 1초 주기 재평가
-- HIGH (score ≥ 0.82): write/rename/unlink/truncate 차단 + SIGSTOP
+- MEDIUM (score {STAGE2_MEDIUM_THRESHOLD}~{STAGE2_HIGH_THRESHOLD}): write 버퍼링 + 1초 주기 재평가
+- HIGH (score ≥ {STAGE2_HIGH_THRESHOLD} 또는 동적 점수 단독 ≥ {STAGE2_DYN_ONLY_HIGH_THRESHOLD}): write/rename/unlink/truncate 차단 + SIGSTOP
 
 MITRE ATT&CK 주요 매핑:
 - T1486 Data Encrypted for Impact: 고엔트로피 write + 확장자 변경
@@ -100,11 +152,21 @@ def _normalize(raw: dict) -> dict:
     ev["process"] = ev["process"] or "-"
     ts = raw.get("ts")
     if ts is None and ev["time"]:
+        # HoldFS·agent 시각은 "YYYY-MM-DD HH:MM:SS" 또는 밀리초가 붙은 "…SS.mmm"
+        base, _, frac = str(ev["time"]).partition(".")
         try:
-            ts = time.mktime(time.strptime(ev["time"], "%Y-%m-%d %H:%M:%S"))
+            ts = time.mktime(time.strptime(base, "%Y-%m-%d %H:%M:%S"))
+            if frac.isdigit():
+                ts += int(frac) / 10 ** len(frac)
         except ValueError:
             ts = None
     ev["ts"] = float(ts) if ts is not None else time.time()
+    info = roles.lookup(ev["pid"], ev["ts"]) if ev["pid"] else None
+    if info:
+        ev["comm"] = ev["process"]          # 원래 프로세스 이름 (python3 등)
+        ev["process"] = info["role"]
+        ev["role"] = info["role"]
+        ev["scenario"] = info.get("scenario_id")
     if not ev["time"]:
         ev["time"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ev["ts"]))
     return ev
@@ -132,7 +194,15 @@ def _snapshot() -> list:
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    if not os.path.isfile(os.path.join(WEB_DIST, "index.html")):
+        return ("대시보드 화면 빌드가 없습니다. dashboard/web 에서 npm ci && npm run build 를 실행하세요.",
+                503, {"Content-Type": "text/plain; charset=utf-8"})
+    return send_from_directory(WEB_DIST, "index.html")
+
+
+@app.route("/assets/<path:name>")
+def web_assets(name):
+    return send_from_directory(os.path.join(WEB_DIST, "assets"), name)
 
 
 @app.route("/api/events", methods=["POST"])
@@ -186,6 +256,21 @@ def list_files():
     return jsonify(file_scan.scan_all())
 
 
+@app.route("/api/runs")
+def list_runs():
+    """실행별 로그 조회: 웹 시연 실행 폴더(s01_~s04_)와 폴더별 감염 의심 수."""
+    return jsonify(file_scan.list_runs())
+
+
+@app.route("/api/runs/<name>")
+def run_detail(name):
+    """실행별 상세: 실행 폴더 하나의 파일 전체."""
+    data = file_scan.scan_run(name)
+    if data is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(data)
+
+
 @app.route("/api/files/preview")
 def file_preview():
     data = file_scan.preview(request.args.get("folder", ""), request.args.get("path", ""))
@@ -197,7 +282,18 @@ def file_preview():
 @app.route("/api/health")
 def health():
     return jsonify({"ok": True, "llm": _llm_client is not None,
-                    "model": OPENAI_MODEL if _llm_client else "local-rules"})
+                    "model": OPENAI_MODEL if _llm_client else "local-rules",
+                    "medium_timeout_sec": STAGE2_MEDIUM_TIMEOUT_SEC,
+                    "high_threshold": STAGE2_HIGH_THRESHOLD,
+                    "dyn_only_threshold": STAGE2_DYN_ONLY_HIGH_THRESHOLD})
+
+
+@app.route("/api/system")
+def system_status():
+    data = sys_status.status()
+    data["llm"] = {"connected": _llm_client is not None,
+                   "model": OPENAI_MODEL if _llm_client else "local-rules"}
+    return jsonify(data)
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -207,6 +303,10 @@ def chat():
     history = body.get("history") or []
     if not question:
         return jsonify({"error": "message required"}), 400
+    if len(question) > CHAT_MAX_QUESTION_CHARS:
+        return jsonify({"error": f"질문은 {CHAT_MAX_QUESTION_CHARS}자 이하로 입력하세요."}), 413
+    if not isinstance(history, list):
+        history = []
 
     evs = _snapshot()
     context, summaries, docs = build_context(question, evs)
@@ -219,24 +319,37 @@ def chat():
     if _llm_client is None:
         return jsonify({"reply": local_analysis(question, evs), "mode": "local", "sources": sources})
 
+    if not _chat_rate_ok():
+        return jsonify({"error": f"AI 분석관 요청이 너무 많습니다 (분당 {CHAT_RATE_PER_MIN}회). 잠시 후 다시 시도하세요."}), 429
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": RAG_INSTRUCTION.format(context=context)},
     ]
     for turn in history[-8:]:
+        if not isinstance(turn, dict):
+            continue
         role = turn.get("role")
         content = turn.get("content")
         if role in ("user", "assistant") and isinstance(content, str):
-            messages.append({"role": role, "content": content[:4000]})
+            messages.append({"role": role, "content": content[:CHAT_MAX_HISTORY_CHARS]})
     messages.append({"role": "user", "content": question})
 
     try:
-        resp = _llm_client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            temperature=0.3,
-        )
-        reply = resp.choices[0].message.content or ""
+        params = dict(model=OPENAI_MODEL, messages=messages, temperature=0.3, max_tokens=CHAT_MAX_TOKENS)
+        try:
+            resp = _llm_client.chat.completions.create(
+                **params, **({"reasoning_effort": CHAT_REASONING} if CHAT_REASONING else {}))
+        except Exception as e:  # 모델이 reasoning_effort 값을 지원하지 않으면 빼고 한 번 더
+            if not CHAT_REASONING or "reasoning" not in str(e).lower():
+                raise
+            app.logger.warning("reasoning_effort=%s 미지원, 빼고 재시도: %s", CHAT_REASONING, e)
+            resp = _llm_client.chat.completions.create(**params)
+        choice = resp.choices[0]
+        reply = choice.message.content or ""
+        if choice.finish_reason == "length":
+            reply += ("\n\n> 답변이 길이 제한(DASH_CHAT_MAX_TOKENS)에 걸려 잘렸습니다. "
+                      "질문을 나누어 다시 물어보세요.")
         return jsonify({"reply": reply, "mode": "llm", "sources": sources})
     except Exception as e:  # LLM 장애 시에도 대시보드는 답을 주도록 로컬 분석으로 대체
         app.logger.warning("LLM 호출 실패: %s", e)

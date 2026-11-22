@@ -60,6 +60,10 @@ def get_forced_state_path(pid: int) -> str:
 
 FILESECURITY_LOG_PATH = os.path.expanduser("~/filesecurity.log")
 
+# 웹 시연이 등록한 작업 프로세스의 역할 기록 (PID·시작 tick·역할, 한 줄에 하나).
+# demo-web runner 가 등록 시 쓰고, 대시보드가 프로세스 이름 대신 역할을 보여줄 때 읽는다.
+PROCESS_ROLES_PATH = os.path.expanduser("~/guardfs_runtime/process_roles.jsonl")
+
 def get_event_log_path(root: str) -> str:
     return os.path.join(
         os.path.dirname(os.path.realpath(root)),

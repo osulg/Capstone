@@ -68,6 +68,10 @@ def validate_lolbin_success(result, record):
     if [(task.get("role"), task.get("action")) for task in tasks] != expected:
         raise ValueError("S04 작업 순서가 일치하지 않습니다.")
     names = [f"file_{index:03d}.txt" for index in range(20)]
+    # 실행마다 정한 무작위 확장자를 모든 작업이 같은 값으로 썼는지 확인한다.
+    rename_ext = result.get("rename_ext")
+    if rename_ext is not None and any(task.get("rename_ext") != rename_ext for task in tasks):
+        raise ValueError("S04 작업의 변경 확장자가 일치하지 않습니다.")
     for task in tasks:
         if (task.get("role"), task.get("pid")) not in registered:
             raise ValueError("S04 작업 PID 등록 근거가 없습니다.")

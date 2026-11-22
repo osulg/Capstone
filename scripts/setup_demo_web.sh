@@ -7,6 +7,7 @@ HOLDFS_PYTHON="$PROJECT_ROOT/venv/bin/python"
 BACKEND_ENV="$PROJECT_ROOT/demo-web/backend/.venv"
 BACKEND_PYTHON="$BACKEND_ENV/bin/python"
 FRONTEND_DIR="$PROJECT_ROOT/demo-web/frontend"
+DASHBOARD_WEB_DIR="$PROJECT_ROOT/dashboard/web"
 NODE_NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 NVM_VERSION="v0.40.8"
 INSTALLER_FILE=""
@@ -19,7 +20,7 @@ usage() {
 사용법: bash scripts/setup_demo_web.sh [setup|check|run]
 
   setup  최초 설치. 기존 환경은 재사용하고 변경된 의존성만 설치합니다. 기본 동작입니다.
-  check  Python 환경·API import·프런트 빌드를 확인합니다.
+  check  Python 환경·API import·프런트 빌드·대시보드 화면 빌드를 확인합니다.
   run    준비된 HoldFS·대시보드·API·React를 실행합니다.
 
 최초 한 번: bash scripts/setup_demo_web.sh
@@ -99,6 +100,27 @@ setup_node() {
     nvm use 24 --silent
 }
 
+# 대시보드(5000)는 Flask가 커밋된 dashboard/web/dist를 그대로 서빙한다.
+# 빌드 결과가 없거나 index.html이 가리키는 파일이 빠졌으면 화면이 비어 보인다.
+dashboard_web_ready() {
+    local index="$DASHBOARD_WEB_DIR/dist/index.html" asset
+    [ -f "$index" ] || return 1
+    while IFS= read -r asset; do
+        [ -f "$DASHBOARD_WEB_DIR/dist/$asset" ] || return 1
+    done < <(grep -oE '/assets/[^"]+' "$index" | sed 's#^/##')
+}
+
+# 빌드 결과가 온전하면 다시 빌드하지 않는다(커밋된 dist를 바꾸지 않기 위해).
+prepare_dashboard_web() {
+    if dashboard_web_ready; then
+        say '기존 대시보드 화면 빌드를 재사용합니다.'
+        return 0
+    fi
+    say '대시보드 화면 빌드가 없어 dashboard/web에서 빌드합니다.'
+    (cd "$DASHBOARD_WEB_DIR" && npm ci && npm run build)
+    dashboard_web_ready || fail '대시보드 화면 빌드에 실패했습니다.'
+}
+
 check_environment() {
     valid_python "$HOLDFS_PYTHON" || fail 'HoldFS Python 3.12 환경이 없습니다. setup을 실행하세요.'
     valid_python "$BACKEND_PYTHON" || fail 'API Python 3.12 환경이 없습니다. setup을 실행하세요.'
@@ -112,6 +134,8 @@ check_environment() {
     load_node
     [ -f "$FRONTEND_DIR/node_modules/vite/bin/vite.js" ] \
         || fail '프런트 의존성이 없습니다. setup을 실행하세요.'
+    dashboard_web_ready \
+        || fail '대시보드 화면 빌드(dashboard/web/dist)가 없거나 불완전합니다. setup을 실행하세요.'
 }
 
 setup_environment() {
@@ -177,6 +201,7 @@ $(npm --version)"
     else
         say '기존 프런트 의존성을 재사용합니다.'
     fi
+    prepare_dashboard_web
 
     say '4/4 API import와 프런트 빌드 확인'
     cd "$PROJECT_ROOT"

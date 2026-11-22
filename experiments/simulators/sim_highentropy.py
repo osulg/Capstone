@@ -213,11 +213,16 @@ def run_web_task(args):
         raise ValueError("웹 작업 폴더 이름이 올바르지 않습니다.")
     if os.path.islink(root):
         raise ValueError("심볼릭 링크 작업 폴더는 허용하지 않습니다.")
+    # 웹 S04는 실행마다 관리자가 정한 무작위 확장자를 넘긴다(알려진 랜섬웨어
+    # 확장자 사전 차단에 첫 파일에서 막히지 않는 변형 공격). 형식만 확인한다.
+    rename_ext = args.rename_ext
+    if not re.fullmatch(r"\.[a-z][a-z0-9]{3,9}", rename_ext):
+        raise ValueError("웹 작업의 변경 확장자 형식이 올바르지 않습니다.")
     size = args.size_kb * 1024
     expected = (PLAINTEXT_LINE * (size // len(PLAINTEXT_LINE) + 1))[:size]
     deadline = time.monotonic() + args.duration
     report = {"action": args.web_action, "pid": os.getpid(), "status": "failed",
-              "files": [], "error": None, "failure": None}
+              "rename_ext": rename_ext, "files": [], "error": None, "failure": None}
     operation = args.web_action
     path = root
 
@@ -251,11 +256,11 @@ def run_web_task(args):
                 operation = "read_overwrite"
                 overwrite_with_random(path, size, args.chunk_kb * 1024)
                 operation = "rename"
-                os.rename(path, path + ".locked")
+                os.rename(path, path + rename_ext)
                 time.sleep(args.delay)
             report["files"].append({
                 "name": name,
-                **({"original": observe(path), "renamed": observe(path + ".locked")}
+                **({"original": observe(path), "renamed": observe(path + rename_ext)}
                    if args.web_action == "inspect" else {}),
             })
         report["status"] = "passed"

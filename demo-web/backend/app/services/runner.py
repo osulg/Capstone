@@ -19,6 +19,7 @@ from pathlib import Path
 
 from guardfs.common.paths import (
     FILESECURITY_LOG_PATH,
+    PROCESS_ROLES_PATH,
     PROJECT_ROOT as HOLDFS_PROJECT_ROOT,
     get_event_log_path,
     get_honeypot_dir,
@@ -63,6 +64,29 @@ PROJECT_ROOT = Path(HOLDFS_PROJECT_ROOT)
 
 def now() -> datetime:
     return datetime.now(UTC)
+
+
+def record_process_role(record, worker, path: str | None = None) -> None:
+    """대시보드가 프로세스 이름 대신 역할을 보여줄 수 있도록 등록 정보를 한 줄 남긴다.
+
+    표시용 기록이므로 쓰기에 실패해도 등록 자체는 막지 않고 경고만 남긴다.
+    """
+    entry = {
+        "pid": worker.pid,
+        "start_time_ticks": worker.start_time_ticks,
+        "role": worker.role,
+        "scenario_id": record.scenario_id,
+        "run_id": record.run_id,
+        "workspace": record.workspace.name if record.workspace else None,
+        "registered_ts": time.time(),
+    }
+    target = Path(path or PROCESS_ROLES_PATH)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as error:
+        logger.warning("프로세스 역할 기록 실패: %s", error)
 
 
 class RunBusyError(RuntimeError):
@@ -516,6 +540,7 @@ class ScenarioRunner:
         worker.registered_at = now()
 
         record.processes.append(worker)
+        record_process_role(record, worker)
 
         logger.info(
             "Registered process: run=%s role=%s pid=%s start=%s",

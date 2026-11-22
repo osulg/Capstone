@@ -1175,3 +1175,23 @@ summary:focus-visible {
     align-self: flex-end;
   }
 }
+
+/* 대시보드(새 탭) 연결 */
+.dashboard-link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dashboard-link:hover { color: #111; }
+
+.intro-dashboard-link {
+  display: inline-block;
+  margin-top: 16px;
+  color: #555;
+  font-size: 14px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.intro-dashboard-link:hover { color: #111; }

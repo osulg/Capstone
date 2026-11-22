@@ -81,6 +81,24 @@ class ProcessRegistrationTests(unittest.TestCase):
         self.assertEqual(len(self.record.processes), 1)
         self.assertEqual(self.record.processes[0].pid, 200)
 
+    def test_registration_records_role_for_dashboard(self):
+        import json
+        import tempfile
+
+        from app.services import runner
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "roles.jsonl"
+            with (patch.object(runner, "PROCESS_ROLES_PATH", str(target)),
+                  patch("pathlib.Path.read_text", return_value=proc_stat())):
+                ScenarioRunner._register_process(self.record, self.payload)
+                ScenarioRunner._register_process(self.record, self.payload)  # 중복은 다시 쓰지 않음
+            lines = target.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 1)
+        entry = json.loads(lines[0])
+        self.assertEqual((entry["pid"], entry["start_time_ticks"], entry["role"], entry["scenario_id"]),
+                         (200, 1234, "normal_worker", "S01"))
+
     def test_self_registration(self):
         self.payload["pid"] = 100
         with patch("pathlib.Path.read_text", return_value=proc_stat(parent=50)):

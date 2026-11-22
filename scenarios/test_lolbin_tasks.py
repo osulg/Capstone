@@ -24,7 +24,8 @@ class LolbinTaskTests(unittest.TestCase):
             root = Path(directory) / ("s04_" + "a" * 32)
             root.mkdir()
             args = SimpleNamespace(target=str(root), size_kb=1, duration=30,
-                                   web_action="attack", files=20, chunk_kb=16, delay=0)
+                                   web_action="attack", files=20, chunk_kb=16, delay=0,
+                                   rename_ext=".locked")
             output = io.StringIO()
             with (patch.object(sim_highentropy, "overwrite_with_random"),
                   patch.object(sim_highentropy.os, "rename", side_effect=PermissionError(13, "denied")),
@@ -49,6 +50,7 @@ class LolbinTaskTests(unittest.TestCase):
             metadata = {"role": role, "pid": pid, "start_time_ticks": 123}
             workers.append(SimpleNamespace(**metadata))
             payload = {"action": action, "pid": pid, "status": "passed", "error": None,
+                       "rename_ext": command[command.index("--rename-ext") + 1],
                        "files": [{"name": f"file_{i:03d}.txt", "original": "matched",
                                   "renamed": "missing"} for i in range(20)]}
             if action == "attack":
@@ -80,6 +82,12 @@ class LolbinTaskTests(unittest.TestCase):
             self.assertEqual(report["worker_outcome"]["status"], "permission_denied")
             self.assertEqual(calls[-2:], ["lolbin_inspect_mount", "lolbin_inspect_underlay"])
             validate_lolbin_success(report, SimpleNamespace(processes=workers))
+            self.assertRegex(report["rename_ext"], r"^\.[a-z][a-z0-9]{5}$")
+            original_ext = report["task_results"][4]["rename_ext"]
+            report["task_results"][4]["rename_ext"] = ".locked"
+            with self.assertRaisesRegex(ValueError, "확장자"):
+                validate_lolbin_success(report, SimpleNamespace(processes=workers))
+            report["task_results"][4]["rename_ext"] = original_ext
             report["task_results"][3]["failure"]["errno"] = 5
             with self.assertRaises(ValueError):
                 validate_lolbin_success(report, SimpleNamespace(processes=workers))
@@ -97,6 +105,40 @@ class LolbinTaskTests(unittest.TestCase):
                 self.assertEqual(len(report["files"]), 2)
             self.assertTrue(all(item["original"] == "missing" for item in report["files"]))
             self.assertTrue(all(item["renamed"] == "changed" for item in report["files"]))
+
+    def test_random_rename_ext_avoids_known_extensions(self):
+        from guardfs.stage1.ext_change import (
+            EXECUTABLE_EXTENSIONS, NORMAL_EXTENSIONS, SUSPICIOUS_EXTENSIONS)
+        known = SUSPICIOUS_EXTENSIONS | NORMAL_EXTENSIONS | EXECUTABLE_EXTENSIONS
+        for _ in range(200):
+            ext = s04_lolbin.random_rename_ext()
+            self.assertRegex(ext, r"^\.[a-z][a-z0-9]{5}$")
+            self.assertNotIn(ext, known)
+
+    def test_attack_and_inspect_use_given_rename_ext(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / ("s04_" + "b" * 32)
+            for action in ("prepare", "attack", "inspect"):
+                command = [sys.executable, str(SCRIPT), str(root), "--web-action", action,
+                           "--files", "2", "--size-kb", "1", "--delay", "0",
+                           "--rename-ext", ".q7xk2m", "--keep"]
+                result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                report = json.loads(result.stdout)
+                self.assertEqual(report["rename_ext"], ".q7xk2m")
+            self.assertTrue((root / "file_000.txt.q7xk2m").exists())
+            self.assertFalse((root / "file_000.txt.locked").exists())
+            self.assertTrue(all(item["renamed"] == "changed" for item in report["files"]))
+
+    def test_web_task_rejects_malformed_rename_ext(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / ("s04_" + "c" * 32)
+            for ext in ("", "locked", ".A1", "./x", ".abc/def"):
+                args = SimpleNamespace(target=str(root), size_kb=1, duration=30,
+                                       web_action="attack", files=1, chunk_kb=16, delay=0,
+                                       rename_ext=ext)
+                with self.assertRaisesRegex(ValueError, "확장자"):
+                    sim_highentropy.run_web_task(args)
 
     def test_unregistered_attack_is_rejected(self):
         record = SimpleNamespace(processes=[])

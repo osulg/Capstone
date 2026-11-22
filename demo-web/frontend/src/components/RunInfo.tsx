@@ -1,4 +1,5 @@
 import type { Run } from "../types/api";
+import { dashboardUrl } from "../utils/dashboard";
 import { getRunPresentation } from "../utils/runPresentation";
 
 interface RunInfoProps {
@@ -101,7 +102,17 @@ export default function RunInfo({
                     <code>{process.role}</code>
                   </td>
 
-                  <td>{process.pid}</td>
+                  <td>
+                    <a
+                      className="dashboard-link"
+                      href={dashboardUrl(process.pid)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`대시보드에서 PID ${process.pid} 상세 보기 (새 탭)`}
+                    >
+                      {process.pid}
+                    </a>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -110,8 +121,16 @@ export default function RunInfo({
       )}
 
       <p className="run-info-note">
-        작업 PID로 대시보드의 파일 작업 이벤트를 확인할 수 있습니다.
-        이 목록은 등록 이력이며 현재 프로세스의 생존 여부를 뜻하지 않습니다.
+        작업 PID를 누르면 대시보드에서 해당 PID의 파일 작업 이벤트를 확인할 수 있습니다.
+        이 목록은 등록 이력이며 현재 프로세스의 생존 여부를 뜻하지 않습니다.{" "}
+        <a
+          className="dashboard-link"
+          href={dashboardUrl()}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          대시보드 열기 ↗
+        </a>
       </p>
     </section>
   );

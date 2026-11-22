@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import sys
 from collections import Counter
 
@@ -132,6 +133,90 @@ def scan_folder(folder: dict) -> dict:
     # 미끼 파일을 목록 맨 위로 (시연 시 바로 보이도록)
     out["files"].sort(key=lambda f: not f["honeypot"])
     return out
+
+
+# ── 실행별 폴더 (웹 시연 시나리오가 실행마다 만드는 s01_~s04_<32자리 16진수>) ──────────
+RUN_DIR_RE = re.compile(r"^s0[1-4]_[0-9a-f]{32}$")
+SCENARIO_LABELS = {"s01": "S01 IceFire", "s02": "S02 Huntress", "s03": "S03 Akira", "s04": "S04 LOLBin"}
+MAX_RUNS = 200
+
+
+def _protected_root() -> str:
+    return _folder("protected")["path"]
+
+
+def _scan_run_dir(root_real: str, run_real: str) -> tuple[list, bool]:
+    """실행 폴더 안의 파일 정보. 경로(path)는 보호 폴더 기준 상대경로라 미리보기 API를 그대로 쓴다.
+
+    실행 폴더는 시나리오가 만든 더미 파일만 들어 있으므로 숨김 파일도 센다
+    (S02 Huntress 더미 자격 파일: .ssh/id_rsa, .aws/credentials, .env 등).
+    """
+    files, truncated = [], False
+    for dirpath, dirnames, filenames in os.walk(run_real):
+        dirnames[:] = sorted(dirnames)
+        for fn in sorted(filenames):
+            full = os.path.join(dirpath, fn)
+            if os.path.islink(full) or not os.path.isfile(full):
+                continue
+            if len(files) >= MAX_FILES:
+                return files, True
+            try:
+                files.append(_file_info(root_real, full))
+            except OSError:
+                continue  # 스캔 중 삭제·이동된 파일
+    return files, truncated
+
+
+def _run_summary(name: str, files: list, dir_mtime: float) -> dict:
+    """감염 의심은 엔트로피 기준만 센다 (확장자 변경은 세지 않는다)."""
+    prefix = name[:3]
+    return {
+        "name": name,
+        "scenario": prefix.upper(),
+        "label": SCENARIO_LABELS.get(prefix, prefix.upper()),
+        "total": len(files),
+        "suspect": sum(f["state"] == "encrypted" for f in files),
+        "ok": sum(f["state"] == "ok" for f in files),
+        "mtime": max([dir_mtime, *(f["mtime"] for f in files)]),
+    }
+
+
+def list_runs() -> dict:
+    """보호 폴더 최상위의 실행 폴더 목록과 폴더별 감염 의심 수 (최근 변경 순)."""
+    root = _protected_root()
+    out = {"threshold": ENTROPY_THRESHOLD, "root": root, "exists": os.path.isdir(root),
+           "runs": [], "truncated": False}
+    if not out["exists"]:
+        return out
+    root_real = os.path.realpath(root)
+    runs = []
+    for entry in os.scandir(root_real):
+        if not RUN_DIR_RE.match(entry.name) or entry.is_symlink() or not entry.is_dir():
+            continue
+        try:
+            files, _ = _scan_run_dir(root_real, entry.path)
+            runs.append(_run_summary(entry.name, files, entry.stat().st_mtime))
+        except OSError:
+            continue
+    runs.sort(key=lambda r: r["mtime"], reverse=True)
+    out["truncated"] = len(runs) > MAX_RUNS
+    out["runs"] = runs[:MAX_RUNS]
+    return out
+
+
+def scan_run(name: str) -> dict | None:
+    """실행 폴더 하나의 파일 전체와 요약. 이름 형식이 다르거나 폴더가 없으면 None."""
+    if not RUN_DIR_RE.match(name or ""):
+        return None
+    root = _protected_root()
+    path = _safe_join(root, name)
+    if path is None or not os.path.isdir(path) or os.path.islink(os.path.join(root, name)):
+        return None
+    root_real = os.path.realpath(root)
+    files, truncated = _scan_run_dir(root_real, path)
+    return {"threshold": ENTROPY_THRESHOLD, "root": root, "folder": "protected",
+            "summary": _run_summary(name, files, os.stat(path).st_mtime),
+            "files": files, "truncated": truncated}
 
 
 def scan_all() -> dict:
