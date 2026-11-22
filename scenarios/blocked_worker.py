@@ -6,7 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from guardfs.common.paths import FILESECURITY_LOG_PATH
+from holdfs.common.paths import FILESECURITY_LOG_PATH
 
 
 class PolicyBlockedError(RuntimeError):

@@ -6,7 +6,7 @@ PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE="$PROJECT_ROOT/experiments/simulators/sim_highentropy.py"
 INSTALLED="/usr/local/bin/holdfs_sim.py"
 SYSTEM_PYTHON="/usr/bin/python3"
-MOUNT_DIR="$HOME/guardfs_runtime/mount"
+MOUNT_DIR="$HOME/holdfs_runtime/mount"
 TARGET="$MOUNT_DIR/s04_lolbin"
 
 fail() {

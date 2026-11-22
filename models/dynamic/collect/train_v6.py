@@ -6,7 +6,7 @@
 그때 확정한 설정(RandomForest 400, random_state=42, run 균형 가중치)으로
 train 데이터 전체를 학습해 런타임용 pkl 을 저장한다. holdout 은 쓰지 않는다.
 
-중요: 반드시 GuardFS venv(배포 때와 같은 scikit-learn)에서 실행할 것.
+중요: 반드시 holdFS venv(배포 때와 같은 scikit-learn)에서 실행할 것.
       다른 버전에서 저장하면 런타임 로드시 predict_proba 가 깨진다.
 주의: 런타임 PidStats(passthrough.py)가 v6 확장자 규칙으로 맞춰지기 전에는
       paths.py 의 DYNAMIC_MODEL_PATH 를 v6 로 바꾸지 말 것.

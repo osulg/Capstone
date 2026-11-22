@@ -3,13 +3,13 @@
 set -e
 
 echo "========================================"
-echo " GuardFS Cleanup"
+echo " holdFS Cleanup"
 echo "========================================"
 
 # ----------------------------------------
 # 1. 런타임 경로
 # ----------------------------------------
-RUNTIME_DIR="$HOME/guardfs_runtime"
+RUNTIME_DIR="$HOME/holdfs_runtime"
 MOUNT_DIR="$RUNTIME_DIR/mount"
 UNDERLAY_DIR="$RUNTIME_DIR/underlay"
 LOG_DIR="$RUNTIME_DIR/logs"
@@ -21,10 +21,10 @@ echo "[INFO] Logs     : $LOG_DIR"
 echo ""
 
 # ----------------------------------------
-# 2. GuardFS가 아직 마운트되어 있는지 확인
+# 2. holdFS가 아직 마운트되어 있는지 확인
 # ----------------------------------------
 if mountpoint -q "$MOUNT_DIR" 2>/dev/null; then
-    echo "[ERROR] GuardFS가 아직 마운트되어 있습니다."
+    echo "[ERROR] holdFS가 아직 마운트되어 있습니다."
     echo "먼저 다음 명령을 실행하세요:"
     echo ""
     echo "  ./scripts/unmount.sh"
@@ -51,13 +51,13 @@ if [ -d "$LOG_DIR" ]; then
 fi
 
 # ----------------------------------------
-# 5. GuardFS 임시 상태 파일 정리
+# 5. holdFS 임시 상태 파일 정리
 # ----------------------------------------
-echo "[INFO] Cleaning temporary GuardFS files..."
+echo "[INFO] Cleaning temporary holdFS files..."
 
-rm -f /tmp/guardfs_stage2_*.json
-rm -f /tmp/guardfs_*.tmp
-rm -f /tmp/guardfs_*.pid
+rm -f /tmp/holdfs_stage2_*.json
+rm -f /tmp/holdfs_*.tmp
+rm -f /tmp/holdfs_*.pid
 
 echo "[OK] Temporary files cleaned"
 
@@ -66,7 +66,7 @@ echo "[OK] Temporary files cleaned"
 # ----------------------------------------
 echo ""
 echo "========================================"
-echo " GuardFS Cleanup Complete"
+echo " holdFS Cleanup Complete"
 echo "========================================"
 echo ""
 echo "[INFO] Underlay data was NOT deleted."

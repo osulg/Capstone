@@ -2,11 +2,11 @@
 
 set -u
 
-MOUNT="${MOUNT:-$HOME/guardfs_runtime/mount}"
-UNDERLAY="${UNDERLAY:-$HOME/guardfs_runtime/underlay}"
+MOUNT="${MOUNT:-$HOME/holdfs_runtime/mount}"
+UNDERLAY="${UNDERLAY:-$HOME/holdfs_runtime/underlay}"
 TEST_NO="${1:-}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
-RESULT_FILE="$(mktemp /tmp/guardfs-policy-result.XXXXXX)"
+RESULT_FILE="$(mktemp /tmp/holdfs-policy-result.XXXXXX)"
 
 cleanup() {
     rm -f -- "$RESULT_FILE"
@@ -39,7 +39,7 @@ if ! [[ "$TEST_NO" =~ ^([1-9]|10|11)$ ]]; then
     exit 2
 fi
 
-echo "Running GuardFS policy test $TEST_NO..."
+echo "Running holdFS policy test $TEST_NO..."
 
 if mountpoint -q "$MOUNT"; then
     record_shell "PASS" "Precheck mount" "connected"
@@ -47,18 +47,18 @@ else
     record_shell "FAIL" "Precheck mount" "disconnected"
 fi
 
-GUARDFS_PID="$(pgrep -f '[p]ython3 .*guardfs/fuse_fs/passthrough.py' | head -n 1)"
-if [ -n "$GUARDFS_PID" ]; then
-    record_shell "PASS" "Precheck process" "PID=$GUARDFS_PID"
+HOLDFS_PID="$(pgrep -f '[p]ython3 .*holdfs/fuse_fs/passthrough.py' | head -n 1)"
+if [ -n "$HOLDFS_PID" ]; then
+    record_shell "PASS" "Precheck process" "PID=$HOLDFS_PID"
 else
     record_shell "FAIL" "Precheck process" "not running"
 fi
 
-if mountpoint -q "$MOUNT" && [ -n "$GUARDFS_PID" ]; then
-    GUARDFS_POLICY_TEST="$TEST_NO" \
-    GUARDFS_POLICY_STAMP="$STAMP" \
-    GUARDFS_POLICY_MOUNT="$MOUNT" \
-    GUARDFS_POLICY_UNDERLAY="$UNDERLAY" \
+if mountpoint -q "$MOUNT" && [ -n "$HOLDFS_PID" ]; then
+    HOLDFS_POLICY_TEST="$TEST_NO" \
+    HOLDFS_POLICY_STAMP="$STAMP" \
+    HOLDFS_POLICY_MOUNT="$MOUNT" \
+    HOLDFS_POLICY_UNDERLAY="$UNDERLAY" \
     python3 - <<'PY' >>"$RESULT_FILE" 2>&1
 import os
 import signal
@@ -70,10 +70,10 @@ from collections import defaultdict
 from pathlib import Path
 
 
-test_no = int(os.environ["GUARDFS_POLICY_TEST"])
-stamp = os.environ["GUARDFS_POLICY_STAMP"]
-mount = Path(os.environ["GUARDFS_POLICY_MOUNT"])
-underlay = Path(os.environ["GUARDFS_POLICY_UNDERLAY"])
+test_no = int(os.environ["HOLDFS_POLICY_TEST"])
+stamp = os.environ["HOLDFS_POLICY_STAMP"]
+mount = Path(os.environ["HOLDFS_POLICY_MOUNT"])
+underlay = Path(os.environ["HOLDFS_POLICY_UNDERLAY"])
 results = []
 
 
@@ -87,7 +87,7 @@ def check(name, condition, detail_pass, detail_fail):
 
 
 def force_state(state):
-    path = Path(f"/tmp/guardfs_state_{os.getpid()}")
+    path = Path(f"/tmp/holdfs_state_{os.getpid()}")
     path.write_text(state, encoding="utf-8")
     return path
 
@@ -213,7 +213,7 @@ def test_medium_large_write():
 
 def test_medium_commit():
     import trio
-    from guardfs.stage2.policy.medium import commit_buffers, handle_write_medium
+    from holdfs.stage2.policy.medium import commit_buffers, handle_write_medium
 
     class FakeOps:
         def __init__(self):
@@ -249,7 +249,7 @@ def test_medium_commit():
         async def trigger_high(self, pid, reason=""):
             raise RuntimeError(f"unexpected HIGH: {reason}")
 
-    path = Path(f"/tmp/guardfs_policy_commit_{stamp}.txt")
+    path = Path(f"/tmp/holdfs_policy_commit_{stamp}.txt")
     original = b"ORIGINAL\n"
     payload = b"COMMITTED"
     path.write_bytes(original)
@@ -274,7 +274,7 @@ def test_medium_commit():
 
 def test_medium_drop():
     import trio
-    from guardfs.stage2.policy.medium import drop_buffers, handle_write_medium
+    from holdfs.stage2.policy.medium import drop_buffers, handle_write_medium
 
     class FakeOps:
         def __init__(self):
@@ -310,7 +310,7 @@ def test_medium_drop():
         async def trigger_high(self, pid, reason=""):
             raise RuntimeError(f"unexpected HIGH: {reason}")
 
-    path = Path(f"/tmp/guardfs_policy_drop_{stamp}.txt")
+    path = Path(f"/tmp/holdfs_policy_drop_{stamp}.txt")
     original = b"ORIGINAL-PRESERVED\n"
     path.write_bytes(original)
     fd = os.open(path, os.O_RDWR)
@@ -547,7 +547,7 @@ else
     record_shell "FAIL" "Final mount health" "disconnected"
 fi
 
-FINAL_PID="$(pgrep -f '[p]ython3 .*guardfs/fuse_fs/passthrough.py' | head -n 1)"
+FINAL_PID="$(pgrep -f '[p]ython3 .*holdfs/fuse_fs/passthrough.py' | head -n 1)"
 if [ -n "$FINAL_PID" ]; then
     record_shell "PASS" "Final process health" "PID=$FINAL_PID"
 else
@@ -559,7 +559,7 @@ FAIL_COUNT="$(grep -c '^FAIL|' "$RESULT_FILE" || true)"
 
 echo
 echo "============================================================"
-echo " GuardFS Policy Test $TEST_NO"
+echo " holdFS Policy Test $TEST_NO"
 echo "============================================================"
 while IFS='|' read -r status name detail; do
     if [ "$status" = "PASS" ] || [ "$status" = "FAIL" ]; then
@@ -573,7 +573,7 @@ if [ "$FAIL_COUNT" -eq 0 ]; then
     echo "FINAL RESULT: PASS"
 else
     echo "FINAL RESULT: FAIL"
-    echo "GuardFS log: tail -n 150 /tmp/guardfs-terminal.log"
+    echo "holdFS log: tail -n 150 /tmp/holdfs-terminal.log"
 fi
 
 if [ "$TEST_NO" = "4" ] || [ "$TEST_NO" = "5" ]; then

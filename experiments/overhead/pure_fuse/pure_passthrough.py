@@ -7,7 +7,7 @@ samples this daemon's CPU/RSS into resource_usage_pure_fuse.csv.
 
 For an uncontaminated end-to-end FUSE baseline, use the unlogged
 pure_fuse_passthrough.py with an external benchmark. This logged variant is for
-matching the existing GuardFS result format.
+matching the existing holdFS result format.
 """
 import csv
 import errno

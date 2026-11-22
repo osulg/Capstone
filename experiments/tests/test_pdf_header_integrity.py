@@ -2,7 +2,7 @@
 import os
 import time
 
-target = os.path.expanduser(os.environ.get("MOUNT", "~/guardfs_runtime/mount"))
+target = os.path.expanduser(os.environ.get("MOUNT", "~/holdfs_runtime/mount"))
 
 print(f"[TEST] PID: {os.getpid()}")
 

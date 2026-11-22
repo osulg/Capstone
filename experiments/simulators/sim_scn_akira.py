@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-사례 ④ Akira 랜섬웨어 (Linux/VMware ESXi) — 파일연산 모의 재현 (GuardFS/HoldFS 검증용).
+사례 ④ Akira 랜섬웨어 (Linux/VMware ESXi) — 파일연산 모의 재현 (holdFS/HoldFS 검증용).
 
 근거(증거 수준 분리):
   ⒜ Recon InfoSec "Emergence of Akira Ransomware Group"(2023-05, 실제 IR)
@@ -25,22 +25,22 @@
   이들은 실제 공격 역량이거나 FUSE 밖이다. --encryption-percent 는 "실험 설정값"이며
   실제 사건 옵션값(-n)과 일치한다는 주장이 아니다.
 
-범위 한계(문서 5.7): GuardFS 가 ESXi VMFS 를 직접 보호하는 것이 아니라, VM 파일
+범위 한계(문서 5.7): holdFS 가 ESXi VMFS 를 직접 보호하는 것이 아니라, VM 파일
 변경 특성을 일반 Linux FUSE 에서 유사 파일 연산으로 모사해 검증하는 것이다.
 
 탐지 관점(문서 1장): 부분 암호화는 파일 대부분이 평문으로 남아 헤더 기반 엔트로피·
-매직 신호가 약해지는 탐지 한계를 드러낸다. GuardFS 에서 EntropyDetector 는 파일
+매직 신호가 약해지는 탐지 한계를 드러낸다. holdFS 에서 EntropyDetector 는 파일
 앞 ENTROPY_HEADER_SIZE(256B) 를 보므로, 앞부분만 덮어쓰면 오히려 걸리고 뒷부분만
 덮어쓰면 놓칠 수 있다 — 이 비대칭을 --offset 로 확인한다. rename(.akiranew)·반복
 쓰기·ML 종합이 보조 신호가 된다.
 
 테스트 방법 (Linux/Ubuntu, 터미널 두 개):
-  1) 터미널 A: cd ~/Capstone && bash scripts/run_guardfs.sh   (또는 run_all.sh)
+  1) 터미널 A: cd ~/Capstone && bash scripts/run_holdfs.sh   (또는 run_all.sh)
   2) 터미널 B:
        cd ~/Capstone && source venv/bin/activate
-       mountpoint ~/guardfs_runtime/mount
+       mountpoint ~/holdfs_runtime/mount
        python3 experiments/simulators/sim_scn_akira.py \
-           ~/guardfs_runtime/mount/sim_akira --encryption-percent 20 --keep
+           ~/holdfs_runtime/mount/sim_akira --encryption-percent 20 --keep
 
 확인 기준:
   - 부분 암호화 비율(--encryption-percent)과 쓰기 위치(--offset head/tail)에 따라
@@ -64,14 +64,14 @@ VM_EXTS = (".vmdk", ".vmx", ".vmsd", ".vmsn", ".vmem")
 NEW_EXT = ".akiranew"
 NOTE_NAME = "akiranew.txt"
 NOTE_BODY = (
-    "[SIMULATION] GuardFS detection test artifact.\n"
+    "[SIMULATION] holdFS detection test artifact.\n"
     "No real encryption, key, VM, or contact information is involved.\n"
 )
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="Akira(Linux/ESXi) 파일연산 모의 재현")
-    p.add_argument("target", help="GuardFS 마운트 안의 대상 폴더 (없으면 생성)")
+    p.add_argument("target", help="holdFS 마운트 안의 대상 폴더 (없으면 생성)")
     p.add_argument("--files", type=int, default=8, help="더미 VM 파일 개수")
     # 기본 64KB: VM 확장자는 EXTENSION_GROUPS 어디에도 없어 UNKNOWN 그룹(버퍼 상한
     # 2MB)으로 분류된다. 준비 단계의 평문 쓰기가 전부 MEDIUM 버퍼에 쌓이므로,
@@ -172,7 +172,7 @@ def main() -> int:
         lib.write_note(workdir, NOTE_NAME, NOTE_BODY)
         lib.log(f"모의 노트 생성: {NOTE_NAME}")
     except OSError as e:
-        lib.log(f"파일 연산 실패: {e} → 차단 여부는 GuardFS 상태/이벤트 로그로 확인")
+        lib.log(f"파일 연산 실패: {e} → 차단 여부는 holdFS 상태/이벤트 로그로 확인")
         rc = 3
     finally:
         lib.log(

@@ -29,7 +29,7 @@ from scenarios.common import (
     register_process_and_wait,
     timestamp,
 )
-from scenarios.s01_normal import check_health, find_guardfs_pid
+from scenarios.s01_normal import check_health, find_holdfs_pid
 from scenarios.workers import registered_worker
 
 SCENARIO_ID = "S03"
@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument("--underlay", type=Path, default=underlay)
     parser.add_argument(
         "--holdfs-pid",
-        "--guardfs-pid",
+        "--holdfs-pid",
         dest="holdfs_pid",
         type=int,
     )
@@ -249,7 +249,7 @@ def run(args):
             raise ValueError("지원하지 않는 Akira 모드입니다.")
 
         if holdfs_pid is None:
-            holdfs_pid = find_guardfs_pid()
+            holdfs_pid = find_holdfs_pid()
 
         check_health(mount, holdfs_pid)
 

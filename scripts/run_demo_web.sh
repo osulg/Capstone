@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")"
 PROJECT_ROOT="$(cd -- "$(dirname -- "$SCRIPT_PATH")/.." && pwd)"
 BACKEND_PYTHON="$PROJECT_ROOT/demo-web/backend/.venv/bin/python"
-MOUNT_DIR="$HOME/guardfs_runtime/mount"
+MOUNT_DIR="$HOME/holdfs_runtime/mount"
 
 fail() { printf '[HoldFS Demo] 오류: %s\n' "$*" >&2; exit 1; }
 

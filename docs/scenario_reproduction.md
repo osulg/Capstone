@@ -1,6 +1,6 @@
-# 공개 침해사고 파일연산 모의 재현 (GuardFS/HoldFS 검증)
+# 공개 침해사고 파일연산 모의 재현 (holdFS/HoldFS 검증)
 
-본 문서는 공개된 실제 침해사고 4종에서 **GuardFS 가 관찰 가능한 파일시스템
+본 문서는 공개된 실제 침해사고 4종에서 **holdFS 가 관찰 가능한 파일시스템
 행위만** 격리·더미 환경에서 모의 재현하는 시뮬레이터와, 각 시나리오가 어떤
 탐지기·상태로 이어질지에 대한 **예상 결과**, 그리고 구현 중 발견한 **설계상
 편차·한계**를 정리한다. 원 시나리오 설계 문서(요청 첨부)의 선정 기준·근거를
@@ -29,17 +29,17 @@
 
 ## 2. 실행 방법 (요약; 상세는 각 스크립트 docstring)
 
-GuardFS 와 대시보드가 떠 있어야 한다. 터미널 두 개를 쓴다.
+holdFS 와 대시보드가 떠 있어야 한다. 터미널 두 개를 쓴다.
 
 ```bash
-# 터미널 A — GuardFS + 대시보드 + 에이전트 한 번에
+# 터미널 A — holdFS + 대시보드 + 에이전트 한 번에
 cd ~/Capstone
 bash dashboard/run_all.sh            # http://127.0.0.1:5000
-#   (대시보드 없이 탐지 로그만 보려면)  bash scripts/run_guardfs.sh
+#   (대시보드 없이 탐지 로그만 보려면)  bash scripts/run_holdfs.sh
 
 # 터미널 B — 시나리오 실행
 cd ~/Capstone && source venv/bin/activate
-mountpoint ~/guardfs_runtime/mount   # 마운트 확인
+mountpoint ~/holdfs_runtime/mount   # 마운트 확인
 bash scripts/run_scenarios.sh                 # 4종 전부
 #   또는 개별:
 bash scripts/run_scenarios.sh icefire akira
@@ -53,7 +53,7 @@ bash scripts/run_scenarios.sh icefire akira
 
 ## 3. 시나리오별 재현 범위와 예상 결과
 
-예상 결과는 코드/설정(`guardfs/common/config.py`, `stage1/*`, `stage2/*`) 근거의
+예상 결과는 코드/설정(`holdfs/common/config.py`, `stage1/*`, `stage2/*`) 근거의
 **추정**이며, 실측값이 아니다. 실제 수치·격상 여부는 VM 에서 확인한다.
 
 ### ① IceFire (`sim_scn_icefire.py`)
@@ -106,7 +106,7 @@ bash scripts/run_scenarios.sh icefire akira
   - `--offset tail`: 뒷부분만 덮으면 헤더가 평문으로 보존돼 **놓치기 쉽다**
     (헤더보존 사각지대). `.akiranew` rename(§4 개선으로 즉시 탐지)·반복 쓰기·ML
     종합이 보조 신호가 된다.
-- **범위 한계**: GuardFS 는 ESXi VMFS 를 직접 보호하지 않는다. VM 파일 변경 특성을
+- **범위 한계**: holdFS 는 ESXi VMFS 를 직접 보호하지 않는다. VM 파일 변경 특성을
   일반 Linux FUSE 에서 유사 연산으로 모사해 검증할 뿐이다.
 
 ---
@@ -114,12 +114,12 @@ bash scripts/run_scenarios.sh icefire akira
 ## 4. 구현 중 발견한 설계상 편차·한계와 조치
 
 ### 개선 1 (적용) — 재현 대상 계열 확장자 즉시 탐지 누락
-- **발견**: `guardfs/stage1/ext_change.py` 의 `SUSPICIOUS_EXTENSIONS` 에
+- **발견**: `holdfs/stage1/ext_change.py` 의 `SUSPICIOUS_EXTENSIONS` 에
   `.ifire`(IceFire)·`.akira`/`.akiranew`(Akira) 가 없어, 정작 본 프로젝트가
   재현하는 계열의 확장자 변경이 **즉시 탐지되지 않고** "정상→unknown" 5개 누적
   (`EXT_CHANGE_THRESHOLD`)에만 의존했다. 단일/소수 파일 변조는 놓친다.
 - **조치**: 세 확장자를 집합에 추가(데이터만). 이 집합은 Stage1 즉시 탐지에만
-  쓰이고 Stage2 ML 피처의 확장자 판정은 `guardfs/common/ext_rule.py` 가 전담하므로
+  쓰이고 Stage2 ML 피처의 확장자 판정은 `holdfs/common/ext_rule.py` 가 전담하므로
   **학습 모델·피처 스키마에는 영향이 없다**. 회귀 테스트(`scripts/stage1/
   test_stage1_rules.py`) 89개 통과, 신규 2 케이스 추가.
 - **영향 범위 검토**: `.ifire`/`.akira`/`.akiranew` 는 정상 파일이 가질 리 없는
@@ -128,10 +128,10 @@ bash scripts/run_scenarios.sh icefire akira
 
 ### 발견 2 (문서화만) — 신뢰 판정 두 경로의 불일치
 - **내용**: 신뢰 판정이 두 곳에 있다.
-  - `guardfs/stage1/trust.py :: is_trusted_pid` — 선제-MEDIUM 게이트
+  - `holdfs/stage1/trust.py :: is_trusted_pid` — 선제-MEDIUM 게이트
     (`_resolve_effective_state`)에서 사용. **exe 경로만** 본다. 따라서
     `/usr/bin/python3 evil.py` 는 exe 가 `/usr/bin/python3` 라 **신뢰**로 분류된다.
-  - `guardfs/fuse_fs/passthrough.py :: _resolve_trust_target` (→ `is_trusted_process`)
+  - `holdfs/fuse_fs/passthrough.py :: _resolve_trust_target` (→ `is_trusted_process`)
     — SUSPICIOUS→실효상태 매핑·샘플링 게이트에서 사용. 인터프리터면 **스크립트
     인자 경로**로 판정해 `/usr/bin/python3 evil.py` 를 **비신뢰**로 본다.
   - 두 경로가 인터프리터 실행 스크립트에서 **상반된 결론**을 낼 수 있다.

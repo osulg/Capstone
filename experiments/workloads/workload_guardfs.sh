@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # 사용법:
-#   ./guardfs_workload.sh [대상_마운트_경로] [반복횟수]
+#   ./holdfs_workload.sh [대상_마운트_경로] [반복횟수]
 #
 # 예시:
-#   ./guardfs_workload.sh ~/guardfs_lab/mount/Projects 300
+#   ./holdfs_workload.sh ~/holdfs_lab/mount/Projects 300
 
-TARGET_DIR="${1:-$HOME/guardfs_lab/mount/Projects}"
+TARGET_DIR="${1:-$HOME/holdfs_lab/mount/Projects}"
 COUNT="${2:-100}"
 
 WORK_DIR="$TARGET_DIR/normal_workload"
@@ -15,7 +15,7 @@ FILE_DIR="$WORK_DIR/files"
 DIR_TEST_ROOT="$WORK_DIR/directories"
 TRUNCATE_FILE="$WORK_DIR/truncate_test.bin"
 
-LOG_DIR="$HOME/guardfs_lab/logs"
+LOG_DIR="$HOME/holdfs_lab/logs"
 WORKLOAD_STATE_FILE="$LOG_DIR/.workload_state"
 
 mkdir -p "$LOG_DIR"
@@ -46,7 +46,7 @@ cleanup_on_exit() {
 trap cleanup_on_exit EXIT
 
 echo "========================================"
-echo "GuardFS normal workload"
+echo "holdFS normal workload"
 echo "Target : $TARGET_DIR"
 echo "Count  : $COUNT"
 echo "========================================"
@@ -170,11 +170,11 @@ printf "%s\n" \
     "COMPLETE | NORMAL WORKLOAD FINISHED" \
     > "$WORKLOAD_STATE_FILE"
 
-# GuardFS가 COMPLETE 상태를 읽도록 마지막 이벤트 발생
+# holdFS가 COMPLETE 상태를 읽도록 마지막 이벤트 발생
 stat -- "$TARGET_DIR" > /dev/null
 
 echo
-echo "[DONE] GuardFS 정상행위 워크로드 완료"
+echo "[DONE] holdFS 정상행위 워크로드 완료"
 echo "필수 예상 연산:"
 echo "  create, mkdir, rename, rmdir, unlink, write"
 echo "추가 예상 연산:"

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-TARGET="$HOME/guardfs_benign_dataset"
+TARGET="$HOME/holdfs_benign_dataset"
 mkdir -p "$TARGET"
 
 echo "normal document" > "$TARGET/original.txt"

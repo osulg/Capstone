@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# run_sample.sh — 악성 샘플 1개를 GuardFS(FUSE+eBPF)로 수집
+# run_sample.sh — 악성 샘플 1개를 holdFS(FUSE+eBPF)로 수집
 #
 # collect_one.sh를 감싸서 다음을 자동 처리한다.
 #   - ~/malware/<FAMILY>/ 에서 샘플 찾기 (SHA8 앞자리로 지정 가능)
@@ -33,8 +33,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MALWARE_BASE="${MALWARE_BASE:-$HOME/malware}"
-TARGET="$HOME/guardfs_runtime/mount/attack_target"
-COLLECT_DIR="$HOME/guardfs_runtime/collect"
+TARGET="$HOME/holdfs_runtime/mount/attack_target"
+COLLECT_DIR="$HOME/holdfs_runtime/collect"
 COLLECT_ONE="$SCRIPT_DIR/collect_one.sh"
 
 die() { echo "[run_sample] ERROR: $*" >&2; exit 1; }
@@ -154,7 +154,7 @@ case "$FAMILY" in
         ARGS=( --directory "$TARGET" ) ;;
     # --- Akira(akira_v2): --path <경로> --id <Build ID 필수> --ep <percent> ---
     Akira)
-        ARGS=( --path "$TARGET" --id "guardfs" --ep 50 ) ;;
+        ARGS=( --path "$TARGET" --id "holdfs" --ep 50 ) ;;
     # --- BlackCat 계열: access-token 필요 ---
     BlackCat|blackcat)
         ARGS=( --access-token "ANY_TOKEN" -p "$TARGET" --verbose ) ;;
@@ -211,5 +211,5 @@ RC=$?
 echo ""
 echo "[run_sample] run_id=$RID 종료. 결과 요약은 위 'collect_one' 출력을 확인하세요."
 echo "[run_sample] 성공(파일 변경 감지됨)이면 → 스냅샷 복원 후 다음 샘플."
-echo "[run_sample] 실패면 로그 정리: sudo rm -f $COLLECT_DIR/${RID}.* $HOME/guardfs_runtime/hashes/${RID}_*"
+echo "[run_sample] 실패면 로그 정리: sudo rm -f $COLLECT_DIR/${RID}.* $HOME/holdfs_runtime/hashes/${RID}_*"
 exit $RC

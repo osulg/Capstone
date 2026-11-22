@@ -2,11 +2,11 @@
 # ============================================================
 # run_scenarios.sh — 공개 침해사고 4종 파일연산 모의 재현을 순차 실행
 #
-# 전제: GuardFS 가 이미 detection 모드로 떠 있고 마운트가 완료돼 있어야 한다.
-#   (별도 터미널에서)  bash scripts/run_guardfs.sh
+# 전제: holdFS 가 이미 detection 모드로 떠 있고 마운트가 완료돼 있어야 한다.
+#   (별도 터미널에서)  bash scripts/run_holdfs.sh
 #   또는 대시보드까지   bash dashboard/run_all.sh
 #
-# 이 스크립트는 GuardFS 를 띄우지 않는다. 마운트 안에 시나리오별 전용 폴더를
+# 이 스크립트는 holdFS 를 띄우지 않는다. 마운트 안에 시나리오별 전용 폴더를
 # 만들어 각 시뮬레이터를 순서대로 실행한다. 각 시나리오의 작업 폴더 이름에
 # 시나리오 슬러그(icefire/darkradiation/huntress/akira)가 들어가므로, 대시보드
 # '이벤트' 탭의 Target 경로로 어느 시나리오인지 구분할 수 있다.
@@ -14,16 +14,16 @@
 # 사용법:
 #   bash scripts/run_scenarios.sh                 # 4종 전부 (기본값)
 #   bash scripts/run_scenarios.sh icefire akira   # 선택 실행
-#   MOUNT=~/guardfs_runtime/mount bash scripts/run_scenarios.sh
+#   MOUNT=~/holdfs_runtime/mount bash scripts/run_scenarios.sh
 #   GAP=5 bash scripts/run_scenarios.sh           # 시나리오 간 간격(초)
 #
 # 환경변수:
-#   MOUNT (기본 ~/guardfs_runtime/mount), GAP (기본 3), KEEP (기본 1 → --keep 전달)
+#   MOUNT (기본 ~/holdfs_runtime/mount), GAP (기본 3), KEEP (기본 1 → --keep 전달)
 # ============================================================
 set -uo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MOUNT="${MOUNT:-$HOME/guardfs_runtime/mount}"
+MOUNT="${MOUNT:-$HOME/holdfs_runtime/mount}"
 GAP="${GAP:-3}"
 KEEP="${KEEP:-1}"
 SIM_DIR="$PROJECT_ROOT/experiments/simulators"
@@ -36,7 +36,7 @@ say() { echo ""; echo "=========================================================
 
 if ! mountpoint -q "$MOUNT"; then
     echo "[ERROR] 마운트가 아닙니다: $MOUNT"
-    echo "        먼저 GuardFS 를 실행하세요:  bash scripts/run_guardfs.sh"
+    echo "        먼저 holdFS 를 실행하세요:  bash scripts/run_holdfs.sh"
     exit 1
 fi
 
@@ -87,4 +87,4 @@ for s in "${SCENARIOS[@]}"; do
     sleep "$GAP"
 done
 
-say "완료 — 대시보드(이벤트/파일 상태 탭)와 GuardFS 로그에서 결과를 확인하세요."
+say "완료 — 대시보드(이벤트/파일 상태 탭)와 holdFS 로그에서 결과를 확인하세요."

@@ -737,8 +737,8 @@
   const files = { data: null, selected: {}, preview: {}, previewKey: {} };
   // 비어 있을 때 안내할 시뮬레이터 실행 경로 (보호 폴더는 마운트를 거쳐야 HoldFS가 개입한다)
   const SIM_TARGET = {
-    protected: '~/guardfs_runtime/mount/sim_target',
-    unprotected: '~/guardfs_demo/unprotected/sim_target',
+    protected: '~/holdfs_runtime/mount/sim_target',
+    unprotected: '~/holdfs_demo/unprotected/sim_target',
   };
   const fmtSize = (b) => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : b >= 1024 ? (b / 1024).toFixed(1) + ' KB' : b + ' B';
   const hhmmss = (d) => [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');

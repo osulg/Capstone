@@ -13,7 +13,7 @@ import time
 from pathlib import PurePath
 from typing import Dict, List, Tuple
 
-from guardfs.common.config import (
+from holdfs.common.config import (
     EXT_CHANGE_THRESHOLD,
     EXT_CHANGE_WINDOW_SEC,
 )
@@ -21,7 +21,7 @@ from guardfs.common.config import (
 # 랜섬웨어 및 악성코드에서 자주 관찰되는 확장자
 #
 # 주의: 이 집합은 Stage 1 ExtChangeDetector(즉시 탐지)만 사용한다. Stage 2 동적
-# ML 피처의 확장자 변경 판정은 guardfs/common/ext_rule.py 가 전담하며 이 집합을
+# ML 피처의 확장자 변경 판정은 holdfs/common/ext_rule.py 가 전담하며 이 집합을
 # 참조하지 않으므로, 여기에 확장자를 추가해도 학습 모델/피처 스키마에는 영향이 없다.
 SUSPICIOUS_EXTENSIONS = {
     ".locked",

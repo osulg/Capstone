@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-고엔트로피 쓰기 부하 시뮬레이터 (GuardFS 탐지 테스트용).
+고엔트로피 쓰기 부하 시뮬레이터 (holdFS 탐지 테스트용).
 
 실제 랜섬웨어가 아니다. 암호화·키 관리·랜섬노트가 없고, 이 스크립트가 직접
 만든 테스트 파일(대상 폴더 아래 sim_hi_<시각> 하위 폴더)에만 난수를 쓴다.
@@ -21,15 +21,15 @@
 총 쓰기량이 학습 분포를 크게 벗어나 점수가 오히려 낮아질 수 있다.
 
 테스트 방법 (Linux/Ubuntu, 터미널 두 개 사용):
-  1) 터미널 A에서 GuardFS를 detection 모드로 실행하고 mount 성공을 확인한다.
-     이미 실행 중이면 기존 GuardFS 터미널에서 로그를 확인한다.
+  1) 터미널 A에서 holdFS를 detection 모드로 실행하고 mount 성공을 확인한다.
+     이미 실행 중이면 기존 holdFS 터미널에서 로그를 확인한다.
        cd ~/Capstone
-       bash scripts/run_guardfs.sh
+       bash scripts/run_holdfs.sh
   2) 터미널 B에서 가상환경과 mount 상태를 확인한 뒤 실행한다.
        cd ~/Capstone
        source venv/bin/activate
-       mountpoint ~/guardfs_runtime/mount
-       python3 experiments/simulators/sim_highentropy.py ~/guardfs_runtime/mount/sim_target --prepare-timeout 60 --keep
+       mountpoint ~/holdfs_runtime/mount
+       python3 experiments/simulators/sim_highentropy.py ~/holdfs_runtime/mount/sim_target --prepare-timeout 60 --keep
 
 확인 기준:
   - 준비 PID와 공개 확인 PID가 출력되고, '준비 완료' 다음에 공격 PID가
@@ -37,7 +37,7 @@
   - 공격 시작 후 터미널 A에서 해당 공격 PID의 상태와 탐지 사유를 확인한다.
     [STATE]/[TRIGGER HIGH]의 HIGH 전환 및 suspend 로그를 대조한다.
   - HIGH 정책의 SIGSTOP으로 셸에 'Stopped'가 표시될 수 있다. 정지는 종료가
-    아니며, 이 메시지만으로 GuardFS 탐지 성공을 단정하지 않는다.
+    아니며, 이 메시지만으로 holdFS 탐지 성공을 단정하지 않는다.
   - ENOENT 등 파일 오류는 상태/이벤트 로그와 함께 원인을 확인한다.
   - --keep 사용 시 출력된 전용 작업 폴더에 실험 파일을 남겨 상태를 확인한다.
 
@@ -53,12 +53,12 @@ import signal
 import sys
 import time
 
-PLAINTEXT_LINE = b"This is a plain text test document for GuardFS simulation.\n"
+PLAINTEXT_LINE = b"This is a plain text test document for holdFS simulation.\n"
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="고엔트로피 쓰기 부하 시뮬레이터")
-    p.add_argument("target", help="GuardFS 마운트 안의 대상 폴더 (없으면 생성)")
+    p.add_argument("target", help="holdFS 마운트 안의 대상 폴더 (없으면 생성)")
     p.add_argument("--web-action", choices=("prepare", "verify", "attack", "inspect"))
     p.add_argument("--files", type=int, default=20, help="테스트 파일 개수")
     p.add_argument("--size-kb", type=int, default=64, help="파일당 크기(KB)")
@@ -302,7 +302,7 @@ def main():
     paths = [os.path.join(workdir, f"file_{i:03d}.txt") for i in range(args.files)]
     print(
         f"[SIM] 공격 역할 PID={os.getpid()} 시작 (duration={args.duration}s). "
-        f"GuardFS 로그를 확인하세요."
+        f"holdFS 로그를 확인하세요."
     )
 
     start = time.time()
@@ -331,7 +331,7 @@ def main():
     except OSError as e:
         # ENOENT 등은 보호 차단만으로 설명되지 않으므로 결과를 단정하지 않는다.
         print(
-            f"[SIM] 파일 연산 실패: {e} -> 차단 여부는 GuardFS 상태/이벤트 로그로 확인하세요."
+            f"[SIM] 파일 연산 실패: {e} -> 차단 여부는 holdFS 상태/이벤트 로그로 확인하세요."
         )
         rc = 3
     finally:

@@ -22,12 +22,12 @@ sys.path.insert(
 import pyfuse3
 import trio
 
-from guardfs.collect.fuse_logger import (
+from holdfs.collect.fuse_logger import (
     RUN_ID_PATTERN,
     FuseCollectLogger,
     new_run_id,
 )
-from guardfs.common.config import (
+from holdfs.common.config import (
     DYNAMIC_EXT_RULE,
     ENTROPY_MAX_EVENT_SAMPLE_SIZE,
     ENTROPY_THRESHOLD,
@@ -44,8 +44,8 @@ from guardfs.common.config import (
     STATS_WRITE_THRESHOLD,
     TRUSTED_EXE_PREFIXES,
 )
-from guardfs.common.ext_rule import ext_of, is_ext_change
-from guardfs.common.paths import (
+from holdfs.common.ext_rule import ext_of, is_ext_change
+from holdfs.common.paths import (
     PID_OVERRIDE_FILE,
     STAGING_DIR,
     get_collect_log_dir,
@@ -53,11 +53,11 @@ from guardfs.common.paths import (
     get_forced_state_path,
     get_honeypot_dir,
 )
-from guardfs.stage1.detector import Stage1Detector
-from guardfs.stage1.logger import EventLogger
-from guardfs.stage1.trust import _get_parent_pid, _get_start_time, is_trusted_pid
-from guardfs.stage2.stage2_worker import stage2_worker
-from guardfs.stage2.states import ProcState
+from holdfs.stage1.detector import Stage1Detector
+from holdfs.stage1.logger import EventLogger
+from holdfs.stage1.trust import _get_parent_pid, _get_start_time, is_trusted_pid
+from holdfs.stage2.stage2_worker import stage2_worker
+from holdfs.stage2.states import ProcState
 
 
 def _resolve_trust_target(pid: int) -> str:
@@ -410,7 +410,7 @@ class Passthrough(pyfuse3.Operations):
         """
         신뢰 writer의 집계 대상 '부모(lineage) PID'를 반환한다. 제외 대상이면 None.
 
-        제외: ppid 없음/0/1(init), GuardFS 자신. (PID 재사용 방지를 위해
+        제외: ppid 없음/0/1(init), holdFS 자신. (PID 재사용 방지를 위해
         (pid, starttime) 조합으로 캐싱.)
         """
         start = _get_start_time(pid)
@@ -626,7 +626,7 @@ class Passthrough(pyfuse3.Operations):
         respect_forced: bool = False,
         expected_forced: ProcState | None = None,
     ) -> bool:
-        """PID의 GuardFS 상태를 변경하고 상태 변경 성공 여부를 반환한다."""
+        """PID의 holdFS 상태를 변경하고 상태 변경 성공 여부를 반환한다."""
 
         async with self._pid_lock:
             if (
@@ -672,7 +672,7 @@ class Passthrough(pyfuse3.Operations):
         if not changed:
             return
         print(f"[TRIGGER HIGH] pid={pid} reason={reason}")
-        from guardfs.stage2.policy.high import handle_high_enter, suspend_process_once
+        from holdfs.stage2.policy.high import handle_high_enter, suspend_process_once
 
         await handle_high_enter(pid, self, reason)
 
@@ -915,7 +915,7 @@ class Passthrough(pyfuse3.Operations):
         print(f"[HONEYPOT] pid={pid} op={op} blocked path={path}")
 
     def _defer_truncate(self, pid, path, size, target_fd):
-        from guardfs.stage2.policy.medium import _retain_buffer_fd
+        from holdfs.stage2.policy.medium import _retain_buffer_fd
 
         held_fd = _retain_buffer_fd(pid, target_fd, self)
         self._write_buffer[pid].append((held_fd, size, None, path))
@@ -1190,7 +1190,7 @@ class Passthrough(pyfuse3.Operations):
         state = await self._resolve_effective_state(pid)
 
         if state == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_create_high
+            from holdfs.stage2.policy.high import handle_create_high
 
             await handle_create_high(
                 path=path,
@@ -1318,7 +1318,7 @@ class Passthrough(pyfuse3.Operations):
         state = await self._resolve_effective_state(pid)
 
         if state == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_mkdir_high
+            from holdfs.stage2.policy.high import handle_mkdir_high
 
             await handle_mkdir_high(
                 path=path,
@@ -1330,7 +1330,7 @@ class Passthrough(pyfuse3.Operations):
 
         try:
             if state == ProcState.MEDIUM:
-                from guardfs.stage2.policy.medium import handle_mkdir_medium
+                from holdfs.stage2.policy.medium import handle_mkdir_medium
 
                 await handle_mkdir_medium(path, mode, pid, self)
             else:
@@ -1367,7 +1367,7 @@ class Passthrough(pyfuse3.Operations):
         state = await self._resolve_effective_state(pid)
 
         if state == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_rmdir_high
+            from holdfs.stage2.policy.high import handle_rmdir_high
 
             await handle_rmdir_high(
                 path=path,
@@ -1379,7 +1379,7 @@ class Passthrough(pyfuse3.Operations):
 
         try:
             if state == ProcState.MEDIUM:
-                from guardfs.stage2.policy.medium import handle_rmdir_medium
+                from holdfs.stage2.policy.medium import handle_rmdir_medium
 
                 await handle_rmdir_medium(path, pid, self)
             else:
@@ -1481,7 +1481,7 @@ class Passthrough(pyfuse3.Operations):
 
         # O_TRUNC는 os.open() 순간 원본 파일을 비우므로 사전 차단
         if state == ProcState.HIGH and flags & os.O_TRUNC:
-            from guardfs.stage2.policy.high import (
+            from holdfs.stage2.policy.high import (
                 handle_open_trunc_high,
             )
 
@@ -1760,12 +1760,12 @@ class Passthrough(pyfuse3.Operations):
         print(f"[WRITE] pid={pid} state={state} path={path}")
 
         if state == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_write_high
+            from holdfs.stage2.policy.high import handle_write_high
 
             return await handle_write_high(fd, off, buf, path, pid, self)
 
         elif state == ProcState.MEDIUM or fd in self._staging_origin_fd:
-            from guardfs.stage2.policy.medium import handle_write_medium
+            from holdfs.stage2.policy.medium import handle_write_medium
 
             try:
                 return await handle_write_medium(fd, off, buf, path, pid, self)
@@ -1773,7 +1773,7 @@ class Passthrough(pyfuse3.Operations):
                 raise pyfuse3.FUSEError(e.errno) from e
 
         else:
-            from guardfs.stage2.policy.low import handle_write_low
+            from holdfs.stage2.policy.low import handle_write_low
 
             return await handle_write_low(fd, off, buf, path, pid, self)
 
@@ -1814,7 +1814,7 @@ class Passthrough(pyfuse3.Operations):
         state = await self._resolve_effective_state(pid)
 
         if state == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_setattr_high
+            from holdfs.stage2.policy.high import handle_setattr_high
 
             if fields.update_mode:
                 await handle_setattr_high(
@@ -1829,7 +1829,7 @@ class Passthrough(pyfuse3.Operations):
         entry = self._pending_staging(inode, ctx)
 
         if entry is None and state == ProcState.MEDIUM:
-            from guardfs.stage2.policy.medium import handle_setattr_medium
+            from holdfs.stage2.policy.medium import handle_setattr_medium
 
             await handle_setattr_medium(path, pid, fields, attr, self)
 
@@ -1933,7 +1933,7 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         if state == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_truncate_high
+            from holdfs.stage2.policy.high import handle_truncate_high
 
             await handle_truncate_high(path, size, pid, self)
             return
@@ -2019,7 +2019,7 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         if state == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_truncate_high
+            from holdfs.stage2.policy.high import handle_truncate_high
 
             await handle_truncate_high(path, size, pid, self)
             return
@@ -2064,13 +2064,13 @@ class Passthrough(pyfuse3.Operations):
         state = await self._resolve_effective_state(pid)
 
         if state == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_unlink_high
+            from holdfs.stage2.policy.high import handle_unlink_high
 
             await handle_unlink_high(path, pid, self)
             return
 
         if state == ProcState.MEDIUM:
-            from guardfs.stage2.policy.medium import handle_unlink_medium
+            from holdfs.stage2.policy.medium import handle_unlink_medium
 
             try:
                 await handle_unlink_medium(path, pid, self)
@@ -2124,7 +2124,7 @@ class Passthrough(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EACCES)
 
         if await self.get_proc_state(pid) == ProcState.HIGH:
-            from guardfs.stage2.policy.high import handle_rename_high
+            from holdfs.stage2.policy.high import handle_rename_high
 
             await handle_rename_high(old_path, new_path, pid, self)
             # 실제 rename을 차단했으므로 커널에도 실패를 전달한다.
@@ -2368,7 +2368,7 @@ class PidStats:
     값이어야 한다(그래야 학습 분포와 추론 분포가 일치). 아래 로직은
     compute_features 를 증분(incremental) 방식으로 그대로 옮긴 것이다.
 
-    확장자 변경 rename 판정은 compute_features 와 같은 guardfs/common/ext_rule.py 를
+    확장자 변경 rename 판정은 compute_features 와 같은 holdfs/common/ext_rule.py 를
     쓰며, 규칙(v5/v6)은 config.DYNAMIC_EXT_RULE 로 모델과 짝을 맞춘다.
 
     다른 점(의도적 제외):
@@ -2568,7 +2568,7 @@ def _run_id_arg(value: str) -> str:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="GuardFS FUSE passthrough")
+    parser = argparse.ArgumentParser(description="holdFS FUSE passthrough")
     parser.add_argument("mountpoint")
     parser.add_argument("underlay")
     parser.add_argument(

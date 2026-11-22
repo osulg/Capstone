@@ -2,7 +2,7 @@
 
 ## 왜 v5인가
 
-런타임(GuardFS 탐지 모드)은 **FUSE 이벤트만** 보고, Stage2는 **PID 단위**로
+런타임(holdFS 탐지 모드)은 **FUSE 이벤트만** 보고, Stage2는 **PID 단위**로
 점수를 매긴다. 기존 v4(`dataset_v4`)는 **eBPF+FUSE 합본을 run 단위**로 집계해
 학습했기 때문에, 런타임 입력과 분포가 어긋났다:
 
@@ -30,12 +30,12 @@ v5는 런타임이 실제로 보는 신호에 맞춘다. **재수집은 하지 �
   서브트리는 `<run_id>.ebpf.meta.json` 의 `root_pid` + `<run_id>.ebpf.jsonl`
   의 (pid,ppid) lineage 로 계산. (prep PID는 유용한 정상 샘플이 된다.)
 
-## VM에서 실행 (GuardFS venv — 배포 때와 같은 sklearn)
+## VM에서 실행 (holdFS venv — 배포 때와 같은 sklearn)
 
 피처 추출은 이미 끝나 `dataset_v5/features_perpid.csv` 로 커밋돼 있다
 (클라우드에서 전체 286 run의 원시 로그로 추출·검증 완료). 성능 수치는
 `RESULTS.md` 참고. **VM에서는 모델 pkl만 그 CSV로 학습**하면 된다 — 원시 로그
-불필요. pkl은 반드시 GuardFS venv(배포 sklearn)에서 만들어야 런타임 로드시
+불필요. pkl은 반드시 holdFS venv(배포 sklearn)에서 만들어야 런타임 로드시
 깨지지 않는다.
 
 ```bash
@@ -61,9 +61,9 @@ python3 models/dynamic/collect/train_v5.py \
 
 ```bash
 # detection 모드 재기동 후 (venv), sim_entropy 로 스크립트형 랜섬웨어 차단 확인
-python3 guardfs/fuse_fs/passthrough.py ~/guardfs_runtime/mount ~/guardfs_runtime/underlay
+python3 holdfs/fuse_fs/passthrough.py ~/holdfs_runtime/mount ~/holdfs_runtime/underlay
 # 다른 터미널:
-python3 experiments/simulators/sim_entropy.py ~/guardfs_runtime/mount/victim.txt
+python3 experiments/simulators/sim_entropy.py ~/holdfs_runtime/mount/victim.txt
 # 기대: [STAGE2] ... dyn 높음 → dyn_only 로 HIGH 격상 → 차단
 # 정상 작업(cp/tar/gzip/git)에서 HIGH 안 뜨는지도 함께 확인(오탐 점검)
 ```
@@ -74,4 +74,4 @@ python3 experiments/simulators/sim_entropy.py ~/guardfs_runtime/mount/victim.txt
 를 v2로 되돌리면 된다(v2 모델 파일은 그대로 보존).
 ## 모델 파일 환경
 
-`rf_model_v5.pkl` 은 scikit-learn 1.3.2, Python 3.12.3 (GuardFS venv)에서 학습했다. 다른 버전에서는 predict_proba 가 깨질 수 있다.
+`rf_model_v5.pkl` 은 scikit-learn 1.3.2, Python 3.12.3 (holdFS venv)에서 학습했다. 다른 버전에서는 predict_proba 가 깨질 수 있다.

@@ -3,7 +3,7 @@
 set -e
 
 echo "========================================"
-echo " GuardFS Simple Test"
+echo " holdFS Simple Test"
 echo "========================================"
 
 # ----------------------------------------
@@ -14,7 +14,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 VENV_DIR="$PROJECT_ROOT/venv"
 
-RUNTIME_DIR="$HOME/guardfs_runtime"
+RUNTIME_DIR="$HOME/holdfs_runtime"
 MOUNT_DIR="$RUNTIME_DIR/mount"
 UNDERLAY_DIR="$RUNTIME_DIR/underlay"
 
@@ -36,17 +36,17 @@ echo "[OK] Virtual environment activated"
 
 
 # ----------------------------------------
-# 3. GuardFS 마운트 확인
+# 3. holdFS 마운트 확인
 # ----------------------------------------
 
 if ! mountpoint -q "$MOUNT_DIR"; then
-    echo "[ERROR] GuardFS가 실행 중이 아닙니다."
+    echo "[ERROR] holdFS가 실행 중이 아닙니다."
     echo "먼저 실행하세요:"
-    echo "  ./scripts/run_guardfs.sh"
+    echo "  ./scripts/run_holdfs.sh"
     exit 1
 fi
 
-echo "[OK] GuardFS mounted"
+echo "[OK] holdFS mounted"
 
 
 # ----------------------------------------
@@ -77,7 +77,7 @@ echo "[OK] Previous test files cleaned"
 echo ""
 echo "[TEST 1] CREATE + WRITE"
 
-echo "GuardFS simple test" > "$TEST_FILE"
+echo "holdFS simple test" > "$TEST_FILE"
 
 sleep 0.2
 
@@ -98,7 +98,7 @@ echo "[TEST 2] READ"
 
 CONTENT=$(cat "$TEST_FILE")
 
-if [ "$CONTENT" = "GuardFS simple test" ]; then
+if [ "$CONTENT" = "holdFS simple test" ]; then
     echo "[PASS] READ"
 else
     echo "[FAIL] READ"
@@ -157,7 +157,7 @@ HONEYPOT_FILE="$MOUNT_DIR/honeypot/decoy.txt"
 # FUSE의 mkdir을 사용하지 않고 underlay에서 직접 준비
 mkdir -p "$HONEYPOT_UNDERLAY"
 
-echo "GuardFS Honeypot Decoy" \
+echo "holdFS Honeypot Decoy" \
     > "$HONEYPOT_UNDERLAY/decoy.txt"
 
 echo "[INFO] Accessing honeypot..."
@@ -176,7 +176,7 @@ echo "[OK] Honeypot access generated"
 
 echo ""
 echo "========================================"
-echo " GuardFS Simple Test Finished"
+echo " holdFS Simple Test Finished"
 echo "========================================"
 
 echo ""
@@ -187,4 +187,4 @@ echo "  RENAME"
 echo "  UNLINK"
 echo "  HONEYPOT"
 echo ""
-echo "GuardFS 터미널에서 HoneypotDetector 로그를 확인하세요."
+echo "holdFS 터미널에서 HoneypotDetector 로그를 확인하세요."

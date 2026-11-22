@@ -1,6 +1,6 @@
 from pathlib import Path
 
-target = Path.home() / "guardfs_benign_read"
+target = Path.home() / "holdfs_benign_read"
 
 for path in sorted(target.glob("*.txt")):
     with open(path, "r", encoding="utf-8") as f:

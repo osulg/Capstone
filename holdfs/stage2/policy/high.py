@@ -2,7 +2,7 @@ import os
 import signal
 import time
 
-from guardfs.common.paths import FILESECURITY_LOG_PATH
+from holdfs.common.paths import FILESECURITY_LOG_PATH
 
 
 def get_process_name(pid: int) -> str:
@@ -186,7 +186,7 @@ async def handle_high_enter(pid: int, ops, reason: str = "") -> None:
     격상 등)이라 정리 로직을 여기 한 곳(medium.drop_buffers)으로 모아서
     중복·누락 없이 항상 같은 방식으로 정리되게 한다.
     """
-    from guardfs.stage2.policy.medium import drop_buffers
+    from holdfs.stage2.policy.medium import drop_buffers
 
     await drop_buffers(pid, ops)
     ops._high_reason[pid] = reason or "High-risk process detected"

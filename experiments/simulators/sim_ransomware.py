@@ -15,7 +15,7 @@ import os
 import time
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-MOUNT    = os.path.expanduser(os.environ.get("MOUNT", "~/guardfs_runtime/mount"))
+MOUNT    = os.path.expanduser(os.environ.get("MOUNT", "~/holdfs_runtime/mount"))
 KEY      = os.urandom(32)   # AES-256 키 (랜섬웨어는 이 키를 C2 서버로 전송)
 IV       = os.urandom(16)
 
@@ -104,5 +104,5 @@ print("  [STAGE1] pid=? op=write path=.../readme.txt reason=EntropyDetector")
 print("  [STAGE1] pid=? op=write path=.../diary.txt  reason=EntropyDetector")
 print()
 print("  로그 파일 확인:")
-print("  cat guardfs_log.jsonl | grep -E 'report|resume|notes|readme|diary'")
+print("  cat holdfs_log.jsonl | grep -E 'report|resume|notes|readme|diary'")
 print("=" * 60)

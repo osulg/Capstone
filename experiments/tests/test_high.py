@@ -5,7 +5,7 @@
 import os
 import time
 
-MOUNT = os.path.expanduser(os.environ.get("MOUNT", "~/guardfs_runtime/mount"))
+MOUNT = os.path.expanduser(os.environ.get("MOUNT", "~/holdfs_runtime/mount"))
 
 print(f"[HIGH-SIM] pid={os.getpid()} 랜섬웨어 행동 시뮬레이션")
 

@@ -8,7 +8,7 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 
-BASE = Path("/mnt/guardfs_logs")
+BASE = Path("/mnt/holdfs_logs")
 MANIFEST = BASE / "attack_manifest_1st.csv"
 STATE = BASE / "collection_state.csv"
 CURRENT = BASE / "tools" / "current_sample.json"
@@ -290,7 +290,7 @@ def prepare_row(row):
         p = DOCS / f"file_{i:02d}.{ext}"
         p.write_bytes(
             (
-                f"GuardFS benign test file\n"
+                f"holdFS benign test file\n"
                 f"index={i}\n"
                 f"extension={ext}\n"
                 f"sample={row['Sample_ID']}\n"
@@ -367,9 +367,9 @@ def start_collector():
     cmd = [
         "sudo",
         "env",
-        f"GUARDFS_TARGET_DIR={TARGET}/",
-        f"GUARDFS_ROOT_EXE={row['Root_EXE']}",
-        f"GUARDFS_LOG_FILE={row['Raw_JSONL']}",
+        f"HOLDFS_TARGET_DIR={TARGET}/",
+        f"HOLDFS_ROOT_EXE={row['Root_EXE']}",
+        f"HOLDFS_LOG_FILE={row['Raw_JSONL']}",
         "timeout",
         "90s",
         "/usr/bin/python3",
@@ -558,7 +558,7 @@ def main():
     while True:
         print()
         print("================================")
-        print(" GuardFS v2 Attack Collector")
+        print(" holdFS v2 Attack Collector")
         print("================================")
         print("1. 다음 PENDING 샘플 준비")
         print("2. Family 선택해서 샘플 준비")

@@ -20,18 +20,18 @@ Akira는 head·tail 모드를 제공한다. DarkRadiation은 웹 시연에서 �
 
 ## 기존 정상 파일 연산 회귀 검증
 
-Run on Linux from the repository root after starting GuardFS:
+Run on Linux from the repository root after starting holdFS:
 
 ```bash
 python3 -m scenarios.s01_normal
 ```
 
-If multiple GuardFS processes exist, specify the process serving this mount:
+If multiple holdFS processes exist, specify the process serving this mount:
 
 ```bash
-python3 -m scenarios.s01_normal --guardfs-pid <PID> \
-  --mount "$HOME/guardfs_runtime/mount" \
-  --underlay "$HOME/guardfs_runtime/underlay"
+python3 -m scenarios.s01_normal --holdfs-pid <PID> \
+  --mount "$HOME/holdfs_runtime/mount" \
+  --underlay "$HOME/holdfs_runtime/underlay"
 ```
 
 The scenario runs CREATE, WRITE, READ, MKDIR, RENAME, READ_AFTER_RENAME,
@@ -47,10 +47,10 @@ python3 -m scenarios.s01_normal > /tmp/s01-result.json
 ```
 
 Exit code: 0 for verified file operations, 1 for failure. The report includes
-the test PID, GuardFS PID, run ID, per-step results and content SHA-256.
+the test PID, holdFS PID, run ID, per-step results and content SHA-256.
 `passed` refers to file operations only: LOW state and absence of false
 positives are **not yet verified** (`detection_verification: not_checked`).
 No state overrides or detection thresholds are changed. The supplied underlay
-must correspond to the mounted GuardFS instance; specify the correct PID when
+must correspond to the mounted holdFS instance; specify the correct PID when
 auto-discovery is ambiguous. The caller should impose a process timeout when
 integrating with the web runner, since an unresponsive FUSE call can block.

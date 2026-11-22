@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from guardfs.common.paths import (
+from holdfs.common.paths import (
     FILESECURITY_LOG_PATH,
     get_event_log_path,
 )

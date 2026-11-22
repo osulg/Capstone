@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-GuardFS는 FUSE 기반 랜섬웨어 탐지 및 보호 시스템이다.
+holdFS는 FUSE 기반 랜섬웨어 탐지 및 보호 시스템이다.
 
 주요 구성은 다음과 같다.
 
@@ -13,14 +13,14 @@ GuardFS는 FUSE 기반 랜섬웨어 탐지 및 보호 시스템이다.
 - Stage 2 ML 기반 탐지
 - LOW / SUSPICIOUS / MEDIUM / HIGH 프로세스 상태
 
-GuardFS는 underlay 디렉터리를 FUSE mountpoint를 통해 노출한다.
+holdFS는 underlay 디렉터리를 FUSE mountpoint를 통해 노출한다.
 
 일반적인 런타임 경로:
 
-- mount: `~/guardfs_runtime/mount`
-- underlay: `~/guardfs_runtime/underlay`
+- mount: `~/holdfs_runtime/mount`
+- underlay: `~/holdfs_runtime/underlay`
 
-GuardFS 정책이 명시적으로 차단하거나 staging 처리하지 않는 한,
+holdFS 정책이 명시적으로 차단하거나 staging 처리하지 않는 한,
 mount 디렉터리에서 수행한 정상 파일 연산은 underlay에 올바르게 반영되어야 한다.
 
 
@@ -29,7 +29,7 @@ mount 디렉터리에서 수행한 정상 파일 연산은 underlay에 올바르
 중요한 디렉터리와 파일:
 
 ```text
-guardfs/
+holdfs/
 ├── common/
 │   ├── config.py
 │   └── paths.py
@@ -58,18 +58,18 @@ guardfs/
 핵심 FUSE 구현 파일:
 
 ```text
-guardfs/fuse_fs/passthrough.py
+holdfs/fuse_fs/passthrough.py
 ```
 
 
 ## 공통 설정 관리 규칙
 
-`passthrough.py`에 GuardFS 설정값을 새로 하드코딩하지 않는다.
+`passthrough.py`에 holdFS 설정값을 새로 하드코딩하지 않는다.
 
 공통 설정값은 다음 파일을 사용한다.
 
 ```text
-guardfs/common/config.py
+holdfs/common/config.py
 ```
 
 예:
@@ -86,14 +86,14 @@ guardfs/common/config.py
 공통 경로는 다음 파일을 사용한다.
 
 ```text
-guardfs/common/paths.py
+holdfs/common/paths.py
 ```
 
 예:
 
 - 모델 경로
 - staging 디렉터리
-- GuardFS 이벤트 로그 경로
+- holdFS 이벤트 로그 경로
 - 강제 상태 파일 경로
 - honeypot 디렉터리
 
@@ -114,7 +114,7 @@ ent = shannon_entropy(buf[:ENTROPY_HEADER_SIZE])
 잘못된 예:
 
 ```python
-staging_dir = "/tmp/guardfs_staging"
+staging_dir = "/tmp/holdfs_staging"
 ```
 
 권장:
@@ -129,7 +129,7 @@ staging_dir = STAGING_DIR
 프로세스 상태 정의는 다음 파일을 기준으로 한다.
 
 ```text
-guardfs/stage2/states.py
+holdfs/stage2/states.py
 ```
 
 정의된 상태:
@@ -151,7 +151,7 @@ ProcState.HIGH
 
 ## passthrough.py의 역할
 
-`passthrough.py`는 GuardFS의 FUSE 연산 계층이다.
+`passthrough.py`는 holdFS의 FUSE 연산 계층이다.
 
 주요 역할:
 
@@ -239,7 +239,7 @@ directory file handle -> 디렉터리 경로
 이 내부 매핑들도 함께 갱신되어야 하는지 반드시 확인한다.
 
 `os.rename()` 호출이 성공했다고 해서
-GuardFS 내부 상태까지 자동으로 정상화된다고 가정하지 않는다.
+holdFS 내부 상태까지 자동으로 정상화된다고 가정하지 않는다.
 
 
 ## rename 문제 분석 규칙
@@ -270,7 +270,7 @@ rename 구현이 올바르다고 판단하지 않는다.
 2. 실제 underlay 경로에 파일이 존재하는지
 3. rename 또는 삭제 이후 오래된 inode mapping이 남아 있지 않은지
 4. 열린 file handle이 올바르게 처리되는지
-5. unlink 이후 GuardFS 프로세스가 계속 살아있는지
+5. unlink 이후 holdFS 프로세스가 계속 살아있는지
 
 다음 메시지가 나타난 경우:
 
@@ -280,7 +280,7 @@ Transport endpoint is not connected
 
 이 메시지 자체를 근본 원인으로 판단하지 않는다.
 
-먼저 GuardFS 실행 터미널의 traceback을 확인한다.
+먼저 holdFS 실행 터미널의 traceback을 확인한다.
 
 이 메시지는 FUSE userspace 프로세스가 먼저 종료된 이후
 클라이언트 측에서 후속으로 나타날 수 있다.
@@ -417,23 +417,23 @@ HIGH 상태의 보호 기능을 약화시키지 않는다.
 `passthrough.py`를 수정하기 전에 다음 파일을 확인한다.
 
 ```text
-guardfs/fuse_fs/passthrough.py
-guardfs/common/config.py
-guardfs/common/paths.py
-guardfs/stage2/states.py
-guardfs/stage2/stage2_worker.py
-guardfs/stage2/policy/low.py
-guardfs/stage2/policy/medium.py
-guardfs/stage2/policy/high.py
+holdfs/fuse_fs/passthrough.py
+holdfs/common/config.py
+holdfs/common/paths.py
+holdfs/stage2/states.py
+holdfs/stage2/stage2_worker.py
+holdfs/stage2/policy/low.py
+holdfs/stage2/policy/medium.py
+holdfs/stage2/policy/high.py
 ```
 
 문제가 Stage 1 탐지와 관련된 경우 다음도 확인한다.
 
 ```text
-guardfs/stage1/detector.py
-guardfs/stage1/entropy.py
-guardfs/stage1/ext_change.py
-guardfs/stage1/honeypot.py
+holdfs/stage1/detector.py
+holdfs/stage1/entropy.py
+holdfs/stage1/ext_change.py
+holdfs/stage1/honeypot.py
 ```
 
 
@@ -445,7 +445,7 @@ FUSE 문제를 수정할 때 첫 번째로 의심되는 코드부터 바로 수�
 
 1. 어떤 FUSE 연산에서 실패했는지 확인
 2. 마지막으로 정상 수행된 연산 확인
-3. GuardFS traceback 확인
+3. holdFS traceback 확인
 4. path / inode / file handle 상태 추적
 5. 실제 근본 원인 판단
 6. 최소 수정안 작성
@@ -458,10 +458,10 @@ FUSE 문제를 수정할 때 첫 번째로 의심되는 코드부터 바로 수�
 `passthrough.py` 수정 후 최소한 다음 테스트를 수행한다.
 
 ```bash
-MOUNT=~/guardfs_runtime/mount
-UNDERLAY=~/guardfs_runtime/underlay
+MOUNT=~/holdfs_runtime/mount
+UNDERLAY=~/holdfs_runtime/underlay
 
-echo "hello guardfs" > "$MOUNT/test.txt"
+echo "hello holdfs" > "$MOUNT/test.txt"
 
 cat "$MOUNT/test.txt"
 cat "$UNDERLAY/test.txt"
@@ -498,7 +498,7 @@ UNLINK
 RMDIR
 ```
 
-각 연산 이후 GuardFS FUSE 프로세스가 계속 실행 중인지 확인한다.
+각 연산 이후 holdFS FUSE 프로세스가 계속 실행 중인지 확인한다.
 
 
 ## 정적 검사
@@ -506,7 +506,7 @@ RMDIR
 수정을 완료하기 전에 다음 검사를 수행한다.
 
 ```bash
-python -m compileall guardfs
+python -m compileall holdfs
 git diff --check
 ```
 
@@ -521,10 +521,10 @@ git diff --check
 일반적인 실행:
 
 ```bash
-./scripts/run_guardfs.sh
+./scripts/run_holdfs.sh
 ```
 
-첫 번째 터미널에서는 GuardFS를 계속 실행한다.
+첫 번째 터미널에서는 holdFS를 계속 실행한다.
 
 두 번째 터미널에서 mount 경로를 대상으로 파일 연산 테스트를 수행한다.
 
@@ -537,7 +537,7 @@ git diff --check
 2. 변경 범위가 최소이며 설명 가능함
 3. Python compilation 성공
 4. `git diff --check` 성공
-5. GuardFS mount 성공
+5. holdFS mount 성공
 6. 정상 LOW 연산 성공
 7. rename 이후 read 정상
 8. unlink 이후 FUSE 프로세스가 종료되지 않음

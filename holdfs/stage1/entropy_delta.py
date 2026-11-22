@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from guardfs.common.config import (
+from holdfs.common.config import (
     ENTROPY_DELTA_MIN_SAMPLE_SIZE,
     ENTROPY_DELTA_OBSERVE_ONLY,
     ENTROPY_DELTA_SAMPLE_SIZE,

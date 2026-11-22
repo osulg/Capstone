@@ -35,12 +35,12 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from guardfs.stage2.states import ProcState
+from holdfs.stage2.states import ProcState
 
 
 def load_methods(names, namespace):
     tree = ast.parse(
-        (ROOT / "guardfs/fuse_fs/passthrough.py").read_text(encoding="utf-8")
+        (ROOT / "holdfs/fuse_fs/passthrough.py").read_text(encoding="utf-8")
     )
     cls = next(
         n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Passthrough"
@@ -102,7 +102,7 @@ class StateOps:
 
 def worker_helpers(ops):
     tree = ast.parse(
-        (ROOT / "guardfs/stage2/stage2_worker.py").read_text(encoding="utf-8")
+        (ROOT / "holdfs/stage2/stage2_worker.py").read_text(encoding="utf-8")
     )
     worker = next(
         n
@@ -213,7 +213,7 @@ except ModuleNotFoundError:
 )
 class LifecycleTests(unittest.TestCase):
     def scenario(self, action, close_before):
-        from guardfs.stage2.policy import medium
+        from holdfs.stage2.policy import medium
 
         namespace = load_methods(
             {
@@ -340,7 +340,7 @@ class LifecycleTests(unittest.TestCase):
                     await ops.release(live_fh)
                 medium._close_buffer_fds(pid, ops)
 
-        with tempfile.TemporaryDirectory(prefix="guardfs-lifecycle-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="holdfs-lifecycle-") as tmp:
             trio.run(run, Path(tmp))
 
     def test_commit_after_release(self):

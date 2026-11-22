@@ -12,8 +12,8 @@ FUSE 로그가 없으면 엔트로피 관련 피처는 0/비활성으로 남는�
 그대로 쓸 수 있다. 라벨을 못 찾은 run은 label=-1(unknown)로 남겨 감사에 활용한다.
 
 사용:
-  python3 logs_to_csv.py --collect-dir ~/guardfs_runtime/collect \
-      --labels ~/guardfs_runtime/collect/benign_runs.csv \
+  python3 logs_to_csv.py --collect-dir ~/holdfs_runtime/collect \
+      --labels ~/holdfs_runtime/collect/benign_runs.csv \
       --out features.csv
 """
 

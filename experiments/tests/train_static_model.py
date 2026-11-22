@@ -127,7 +127,7 @@ def main():
     # 5) 즉석 sanity check: 정상/악성 각 1개 예측
     print("\n--- sanity check ---")
     sys.path.insert(0, os.path.expanduser("~/Capstone"))
-    from guardfs.stage2.static_analyzer import StaticAnalyzer
+    from holdfs.stage2.static_analyzer import StaticAnalyzer
 
     analyzer = StaticAnalyzer(VOCAB_DST, MODEL_DST)
     p_benign = analyzer._predict(analyzer._extract_path("/bin/ls"))

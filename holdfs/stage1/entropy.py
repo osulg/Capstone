@@ -50,7 +50,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Iterator, Tuple
 
-from guardfs.common.config import (
+from holdfs.common.config import (
     ENTROPY_ACCUMULATION_MAX_LIFETIME_SEC,
     ENTROPY_ACCUMULATION_SIZE,
     ENTROPY_ACCUMULATION_WINDOW_SEC,

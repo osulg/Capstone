@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-고엔트로피 덮어쓰기 + 허니팟 접근 혼합 시뮬레이터 (GuardFS 탐지 테스트용).
+고엔트로피 덮어쓰기 + 허니팟 접근 혼합 시뮬레이터 (holdFS 탐지 테스트용).
 
 실제 랜섬웨어가 아니다. 암호화·키 관리·랜섬노트가 없고, 이 스크립트가 직접
 만든 테스트 파일(대상 폴더 아래 sim_hp_<시각> 하위 폴더)에만 난수를 쓴다.
-허니팟 파일은 읽기/쓰기 "시도"만 하며 GuardFS가 거부하면 그대로 넘어간다.
+허니팟 파일은 읽기/쓰기 "시도"만 하며 holdFS가 거부하면 그대로 넘어간다.
 
 sim_highentropy.py 와 같은 방식으로 파일을 준비·덮어쓰되, 폴더를 훑는 공격처럼
 중간중간 허니팟 디렉터리의 미끼 파일에 접근한다:
@@ -14,14 +14,14 @@ sim_highentropy.py 와 같은 방식으로 파일을 준비·덮어쓰되, 폴�
      --honeypot-every 개마다 미끼 파일 읽기/쓰기를 다시 시도한다.
   4) 대상 파일 쓰기가 거부되면(HIGH 차단) 멈추고, 결과를 요약한다.
 
-사용 (GuardFS를 탐지 모드로 띄운 뒤, 마운트 안의 경로로):
-  python3 experiments/simulators/sim_honeypot_mix.py ~/guardfs_runtime/mount/sim_target --keep
+사용 (holdFS를 탐지 모드로 띄운 뒤, 마운트 안의 경로로):
+  python3 experiments/simulators/sim_honeypot_mix.py ~/holdfs_runtime/mount/sim_target --keep
 
-미끼 파일이 없으면 허니팟 접근은 건너뛴다. 미리 만들어 두려면 (GuardFS를 거치지 않도록 underlay에):
-  mkdir -p ~/guardfs_runtime/underlay/honeypot
-  echo "decoy" > ~/guardfs_runtime/underlay/honeypot/salary_2026.xlsx
+미끼 파일이 없으면 허니팟 접근은 건너뛴다. 미리 만들어 두려면 (holdFS를 거치지 않도록 underlay에):
+  mkdir -p ~/holdfs_runtime/underlay/honeypot
+  echo "decoy" > ~/holdfs_runtime/underlay/honeypot/salary_2026.xlsx
 
-참고: GuardFS가 HIGH로 판정하면 이 프로세스는 SIGSTOP 으로 멈출 수 있다
+참고: holdFS가 HIGH로 판정하면 이 프로세스는 SIGSTOP 으로 멈출 수 있다
       (오류 없이 출력이 멈춘다). Ctrl+Z 후 kill -9 %% 로 정리할 것.
 """
 
@@ -34,12 +34,12 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sim_highentropy import overwrite_with_random, prepare_files  # noqa: E402
 
-DEFAULT_HONEYPOT = os.path.expanduser("~/guardfs_runtime/mount/honeypot")
+DEFAULT_HONEYPOT = os.path.expanduser("~/holdfs_runtime/mount/honeypot")
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="고엔트로피 덮어쓰기 + 허니팟 접근 혼합 시뮬레이터")
-    p.add_argument("target", help="GuardFS 마운트 안의 대상 폴더 (없으면 생성)")
+    p.add_argument("target", help="holdFS 마운트 안의 대상 폴더 (없으면 생성)")
     p.add_argument("--honeypot-dir", default=DEFAULT_HONEYPOT,
                    help=f"마운트 경로 기준 허니팟 폴더 (기본: {DEFAULT_HONEYPOT})")
     p.add_argument("--honeypot-every", type=int, default=5,
@@ -107,9 +107,9 @@ def main():
 
     paths = [os.path.join(workdir, f"file_{i:03d}.txt") for i in range(args.files)]
     stats = {"modified": 0, "hp_attempts": 0, "hp_blocked": 0, "hp_allowed": 0}
-    print(f"[SIM] 공격 역할 PID={os.getpid()} 시작. GuardFS 로그/대시보드를 확인하세요.")
+    print(f"[SIM] 공격 역할 PID={os.getpid()} 시작. holdFS 로그/대시보드를 확인하세요.")
 
-    # 정찰: 허니팟 목록 조회 (readdir 은 GuardFS가 막지 않는다)
+    # 정찰: 허니팟 목록 조회 (readdir 은 holdFS가 막지 않는다)
     try:
         decoys = sorted(n for n in os.listdir(hp_dir) if not n.startswith("."))
         print(f"[SIM] 허니팟 정찰: {hp_dir} → 미끼 파일 {len(decoys)}개")

@@ -22,7 +22,7 @@ from scenarios.common import (
     timestamp,
 )
 from scenarios.lolbin_results import is_attack_permission_denied, validate_attack_denial
-from scenarios.s01_normal import check_health, find_guardfs_pid
+from scenarios.s01_normal import check_health, find_holdfs_pid
 from scenarios.workers import registered_worker
 
 SYSTEM_PYTHON = Path("/usr/bin/python3")
@@ -40,7 +40,7 @@ def parse_args():
     parser.add_argument("--mount", type=Path, default=mount)
     parser.add_argument("--underlay", type=Path, default=underlay)
     parser.add_argument("--work-dir-name", default="s04_" + uuid.uuid4().hex)
-    parser.add_argument("--holdfs-pid", "--guardfs-pid", dest="holdfs_pid", type=int)
+    parser.add_argument("--holdfs-pid", "--holdfs-pid", dest="holdfs_pid", type=int)
     parser.add_argument("--wait-registration-ack", action="store_true")
     args = parser.parse_args()
     if not args.wait_registration_ack:
@@ -201,7 +201,7 @@ def run(args):
         progress("running")
         if sys.platform != "linux":
             raise RuntimeError("Ubuntu에서 실행해야 합니다.")
-        holdfs_pid = args.holdfs_pid or find_guardfs_pid()
+        holdfs_pid = args.holdfs_pid or find_holdfs_pid()
         check_health(mount, holdfs_pid)
         if not underlay.is_dir() or mount.resolve() == underlay:
             raise ValueError("mount·underlay 경로가 올바르지 않습니다.")

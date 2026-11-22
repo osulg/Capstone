@@ -22,10 +22,10 @@ FUSE-only · PID 단위 피처 추출 (동적 모델 v5용).
 
 사용:
   python3 models/dynamic/collect/extract_perpid_fuse.py \
-      --collect-dir ~/guardfs_runtime/collect \
-      --labels ~/guardfs_runtime/collect/benign_runs.csv \
+      --collect-dir ~/holdfs_runtime/collect \
+      --labels ~/holdfs_runtime/collect/benign_runs.csv \
       --labels ~/malware_runs.csv \
-      --ebpf-dir /var/log/guardfs \
+      --ebpf-dir /var/log/holdfs \
       --out models/dynamic/dataset_v5/features_perpid.csv
 """
 import argparse

@@ -44,7 +44,7 @@ class NormalScenarioTests(unittest.TestCase):
                 side_effect=RuntimeError("disconnected"),
             ):
                 result = run(
-                    mount, underlay, guardfs_pid=123, on_progress=progress.append,
+                    mount, underlay, holdfs_pid=123, on_progress=progress.append,
                     on_process=register,
                 )
             self.assertEqual(result["status"], "failed")
@@ -79,7 +79,7 @@ class NormalScenarioTests(unittest.TestCase):
                 "scenarios.s01_normal.Path.resolve", return_value=root / "view" / ".."
             ):
                 result = run(
-                    root, root, guardfs_pid=123, on_step=events.append,
+                    root, root, holdfs_pid=123, on_step=events.append,
                     on_progress=progress.append,
                     on_process=registration,
                 )

@@ -44,7 +44,7 @@ def main():
     ap.add_argument("--out", default="fusion_scores.csv")
     args = ap.parse_args()
 
-    sys.path.insert(0, os.path.join(REPO, "guardfs/stage2"))
+    sys.path.insert(0, os.path.join(REPO, "holdfs/stage2"))
     sys.path.insert(0, os.path.join(REPO, "models/dynamic/collect"))
     from static_analyzer import StaticAnalyzer
     from features import FEATURE_ORDER

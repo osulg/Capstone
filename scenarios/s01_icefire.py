@@ -34,7 +34,7 @@ from scenarios.icefire_config import (
     expected_operations,
 )
 from scenarios.results import validate_result_details
-from scenarios.s01_normal import check_health, find_guardfs_pid
+from scenarios.s01_normal import check_health, find_holdfs_pid
 from scenarios.workers import registered_worker
 
 SCENARIO_ID = "S01"
@@ -88,7 +88,7 @@ def parse_args():
     parser.add_argument("--underlay", type=Path, default=underlay)
     parser.add_argument(
         "--holdfs-pid",
-        "--guardfs-pid",
+        "--holdfs-pid",
         dest="holdfs_pid",
         type=int,
     )
@@ -261,7 +261,7 @@ def run(args):
             raise RuntimeError("Linux에서 실행해야 합니다.")
 
         if holdfs_pid is None:
-            holdfs_pid = find_guardfs_pid()
+            holdfs_pid = find_holdfs_pid()
 
         check_health(mount, holdfs_pid)
 

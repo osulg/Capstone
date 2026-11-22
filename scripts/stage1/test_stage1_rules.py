@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-> GuardFS Stage 1 경량 탐지 규칙 단위·경계·우회 테스트
+> HoldFS Stage 1 경량 탐지 규칙 단위·경계·우회 테스트
 
 1. Shannon entropy 계산의 수학적 정확성
 2. EntropyDetector의 연산 종류, 최소 크기, 임계값 경계
@@ -28,12 +28,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
 
-# 어느 디렉터리에서 실행하더라도 guardfs 패키지를 찾을 수 있도록 설정
+# 어느 디렉터리에서 실행하더라도 holdfs 패키지를 찾을 수 있도록 설정
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from guardfs.common.config import (  # noqa: E402
+from holdfs.common.config import (  # noqa: E402
     ENTROPY_ACCUMULATION_SIZE,
     ENTROPY_ACCUMULATION_WINDOW_SEC,
     ENTROPY_HEADER_SIZE,
@@ -43,16 +43,16 @@ from guardfs.common.config import (  # noqa: E402
     EXT_CHANGE_THRESHOLD,
     EXT_CHANGE_WINDOW_SEC,
 )
-from guardfs.stage1.detector import Stage1Detector  # noqa: E402
-from guardfs.stage1.entropy import (  # noqa: E402
+from holdfs.stage1.detector import Stage1Detector  # noqa: E402
+from holdfs.stage1.entropy import (  # noqa: E402
     EntropyDetector,
     shannon_entropy,
 )
-from guardfs.stage1.entropy_burst import (  # noqa: E402
+from holdfs.stage1.entropy_burst import (  # noqa: E402
     EntropyBurstDetector,
 )
-from guardfs.stage1.ext_change import ExtChangeDetector  # noqa: E402
-from guardfs.stage1.honeypot import HoneypotDetector  # noqa: E402
+from holdfs.stage1.ext_change import ExtChangeDetector  # noqa: E402
+from holdfs.stage1.honeypot import HoneypotDetector  # noqa: E402
 
 
 @dataclass
@@ -222,7 +222,7 @@ class EntropyDetectorTests(unittest.TestCase):
         last_event = None
 
         with patch(
-            "guardfs.stage1.entropy.time.monotonic",
+            "holdfs.stage1.entropy.time.monotonic",
             side_effect=[0.0, 0.1, 0.2, 0.3],
         ):
             for offset in range(0, 256, 64):
@@ -332,7 +332,7 @@ class EntropyDetectorTests(unittest.TestCase):
         # 구현은 FsEvent.ts_ns가 아니라 monotonic()을 사용하므로
         # 테스트에서는 monotonic 시간을 직접 고정해야 한다.
         with patch(
-            "guardfs.stage1.entropy.time.monotonic",
+            "holdfs.stage1.entropy.time.monotonic",
             side_effect=[0.0, ENTROPY_ACCUMULATION_WINDOW_SEC + 0.1],
         ):
             self.assertFalse(
@@ -366,7 +366,7 @@ class EntropyDetectorTests(unittest.TestCase):
         path = "/underlay/large-write-reset.bin"
 
         with patch(
-            "guardfs.stage1.entropy.time.monotonic",
+            "holdfs.stage1.entropy.time.monotonic",
             side_effect=[0.0, 0.1, 0.2],
         ):
             # 이전 작은 write를 누적한다.
@@ -394,7 +394,7 @@ class EntropyDetectorTests(unittest.TestCase):
         path = "/underlay/non-detected-evaluation.bin"
 
         with patch(
-            "guardfs.stage1.entropy.time.monotonic",
+            "holdfs.stage1.entropy.time.monotonic",
             side_effect=[0.0, 0.1, 0.2, 0.3],
         ):
             for offset in range(0, 256, 64):
@@ -875,7 +875,7 @@ class EntropyBurstDetectorTests(unittest.TestCase):
         )
 
         with patch(
-            "guardfs.stage1.entropy_burst.time.monotonic",
+            "holdfs.stage1.entropy_burst.time.monotonic",
             side_effect=[0.0, 6.0, 6.0],
         ):
             detector.observe(
@@ -1012,7 +1012,7 @@ class ExtensionChangeDetectorTests(unittest.TestCase):
     def test_unknown_extension_detects_exactly_at_threshold(self):
         detector = ExtChangeDetector(window_sec=10, threshold=3)
         with patch(
-            "guardfs.stage1.ext_change.time.monotonic",
+            "holdfs.stage1.ext_change.time.monotonic",
             side_effect=[1.0, 2.0, 3.0],
         ):
             self.assertFalse(detector.check(self.rename_event("a.txt", "a.x1")))
@@ -1023,7 +1023,7 @@ class ExtensionChangeDetectorTests(unittest.TestCase):
     def test_same_path_does_not_fill_distinct_path_threshold(self):
         detector = ExtChangeDetector(window_sec=10, threshold=2)
         with patch(
-            "guardfs.stage1.ext_change.time.monotonic",
+            "holdfs.stage1.ext_change.time.monotonic",
             side_effect=[1.0, 2.0],
         ):
             self.assertFalse(detector.check(self.rename_event("a.txt", "a.x")))
@@ -1032,7 +1032,7 @@ class ExtensionChangeDetectorTests(unittest.TestCase):
     def test_counts_are_isolated_by_pid(self):
         detector = ExtChangeDetector(window_sec=10, threshold=2)
         with patch(
-            "guardfs.stage1.ext_change.time.monotonic",
+            "holdfs.stage1.ext_change.time.monotonic",
             side_effect=[1.0, 2.0, 3.0],
         ):
             self.assertFalse(detector.check(self.rename_event("a.txt", "a.x", pid=10)))
@@ -1042,7 +1042,7 @@ class ExtensionChangeDetectorTests(unittest.TestCase):
     def test_expired_events_do_not_contribute(self):
         detector = ExtChangeDetector(window_sec=10, threshold=2)
         with patch(
-            "guardfs.stage1.ext_change.time.monotonic",
+            "holdfs.stage1.ext_change.time.monotonic",
             side_effect=[1.0, 12.1],
         ):
             self.assertFalse(detector.check(self.rename_event("a.txt", "a.x")))
@@ -1052,7 +1052,7 @@ class ExtensionChangeDetectorTests(unittest.TestCase):
     def test_event_on_window_boundary_still_contributes(self):
         detector = ExtChangeDetector(window_sec=10, threshold=2)
         with patch(
-            "guardfs.stage1.ext_change.time.monotonic",
+            "holdfs.stage1.ext_change.time.monotonic",
             side_effect=[1.0, 11.0],
         ):
             self.assertFalse(detector.check(self.rename_event("a.txt", "a.x")))
@@ -1397,6 +1397,68 @@ class Stage1IntegrationTests(unittest.TestCase):
         self.assertNotIn(new_key, self.detector.entropy._blocks)
 
 
+CATEGORY_LABELS = {
+    "ShannonEntropyTests": "1. Shannon entropy 수학적 정확성",
+    "EntropyDetectorTests": "2. EntropyDetector 임계치·조각 쓰기 우회",
+    "EntropyBurstDetectorTests": "3. EntropyBurstDetector 다중 파일 버스트",
+    "ExtensionChangeDetectorTests": "4. ExtChangeDetector 확장자 변조 탐지",
+    "HoneypotDetectorTests": "5. HoneypotDetector 경로 경계·우회 차단",
+    "Stage1IntegrationTests": "6. Stage1Detector 통합 우선순위·생명주기",
+}
+
+
+class GroupedTestResult(unittest.TestResult):
+    """6개 테스트 클래스별로 성공/실패/스킵 통계를 집계하는 커스텀 러너"""
+
+    def __init__(self, verbose: bool = False):
+        super().__init__()
+        self.verbose = verbose
+        self.stats = {
+            cls_name: {"total": 0, "passed": 0, "failed": 0, "errored": 0, "skipped": 0}
+            for cls_name in CATEGORY_LABELS
+        }
+
+    def _cls_name(self, test: unittest.TestCase) -> str:
+        return test.__class__.__name__
+
+    def startTest(self, test: unittest.TestCase) -> None:
+        super().startTest(test)
+        cls_name = self._cls_name(test)
+        if cls_name not in self.stats:
+            self.stats[cls_name] = {
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "errored": 0,
+                "skipped": 0,
+            }
+        self.stats[cls_name]["total"] += 1
+
+    def addSuccess(self, test: unittest.TestCase) -> None:
+        super().addSuccess(test)
+        self.stats[self._cls_name(test)]["passed"] += 1
+        if self.verbose:
+            print(f"  [PASS] {self._cls_name(test)}.{test._testMethodName}")
+
+    def addFailure(self, test: unittest.TestCase, err) -> None:
+        super().addFailure(test, err)
+        self.stats[self._cls_name(test)]["failed"] += 1
+        if self.verbose:
+            print(f"  [FAIL] {self._cls_name(test)}.{test._testMethodName}")
+
+    def addError(self, test: unittest.TestCase, err) -> None:
+        super().addError(test, err)
+        self.stats[self._cls_name(test)]["errored"] += 1
+        if self.verbose:
+            print(f"  [ERR ] {self._cls_name(test)}.{test._testMethodName}")
+
+    def addSkip(self, test: unittest.TestCase, reason: str) -> None:
+        super().addSkip(test, reason)
+        self.stats[self._cls_name(test)]["skipped"] += 1
+        if self.verbose:
+            print(f"  [SKIP] {self._cls_name(test)}.{test._testMethodName} ({reason})")
+
+
 def build_suite(names: list[str]) -> unittest.TestSuite:
     """클래스명 또는 완전한 test id를 선택 실행할 수 있게 suite를 구성"""
 
@@ -1416,8 +1478,75 @@ def build_suite(names: list[str]) -> unittest.TestSuite:
 
 
 def main() -> int:
+    import time
+
     parser = argparse.ArgumentParser(
-        description="GuardFS Stage 1 경량 탐지 규칙 테스트",
+        description="HoldFS Stage 1 경량 탐지 규칙 테스트",
+    )
+    parser.add_argument(
+        "tests",
+        nargs="*",
+        help="선택 실행할 TestCase 클래스명 또는 test id",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="각 테스트 이름과 결과를 자세히 출력",
+    )
+    args = parser.parse_args()
+
+    suite = build_suite(args.tests)
+    result = GroupedTestResult(verbose=args.verbose)
+
+    start_time = time.perf_counter()
+    suite.run(result)
+    elapsed = time.perf_counter() - start_time
+
+    print("\n" + "=" * 72)
+    print(" HoldFS Stage 1 경량 탐지 규칙 검증 결과")
+    print("=" * 72)
+
+    for cls_name, s in result.stats.items():
+        if s["total"] == 0:
+            continue
+        label = CATEGORY_LABELS.get(cls_name, cls_name)
+        has_issue = (s["failed"] + s["errored"]) > 0
+        status = "FAIL" if has_issue else "OK  "
+        detail = f"{s['passed']}/{s['total']} 통과"
+        if s["skipped"]:
+            detail += f" (skip {s['skipped']})"
+        print(f" [{status}] {label:<44} | {detail}")
+
+    print("-" * 72)
+    total_passed = sum(s["passed"] for s in result.stats.values())
+    total_skipped = sum(s["skipped"] for s in result.stats.values())
+    overall = "SUCCESS" if result.wasSuccessful() else "FAILED"
+    print(
+        f" 전체 요약: 총 {result.testsRun}개 실행 "
+        f"(성공 {total_passed}, 실패 {len(result.failures)}, "
+        f"오류 {len(result.errors)}, 스킵 {total_skipped}) | "
+        f"소요시간 {elapsed:.3f}s [{overall}]"
+    )
+    print("=" * 72)
+
+    if result.failures or result.errors:
+        print("\n[실패 및 오류 상세 내역]")
+        for test, traceback_text in result.failures + result.errors:
+            print("-" * 72)
+            print(f"대상: {test}")
+            print(traceback_text.strip())
+
+    return 0 if result.wasSuccessful() else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="HoldFS Stage 1 경량 탐지 규칙 테스트",
     )
     parser.add_argument(
         "tests",

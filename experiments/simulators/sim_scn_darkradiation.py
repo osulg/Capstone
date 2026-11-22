@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-사례 ② DarkRadiation 랜섬웨어 — 파일연산 모의 재현 (GuardFS/HoldFS 탐지 검증용).
+사례 ② DarkRadiation 랜섬웨어 — 파일연산 모의 재현 (holdFS/HoldFS 탐지 검증용).
 
 근거: Trend Micro, "Bash Ransomware DarkRadiation" (2021-06); SentinelOne 병행 분석.
 
@@ -29,19 +29,19 @@ workdir 의 더미 파일만 변조한다.
 오탐을 함께 본다. openssl 사용 사실만으로 우회를 단정하지 않는다.
 
 주의(신뢰 분류는 실행 방식에 달려 있다):
-  GuardFS 의 신뢰 판정은 프로세스의 exe 경로(/usr/bin 등 + dpkg 검증)를 본다.
+  holdFS 의 신뢰 판정은 프로세스의 exe 경로(/usr/bin 등 + dpkg 검증)를 본다.
   --engine openssl 은 쓰기 주체가 실제 /usr/bin/openssl 이라 신뢰로 분류된다.
   --engine inprocess 는 이 스크립트를 '어떻게 띄웠는지'에 따라 달라진다. 신뢰
   시연이 목적이면 openssl 엔진을, 비교(비신뢰 스크립트)가 목적이면 inprocess 를
   venv/홈 경로에서 실행한다.
 
 테스트 방법 (Linux/Ubuntu, 터미널 두 개):
-  1) 터미널 A: cd ~/Capstone && bash scripts/run_guardfs.sh   (또는 run_all.sh)
+  1) 터미널 A: cd ~/Capstone && bash scripts/run_holdfs.sh   (또는 run_all.sh)
   2) 터미널 B:
        cd ~/Capstone && source venv/bin/activate
-       mountpoint ~/guardfs_runtime/mount
+       mountpoint ~/holdfs_runtime/mount
        python3 experiments/simulators/sim_scn_darkradiation.py \
-           ~/guardfs_runtime/mount/sim_darkradiation --engine openssl --keep
+           ~/holdfs_runtime/mount/sim_darkradiation --engine openssl --keep
 
 확인 기준:
   - 신뢰 엔진이 고엔트로피 write 를 수행하는 동안의 상태 전이(SUSPICIOUS → Stage2
@@ -69,7 +69,7 @@ SHRED = "/usr/bin/shred"
 
 def parse_args():
     p = argparse.ArgumentParser(description="DarkRadiation 파일연산 모의 재현")
-    p.add_argument("target", help="GuardFS 마운트 안의 대상 폴더 (없으면 생성)")
+    p.add_argument("target", help="holdFS 마운트 안의 대상 폴더 (없으면 생성)")
     p.add_argument(
         "--engine",
         choices=("inprocess", "openssl", "shred"),
@@ -190,7 +190,7 @@ def _run_shred_engine(paths, passes: int, timeout: float) -> int:
         stderr=subprocess.DEVNULL,
     )
     lib.log(
-        f"shred PID={proc.pid} — 이 PID 를 GuardFS 로그에서 추적하세요"
+        f"shred PID={proc.pid} — 이 PID 를 holdFS 로그에서 추적하세요"
         f"(Stage2 재평가 대상). HIGH 격상/ SIGSTOP 여부와 dyn 점수를 확인."
     )
     try:
@@ -219,7 +219,7 @@ def _run_shred_scenario(workdir, paths, names, size, args) -> int:
             f"— 'HIGH 격상 전 손실 개수'가 탐지≠완전차단의 척도."
         )
     except OSError as e:
-        lib.log(f"파일 연산 실패: {e} → GuardFS 상태/이벤트 로그로 확인")
+        lib.log(f"파일 연산 실패: {e} → holdFS 상태/이벤트 로그로 확인")
         rc = 3
     finally:
         lib.cleanup_workdir(workdir, args.keep)
@@ -262,7 +262,7 @@ def main() -> int:
     lib.log(f"준비 완료. 암호화 엔진: {engine_desc}")
     lib.log(
         f"공격 역할 PID={os.getpid()} (duration={args.duration}s). "
-        f"GuardFS 로그/대시보드를 확인하세요."
+        f"holdFS 로그/대시보드를 확인하세요."
     )
 
     start = time.time()
@@ -282,7 +282,7 @@ def main() -> int:
             if args.delay:
                 time.sleep(args.delay)
     except (OSError, subprocess.SubprocessError) as e:
-        lib.log(f"파일 연산 실패: {e} → 차단 여부는 GuardFS 상태/이벤트 로그로 확인")
+        lib.log(f"파일 연산 실패: {e} → 차단 여부는 holdFS 상태/이벤트 로그로 확인")
         rc = 3
     finally:
         lib.log(

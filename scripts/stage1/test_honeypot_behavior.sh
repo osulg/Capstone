@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# GuardFS 허니팟 FUSE 동작 테스트
-# GuardFS가 실행 중이고 MOUNT가 연결된 Linux 환경에서 실행한다.
+# holdFS 허니팟 FUSE 동작 테스트
+# holdFS가 실행 중이고 MOUNT가 연결된 Linux 환경에서 실행한다.
 # 마운트 경로에서 파일을 읽거나 변경하여 허니팟 접근 차단 여부와
 # 언더레이 원본 보존 여부를 확인한다.
 #
@@ -17,13 +17,13 @@
 
 set -u
 
-MOUNT="${MOUNT:-$HOME/guardfs_runtime/mount}"
-UNDERLAY="${UNDERLAY:-$HOME/guardfs_runtime/underlay}"
-EVENT_LOG="${EVENT_LOG:-$(dirname "$UNDERLAY")/guardfs_log.jsonl}"
+MOUNT="${MOUNT:-$HOME/holdfs_runtime/mount}"
+UNDERLAY="${UNDERLAY:-$HOME/holdfs_runtime/underlay}"
+EVENT_LOG="${EVENT_LOG:-$(dirname "$UNDERLAY")/holdfs_log.jsonl}"
 TEST_NO="${1:-all}"
 STAMP="$(date +%Y%m%d_%H%M%S)_$$"
-TEST_ROOT="$UNDERLAY/.guardfs_honeypot_behavior_$STAMP"
-RESULT_FILE="$(mktemp /tmp/guardfs-honeypot-result.XXXXXX)"
+TEST_ROOT="$UNDERLAY/.holdfs_honeypot_behavior_$STAMP"
+RESULT_FILE="$(mktemp /tmp/holdfs-honeypot-result.XXXXXX)"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -38,7 +38,7 @@ usage() {
     echo "  3  열린 file handle read 차단"
     echo "  4  정상 파일 오탐 방지"
     echo "  5  underlay 원본 보존"
-    echo "  6  테스트 후 GuardFS/mount 생존"
+    echo "  6  테스트 후 holdFS/mount 생존"
     echo "  7  허니팟 write 차단"
     echo "  8  허니팟 truncate 차단"
     echo "  9  허니팟 ftruncate 차단"
@@ -66,7 +66,7 @@ run_test() {
     if [ "$1" -ge 7 ] && [ "$1" -le 16 ]; then
         # 권한 비트만으로는 FUSE/ACL 상태를 정확히 알 수 없으므로 실제 확인용 파일을
         # 잠시 생성한다. 생성에 실패해도 스크립트의 나머지 테스트는 계속 진행한다.
-        if ! timeout 2 sh -c 'p="$1/.guardfs_mutation_probe_$$"; : > "$p" && rm -f -- "$p"' sh "$UNDERLAY_HONEYPOT_DIR" 2>/dev/null; then
+        if ! timeout 2 sh -c 'p="$1/.holdfs_mutation_probe_$$"; : > "$p" && rm -f -- "$p"' sh "$UNDERLAY_HONEYPOT_DIR" 2>/dev/null; then
             echo "SKIP [TEST $1] honeypot mutation: underlay directory is not writable"
             return 1
         fi
@@ -147,7 +147,7 @@ record() {
         *"Opened handle read"*) label="[TEST 3]" ;;
         *"Normal file"*) label="[TEST 4]" ;;
         *"Underlay honeypot"*|*"Underlay normal fixture"*) label="[TEST 5]" ;;
-        *"Final GuardFS health"*) label="[TEST 6]" ;;
+        *"Final holdFS health"*) label="[TEST 6]" ;;
         *"Honeypot write"*) label="[TEST 7]" ;;
         *"Honeypot truncate"*) label="[TEST 8]" ;;
         *"Honeypot ftruncate"*) label="[TEST 9]" ;;
@@ -186,7 +186,7 @@ cleanup() {
     for extra in "${EXTRA_DIRS[@]}"; do
         rmdir -- "$extra" 2>/dev/null || true
     done
-    # 공용 허니팟 루트는 GuardFS 런타임 구성 요소이므로 삭제하지 않는다.
+    # 공용 허니팟 루트는 holdFS 런타임 구성 요소이므로 삭제하지 않는다.
     run_fuse_command 3 rmdir -- "$UNDERLAY_NORMAL_DIR" "$TEST_ROOT" \
         2>/dev/null || true
     rm -f -- "$RESULT_FILE"
@@ -201,9 +201,9 @@ UNDERLAY_NORMAL_FILE="$UNDERLAY_NORMAL_DIR/report.txt"
 
 # 마운트와 언더레이에서 동일한 테스트 구조를 사용하도록 경로를 설정한다.
 MOUNT_HONEYPOT_FILE="$MOUNT/honeypot/trap_$STAMP.txt"
-MOUNT_NORMAL_FILE="$MOUNT/.guardfs_honeypot_behavior_$STAMP/normal/report.txt"
+MOUNT_NORMAL_FILE="$MOUNT/.holdfs_honeypot_behavior_$STAMP/normal/report.txt"
 
-echo "GuardFS Honeypot behavior test"
+echo "holdFS Honeypot behavior test"
 echo "MOUNT   : $MOUNT"
 echo "UNDERLAY: $UNDERLAY"
 echo "EVENT LOG: $EVENT_LOG"
@@ -218,14 +218,14 @@ else
     record "FAIL" "Precheck mount" "not mounted: $MOUNT"
 fi
 
-GUARDFS_PID="$(pgrep -f '[p]ython3 .*guardfs/fuse_fs/passthrough.py' | head -n 1 || true)"
-if [ -n "$GUARDFS_PID" ]; then
-    record "PASS" "Precheck GuardFS process" "PID=$GUARDFS_PID"
+HOLDFS_PID="$(pgrep -f '[p]ython3 .*holdfs/fuse_fs/passthrough.py' | head -n 1 || true)"
+if [ -n "$HOLDFS_PID" ]; then
+    record "PASS" "Precheck holdFS process" "PID=$HOLDFS_PID"
 else
-    record "FAIL" "Precheck GuardFS process" "passthrough.py is not running"
+    record "FAIL" "Precheck holdFS process" "passthrough.py is not running"
 fi
 
-if ! mountpoint -q "$MOUNT" 2>/dev/null || [ -z "$GUARDFS_PID" ]; then
+if ! mountpoint -q "$MOUNT" 2>/dev/null || [ -z "$HOLDFS_PID" ]; then
     echo "Precheck failed; no FUSE operation was executed."
     exit 1
 fi
@@ -271,7 +271,7 @@ fi
 
 # 1) cat으로 허니팟을 읽었을 때 실제 내용이 노출되거나 접근이 차단되는지 확인한다.
 if run_test 1; then
-CAT_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-cat.XXXXXX)"
+CAT_OUTPUT_FILE="$(mktemp /tmp/holdfs-honeypot-cat.XXXXXX)"
 if run_fuse_command 5 cat "$MOUNT_HONEYPOT_FILE" > "$CAT_OUTPUT_FILE" 2>"$CAT_OUTPUT_FILE.err"; then
     CAT_RC=0
 else
@@ -298,7 +298,7 @@ fi
 
 # 2) Python open/read로 cat과 같은 읽기 동작을 수행하고 단계별 결과를 확인한다.
 if run_test 2; then
-READ_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-read.XXXXXX)"
+READ_OUTPUT_FILE="$(mktemp /tmp/holdfs-honeypot-read.XXXXXX)"
 if run_fuse_command 5 python3 - "$MOUNT_HONEYPOT_FILE" > "$READ_OUTPUT_FILE" 2>&1 <<'PY'
 import sys
 
@@ -330,7 +330,7 @@ fi
 
 # 3) 열린 파일 핸들을 통해 읽기가 계속 가능한지 확인한다.
 if run_test 3; then
-HANDLE_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-handle.XXXXXX)"
+HANDLE_OUTPUT_FILE="$(mktemp /tmp/holdfs-honeypot-handle.XXXXXX)"
 if run_fuse_command 5 python3 - "$MOUNT_HONEYPOT_FILE" > "$HANDLE_OUTPUT_FILE" 2>&1 <<'PY'
 import sys
 
@@ -426,7 +426,7 @@ FTRUNC_FILE="$UNDERLAY_HONEYPOT_DIR/ftruncate_$STAMP.txt"
 EXTRA_FILES+=("$FTRUNC_FILE")
 printf 'FTRUNCATE-ORIGINAL-%s\n' "$STAMP" > "$FTRUNC_FILE"
 FTRUNC_ORIGINAL="$(cat "$FTRUNC_FILE")"
-FTRUNC_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-ftruncate.XXXXXX)"
+FTRUNC_OUTPUT_FILE="$(mktemp /tmp/holdfs-honeypot-ftruncate.XXXXXX)"
 if run_fuse_command 5 python3 - "$MOUNT/honeypot/ftruncate_$STAMP.txt" \
     > "$FTRUNC_OUTPUT_FILE" 2>&1 <<'PY'
 import os
@@ -492,7 +492,7 @@ RENAME_TARGET="$UNDERLAY_NORMAL_DIR/renamed_$STAMP.txt"
 EXTRA_FILES+=("$RENAME_FILE" "$RENAME_TARGET")
 printf 'RENAME-ORIGINAL-%s\n' "$STAMP" > "$RENAME_FILE"
 run_fuse_command 5 mv -- "$MOUNT/honeypot/rename_$STAMP.txt" \
-    "$MOUNT/.guardfs_honeypot_behavior_$STAMP/normal/renamed_$STAMP.txt" \
+    "$MOUNT/.holdfs_honeypot_behavior_$STAMP/normal/renamed_$STAMP.txt" \
     >/dev/null 2>&1 || true
 if [ -f "$RENAME_FILE" ] && [ ! -f "$RENAME_TARGET" ]; then
     record "PASS" "Honeypot rename blocked" "source remains and target absent"
@@ -507,7 +507,7 @@ HANDLE_WRITE_FILE="$UNDERLAY_HONEYPOT_DIR/handle_write_$STAMP.txt"
 EXTRA_FILES+=("$HANDLE_WRITE_FILE")
 printf 'HANDLE-WRITE-ORIGINAL-%s\n' "$STAMP" > "$HANDLE_WRITE_FILE"
 HANDLE_WRITE_ORIGINAL="$(cat "$HANDLE_WRITE_FILE")"
-HANDLE_WRITE_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-handle-write.XXXXXX)"
+HANDLE_WRITE_OUTPUT_FILE="$(mktemp /tmp/holdfs-honeypot-handle-write.XXXXXX)"
 if run_fuse_command 5 python3 - "$MOUNT/honeypot/handle_write_$STAMP.txt" \
     > "$HANDLE_WRITE_OUTPUT_FILE" 2>&1 <<'PY'
 import os
@@ -559,7 +559,7 @@ HANDLE_FTRUNC_FILE="$UNDERLAY_HONEYPOT_DIR/handle_ftruncate_$STAMP.txt"
 EXTRA_FILES+=("$HANDLE_FTRUNC_FILE")
 printf 'HANDLE-FTRUNCATE-ORIGINAL-%s\n' "$STAMP" > "$HANDLE_FTRUNC_FILE"
 HANDLE_FTRUNC_ORIGINAL="$(cat "$HANDLE_FTRUNC_FILE")"
-HANDLE_FTRUNC_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-handle-ftruncate.XXXXXX)"
+HANDLE_FTRUNC_OUTPUT_FILE="$(mktemp /tmp/holdfs-honeypot-handle-ftruncate.XXXXXX)"
 if run_fuse_command 5 python3 - "$MOUNT/honeypot/handle_ftruncate_$STAMP.txt" \
     > "$HANDLE_FTRUNC_OUTPUT_FILE" 2>&1 <<'PY'
 import os
@@ -610,13 +610,13 @@ if run_test 14; then
 HONEYPOT_CREATE_FILE="$UNDERLAY_HONEYPOT_DIR/create_$STAMP.txt"
 MOUNT_HONEYPOT_CREATE_FILE="$MOUNT/honeypot/create_$STAMP.txt"
 EXTRA_FILES+=("$HONEYPOT_CREATE_FILE")
-HONEYPOT_CREATE_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-create.XXXXXX)"
+HONEYPOT_CREATE_OUTPUT_FILE="$(mktemp /tmp/holdfs-honeypot-create.XXXXXX)"
 if run_fuse_command 5 python3 - "$MOUNT_HONEYPOT_CREATE_FILE" \
     > "$HONEYPOT_CREATE_OUTPUT_FILE" 2>&1 <<'PY'
 import os
 import sys
 from pathlib import Path
-from guardfs.common.paths import get_forced_state_path
+from holdfs.common.paths import get_forced_state_path
 
 path = sys.argv[1]
 state_path = Path(get_forced_state_path(os.getpid()))
@@ -682,7 +682,7 @@ HONEYPOT_RMDIR_DIR="$UNDERLAY_HONEYPOT_DIR/rmdir_$STAMP"
 MOUNT_HONEYPOT_RMDIR_DIR="$MOUNT/honeypot/rmdir_$STAMP"
 EXTRA_DIRS+=("$HONEYPOT_RMDIR_DIR")
 mkdir -p -- "$HONEYPOT_RMDIR_DIR"
-HONEYPOT_RMDIR_OUTPUT_FILE="$(mktemp /tmp/guardfs-honeypot-rmdir.XXXXXX)"
+HONEYPOT_RMDIR_OUTPUT_FILE="$(mktemp /tmp/holdfs-honeypot-rmdir.XXXXXX)"
 if run_fuse_command 5 python3 - "$MOUNT_HONEYPOT_RMDIR_DIR" \
     > "$HONEYPOT_RMDIR_OUTPUT_FILE" 2>&1 <<'PY'
 import os
@@ -719,7 +719,7 @@ fi
 # 17) 정상 경로 create: 파일 생성과 내용이 언더레이에 정상 반영되는지 확인한다.
 if run_test 17; then
 NORMAL_CREATE_FILE="$UNDERLAY_NORMAL_DIR/create_$STAMP.txt"
-MOUNT_NORMAL_CREATE_FILE="$MOUNT/.guardfs_honeypot_behavior_$STAMP/normal/create_$STAMP.txt"
+MOUNT_NORMAL_CREATE_FILE="$MOUNT/.holdfs_honeypot_behavior_$STAMP/normal/create_$STAMP.txt"
 NORMAL_CREATE_CONTENT="NORMAL-CREATE-$STAMP"
 EXTRA_FILES+=("$NORMAL_CREATE_FILE")
 if run_fuse_command 5 sh -c 'printf "%s\n" "$1" > "$2"' sh \
@@ -740,7 +740,7 @@ fi
 # 18) 정상 경로 mkdir: 생성한 디렉터리가 마운트와 언더레이 양쪽에 보이는지 확인한다.
 if run_test 18; then
 NORMAL_MKDIR_DIR="$UNDERLAY_NORMAL_DIR/mkdir_$STAMP"
-MOUNT_NORMAL_MKDIR_DIR="$MOUNT/.guardfs_honeypot_behavior_$STAMP/normal/mkdir_$STAMP"
+MOUNT_NORMAL_MKDIR_DIR="$MOUNT/.holdfs_honeypot_behavior_$STAMP/normal/mkdir_$STAMP"
 EXTRA_DIRS+=("$NORMAL_MKDIR_DIR")
 if run_fuse_command 5 mkdir -- "$MOUNT_NORMAL_MKDIR_DIR" 2>/dev/null; then
     NORMAL_MKDIR_RC=0
@@ -758,7 +758,7 @@ fi
 # 19) 정상 경로 rmdir: 빈 디렉터리 삭제가 마운트와 언더레이에 정상 반영되는지 확인한다.
 if run_test 19; then
 NORMAL_RMDIR_DIR="$UNDERLAY_NORMAL_DIR/rmdir_$STAMP"
-MOUNT_NORMAL_RMDIR_DIR="$MOUNT/.guardfs_honeypot_behavior_$STAMP/normal/rmdir_$STAMP"
+MOUNT_NORMAL_RMDIR_DIR="$MOUNT/.holdfs_honeypot_behavior_$STAMP/normal/rmdir_$STAMP"
 EXTRA_DIRS+=("$NORMAL_RMDIR_DIR")
 mkdir -p -- "$NORMAL_RMDIR_DIR"
 if run_fuse_command 5 rmdir -- "$MOUNT_NORMAL_RMDIR_DIR" 2>/dev/null; then
@@ -774,19 +774,19 @@ else
 fi
 fi
 
-# 6) 읽기 테스트 이후에도 GuardFS 사용자 공간 프로세스와 마운트가 정상인지 확인한다.
+# 6) 읽기 테스트 이후에도 holdFS 사용자 공간 프로세스와 마운트가 정상인지 확인한다.
 if run_test 6; then
-FINAL_PID="$(pgrep -f '[p]ython3 .*guardfs/fuse_fs/passthrough.py' | head -n 1 || true)"
+FINAL_PID="$(pgrep -f '[p]ython3 .*holdfs/fuse_fs/passthrough.py' | head -n 1 || true)"
 if [ -n "$FINAL_PID" ] && mountpoint -q "$MOUNT" 2>/dev/null; then
-    record "PASS" "Final GuardFS health" "PID=$FINAL_PID mount=connected"
+    record "PASS" "Final holdFS health" "PID=$FINAL_PID mount=connected"
 else
-    record "FAIL" "Final GuardFS health" "process or mount disconnected"
+    record "FAIL" "Final holdFS health" "process or mount disconnected"
 fi
 fi
 
 echo
 echo "============================================================"
-echo " GuardFS Honeypot Behavior Test"
+echo " holdFS Honeypot Behavior Test"
 echo "============================================================"
 while IFS='|' read -r status name detail; do
     printf '%-5s | %-34s | %s\n' "$status" "$name" "$detail"

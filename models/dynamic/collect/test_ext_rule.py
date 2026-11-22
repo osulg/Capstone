@@ -1,9 +1,9 @@
-"""guardfs/common/ext_rule.py 확장자 변경 판정 테스트 (FUSE 불필요)."""
+"""holdfs/common/ext_rule.py 확장자 변경 판정 테스트 (FUSE 불필요)."""
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
-from guardfs.common.ext_rule import is_ext_change  # noqa: E402
+from holdfs.common.ext_rule import is_ext_change  # noqa: E402
 
 # (old, new, v5 기대값, v6 기대값)
 CASES = [

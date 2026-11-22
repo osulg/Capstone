@@ -1,9 +1,9 @@
 #!/bin/bash
 # ============================================================
-# GuardFS 단일 샘플 수집 스크립트 (FUSE + eBPF 동시 수집)
+# holdFS 단일 샘플 수집 스크립트 (FUSE + eBPF 동시 수집)
 #
 # 하나의 run_id로
-#   1) GuardFS를 --collect-only 모드로 마운트 (FUSE 관점 로깅)
+#   1) holdFS를 --collect-only 모드로 마운트 (FUSE 관점 로깅)
 #   2) 마운트 안에 테스트 파일 준비 + 실행 전 해시
 #   3) eBPF 수집기로 워크로드를 추적 (eBPF 관점 로깅)
 #   4) 실행 후 해시 비교 + 결과 요약
@@ -31,12 +31,12 @@
 #
 # 예) 악성 세션 (샘플 실행은 사용자 몫):
 #   scripts/collect_one.sh --run-id lockbit_4dc06ece_001 -- \
-#       sudo /path/to/sample.elf "$HOME/guardfs_runtime/mount/attack_target"
+#       sudo /path/to/sample.elf "$HOME/holdfs_runtime/mount/attack_target"
 #
 # 예) 정상 세션 (label 0):
 #   scripts/collect_one.sh --run-id benign_bulkread_001 --as-user "$USER" -- \
 #       python3 models/dynamic/dataset_v2/benign_bulk_read.py \
-#       "$HOME/guardfs_runtime/mount/attack_target"
+#       "$HOME/holdfs_runtime/mount/attack_target"
 # ============================================================
 
 set -uo pipefail
@@ -54,7 +54,7 @@ DECOY_FILES=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-RUNTIME_DIR="$HOME/guardfs_runtime"
+RUNTIME_DIR="$HOME/holdfs_runtime"
 MOUNT_DIR="$RUNTIME_DIR/mount"
 UNDERLAY_DIR="$RUNTIME_DIR/underlay"
 COLLECT_DIR="$RUNTIME_DIR/collect"
@@ -62,11 +62,11 @@ HASH_DIR="$RUNTIME_DIR/hashes"
 
 # eBPF 로그 격리 폴더.
 # Gunra 같은 광범위 스캔형 랜섬웨어는 홈 디렉터리를 통째로 암호화하므로
-# ~/guardfs_runtime/collect 에 둔 로그가 실행 중 파괴될 수 있다.
+# ~/holdfs_runtime/collect 에 둔 로그가 실행 중 파괴될 수 있다.
 # eBPF 수집기는 root(sudo)로 돌기 때문에, root 전용(700) 폴더에 로그를 쓰면
 # --as-user 로 도는(=infected 권한) 악성코드가 .ENCRT 생성/원본 삭제를 못 한다.
 # 워크로드 종료 후 일반 폴더로 회수한다(아래 3.5 단계).
-PROTECTED_LOG_DIR="/var/log/guardfs"
+PROTECTED_LOG_DIR="/var/log/holdfs"
 
 usage() {
     sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -110,7 +110,7 @@ done
 
 COLLECTOR="$REPO/models/dynamic/collect/ebpf_collector.py"
 DECOY_GEN="$REPO/models/dynamic/collect/decoy_gen.py"
-PASSTHROUGH="$REPO/guardfs/fuse_fs/passthrough.py"
+PASSTHROUGH="$REPO/holdfs/fuse_fs/passthrough.py"
 VENV_ACTIVATE="$REPO/venv/bin/activate"
 TARGET_DIR="$MOUNT_DIR/$TARGET_SUBDIR"
 
@@ -145,14 +145,14 @@ sudo chown root:root "$PROTECTED_LOG_DIR"
 sudo chmod 700 "$PROTECTED_LOG_DIR"
 
 # ----------------------------------------
-# 정리 트랩: 종료 시 GuardFS 마운트 해제
+# 정리 트랩: 종료 시 holdFS 마운트 해제
 # ----------------------------------------
-GUARDFS_PID=""
+HOLDFS_PID=""
 cleanup() {
-    if [ -n "$GUARDFS_PID" ] && kill -0 "$GUARDFS_PID" 2>/dev/null; then
-        echo "[collect_one] GuardFS 종료(PID $GUARDFS_PID)..."
-        kill -INT "$GUARDFS_PID" 2>/dev/null
-        wait "$GUARDFS_PID" 2>/dev/null
+    if [ -n "$HOLDFS_PID" ] && kill -0 "$HOLDFS_PID" 2>/dev/null; then
+        echo "[collect_one] holdFS 종료(PID $HOLDFS_PID)..."
+        kill -INT "$HOLDFS_PID" 2>/dev/null
+        wait "$HOLDFS_PID" 2>/dev/null
     fi
     if mountpoint -q "$MOUNT_DIR"; then
         "$REPO/scripts/unmount.sh" >/dev/null 2>&1 \
@@ -163,14 +163,14 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ----------------------------------------
-# 1) GuardFS --collect-only 마운트 (백그라운드, venv 파이썬)
+# 1) holdFS --collect-only 마운트 (백그라운드, venv 파이썬)
 # ----------------------------------------
 if mountpoint -q "$MOUNT_DIR"; then
-    die "GuardFS가 이미 마운트되어 있습니다. 먼저 ./scripts/unmount.sh"
+    die "holdFS가 이미 마운트되어 있습니다. 먼저 ./scripts/unmount.sh"
 fi
 
 echo "========================================================"
-echo " GuardFS 수집 시작"
+echo " holdFS 수집 시작"
 echo "  run_id     : $RUN_ID"
 echo "  mount      : $MOUNT_DIR"
 echo "  target     : $TARGET_DIR"
@@ -185,22 +185,22 @@ fi
 echo "  command    : ${COMMAND[*]}"
 echo "========================================================"
 
-echo "[collect_one] GuardFS 마운트(collect-only) 중..."
-# GuardFS 자체 출력([WRITE]/종료 트레이스백 등)은 터미널 대신 로그 파일로 보낸다.
+echo "[collect_one] holdFS 마운트(collect-only) 중..."
+# holdFS 자체 출력([WRITE]/종료 트레이스백 등)은 터미널 대신 로그 파일로 보낸다.
 mkdir -p "$COLLECT_DIR"
-GUARDFS_LOG="$COLLECT_DIR/${RUN_ID}.guardfs.log"
+HOLDFS_LOG="$COLLECT_DIR/${RUN_ID}.holdfs.log"
 # shellcheck disable=SC1090
 ( source "$VENV_ACTIVATE"; exec python3 "$PASSTHROUGH" "$MOUNT_DIR" "$UNDERLAY_DIR" \
-      --collect-only --run-id "$RUN_ID" ) >"$GUARDFS_LOG" 2>&1 &
-GUARDFS_PID=$!
+      --collect-only --run-id "$RUN_ID" ) >"$HOLDFS_LOG" 2>&1 &
+HOLDFS_PID=$!
 
 # 마운트 완료 대기 (최대 15초)
 for _ in $(seq 1 30); do
     if mountpoint -q "$MOUNT_DIR"; then break; fi
-    if ! kill -0 "$GUARDFS_PID" 2>/dev/null; then die "GuardFS가 시작 중 종료됨"; fi
+    if ! kill -0 "$HOLDFS_PID" 2>/dev/null; then die "holdFS가 시작 중 종료됨"; fi
     sleep 0.5
 done
-mountpoint -q "$MOUNT_DIR" || die "GuardFS 마운트 실패(타임아웃)"
+mountpoint -q "$MOUNT_DIR" || die "holdFS 마운트 실패(타임아웃)"
 echo "[collect_one] 마운트 완료"
 
 # ----------------------------------------
@@ -230,7 +230,7 @@ elif [ "$DO_PREP" -eq 1 ]; then
     i=1
     for ext in txt doc docx pdf xls xlsx ppt pptx html ps jpg png csv json xml log bak db sql unk; do
         f="$TARGET_DIR/file_$(printf '%02d' "$i").$ext"
-        printf 'GuardFS test file\nindex=%02d\nextension=%s\nrun=%s\n' \
+        printf 'holdFS test file\nindex=%02d\nextension=%s\nrun=%s\n' \
             "$i" "$ext" "$RUN_ID" > "$f"
         # 최소 크기 필터가 있는 샘플도 암호화하도록 ~64KB 랜덤 데이터로 채운다.
         head -c 65536 /dev/urandom >> "$f" 2>/dev/null || true
@@ -269,7 +269,7 @@ echo "[collect_one] 수집기 종료 (rc=$COLLECTOR_RC)"
 # 3.5) eBPF 로그 회수 (격리 폴더 → 일반 수집 폴더)
 #   워크로드(악성코드)가 끝난 지금은 안전하므로, root 전용 격리 폴더에 있던
 #   eBPF 로그/메타를 일반 폴더(사용자 소유)로 복사해 백업(scp)·요약에서 쓴다.
-#   FUSE 로그는 GuardFS가 사용자 권한으로 쓰기 때문에 격리 대상이 아니며,
+#   FUSE 로그는 holdFS가 사용자 권한으로 쓰기 때문에 격리 대상이 아니며,
 #   광범위 스캔형 랜섬웨어에서는 유실될 수 있다(eBPF 로그가 주력 데이터).
 # ----------------------------------------
 mkdir -p "$COLLECT_DIR"

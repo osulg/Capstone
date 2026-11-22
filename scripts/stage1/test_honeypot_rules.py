@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GuardFS HoneypotDetector 전용 경로·연산 단위 테스트
+"""holdFS HoneypotDetector 전용 경로·연산 단위 테스트
 
 이 테스트는 FUSE를 마운트하지 않고 ``HoneypotDetector.check``의 입력과 판정만 검증
 모든 테스트는 임시 루트 아래에 다음처럼 별도 경로를
@@ -38,7 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from guardfs.stage1.honeypot import HoneypotDetector  # noqa: E402
+from holdfs.stage1.honeypot import HoneypotDetector  # noqa: E402
 
 
 @dataclass
@@ -57,7 +57,7 @@ class HoneypotRuleTests(unittest.TestCase):
     """허니팟 경로와 정상 경로가 확실히 분리되는지 검사한다."""
 
     def setUp(self):
-        self.tempdir = tempfile.TemporaryDirectory(prefix="guardfs-honeypot-")
+        self.tempdir = tempfile.TemporaryDirectory(prefix="holdfs-honeypot-")
         self.root = Path(self.tempdir.name)
 
         # 정상 파일 영역과 허니팟 영역을 의도적으로 분리한다.
@@ -205,7 +205,7 @@ class HoneypotRuleTests(unittest.TestCase):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="GuardFS HoneypotDetector 테스트")
+    parser = argparse.ArgumentParser(description="holdFS HoneypotDetector 테스트")
     parser.add_argument(
         "tests",
         nargs="*",

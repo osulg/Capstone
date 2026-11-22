@@ -3,7 +3,7 @@
 set -e
 
 echo "========================================"
-echo " GuardFS Start"
+echo " holdFS Start"
 echo "========================================"
 
 # ----------------------------------------
@@ -19,10 +19,10 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENV_DIR="$PROJECT_ROOT/venv"
 
 # ----------------------------------------
-# 3. GuardFS 런타임 경로
+# 3. holdFS 런타임 경로
 # ----------------------------------------
 
-RUNTIME_DIR="$HOME/guardfs_runtime"
+RUNTIME_DIR="$HOME/holdfs_runtime"
 MOUNT_DIR="$RUNTIME_DIR/mount"
 UNDERLAY_DIR="$RUNTIME_DIR/underlay"
 
@@ -69,7 +69,7 @@ echo "[OK] Runtime directories ready"
 
 if mountpoint -q "$MOUNT_DIR"; then
     echo ""
-    echo "[ERROR] GuardFS가 이미 마운트되어 있습니다."
+    echo "[ERROR] holdFS가 이미 마운트되어 있습니다."
     echo "Mount point: $MOUNT_DIR"
     echo ""
     echo "먼저 다음 명령으로 언마운트하세요:"
@@ -86,17 +86,17 @@ fi
 cd "$PROJECT_ROOT"
 
 # ----------------------------------------
-# 9. GuardFS 실행
+# 9. holdFS 실행
 # ----------------------------------------
 
 echo ""
 echo "========================================"
-echo " Starting GuardFS"
+echo " Starting holdFS"
 echo "========================================"
 echo ""
 
 # 추가 인자는 그대로 전달 (예: --collect-only --run-id <ID>)
-"$VENV_DIR/bin/python3" guardfs/fuse_fs/passthrough.py \
+"$VENV_DIR/bin/python3" holdfs/fuse_fs/passthrough.py \
     "$MOUNT_DIR" \
     "$UNDERLAY_DIR" \
     "$@"

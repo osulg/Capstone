@@ -59,11 +59,11 @@ def _ext(path):
     return posixpath.splitext(path)[1].lower()
 
 
-# 확장자 변경 rename 판정은 런타임 PidStats와 같은 코드를 쓴다(guardfs/common/ext_rule.py).
+# 확장자 변경 rename 판정은 런타임 PidStats와 같은 코드를 쓴다(holdfs/common/ext_rule.py).
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
-from guardfs.common.ext_rule import is_ext_change as _is_ext_change  # noqa: E402
+from holdfs.common.ext_rule import is_ext_change as _is_ext_change  # noqa: E402
 
 
 def _safe_div(a, b):

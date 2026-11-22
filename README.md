@@ -15,7 +15,7 @@ FUSE 기반 랜섬웨어(파일 공격형 악성코드) 대응 파일 시스템.
 ### 1. HoldFS EDR 대시보드 (`dashboard/`)
 
 HoldFS가 남기는 로그를 에이전트가 읽어 JSON으로 서버에 보내고, 웹 화면에서 실시간으로 보여준다.
-HoldFS 탐지·정책 코드(`guardfs/`)는 대시보드 때문에 바뀌지 않는다.
+HoldFS 탐지·정책 코드(`holdfs/`)는 대시보드 때문에 바뀌지 않는다.
 
 ```text
 HoldFS ──(~/filesecurity.log, stdout)──▶ agent.py ──JSON──▶ server.py ──▶ 브라우저
@@ -62,15 +62,15 @@ bash dashboard/run_all.sh                            # 터미널 1: 서버 + Hol
 
 ```bash
 # 보호 폴더 (반드시 HoldFS 마운트 경로로 실행)
-python3 experiments/simulators/sim_highentropy.py ~/guardfs_runtime/mount/sim_target --keep
+python3 experiments/simulators/sim_highentropy.py ~/holdfs_runtime/mount/sim_target --keep
 # 보호 없는 비교 폴더 → 대시보드 '파일 상태' 탭에서 나란히 확인
-python3 experiments/simulators/sim_highentropy.py ~/guardfs_demo/unprotected/sim_target --keep
+python3 experiments/simulators/sim_highentropy.py ~/holdfs_demo/unprotected/sim_target --keep
 # 허니팟 동작 검증
 bash scripts/stage1/test_honeypot_behavior.sh
 ```
 
-- 런타임 경로: mount `~/guardfs_runtime/mount`, underlay `~/guardfs_runtime/underlay`
-  (디렉터리·모듈 이름은 아직 `guardfs`를 쓴다. 제품명 HoldFS는 화면 표기에 적용한 단계다.)
+- 런타임 경로: mount `~/holdfs_runtime/mount`, underlay `~/holdfs_runtime/underlay`
+  (디렉터리·모듈 이름은 아직 `holdfs`를 쓴다. 제품명 HoldFS는 화면 표기에 적용한 단계다.)
 - HIGH로 판정된 프로세스는 SIGSTOP 상태로 남는다. `kill -9 <PID>`로 정리한다.
 - `scripts/run_sample.sh` / `collect_one.sh`는 **수집 모드(`--collect-only`)** 라 탐지·정책이 꺼져 있다. 탐지 시연에는 쓰지 않는다.
 
@@ -84,7 +84,7 @@ bash scripts/stage1/test_honeypot_behavior.sh
 | `sim_highentropy.py` — `/usr/local/bin` + `/usr/bin/python3`(신뢰) 실행 | LOW로 시작 → Stage1 `EntropyDetector` → `.locked` rename은 Stage1 사전 검사(`ExtChangeDetector`)로 차단 → 관찰 창 재채점에서 **ML 판정 `watch_dyn_only=0.535`로 HIGH** | 첫 파일 1개 변조 (판정 전 LOW write 반영) |
 | `test_honeypot_behavior.sh` | 허니팟 읽기·쓰기·삭제·rename 차단, 정상 파일 오탐 없음 | **25/25 PASS** |
 | Infection Monkey 랜섬웨어 시뮬레이션 (비트 반전, 엔트로피 변화 없음) | 선제 MEDIUM으로 `.txt` 쓰기 버퍼링 → `.docx` 헤더 손상으로 `magic number 불일치` → HIGH, 버퍼 드롭, rename 차단, SIGSTOP | 내용 보존 (버퍼 드롭) |
-| `workload_guardfs.sh` (정상 업무) | MEDIUM/HIGH 격상 없이 완료 | — |
+| `workload_holdfs.sh` (정상 업무) | MEDIUM/HIGH 격상 없이 완료 | — |
 
 ---
 
@@ -93,8 +93,8 @@ bash scripts/stage1/test_honeypot_behavior.sh
 - **MEDIUM 구간의 이름 변경**: rename은 HIGH 상태에서만 차단되고, MEDIUM 동안에는 반영된다.
   그래서 HIGH 격상 전 MEDIUM 구간에서 바뀐 파일명(예: Infection Monkey의 `.m0nk3y`)은 반영될 수 있다.
   **파일 내용은 버퍼 드롭으로 보존**되지만 이름은 바뀔 수 있다. (`.m0nk3y`는 확장자 사전 차단 목록에 없음)
-- **신뢰 경로 목록 불일치**: `guardfs/stage1/trust.py`(`is_trusted_pid`, dpkg 검증 포함)와
-  `guardfs/common/config.py`(`is_trusted_process`, 경로만)의 신뢰 경로가 다르다. 같은 프로세스를 다르게 판정할 수 있다.
+- **신뢰 경로 목록 불일치**: `holdfs/stage1/trust.py`(`is_trusted_pid`, dpkg 검증 포함)와
+  `holdfs/common/config.py`(`is_trusted_process`, 경로만)의 신뢰 경로가 다르다. 같은 프로세스를 다르게 판정할 수 있다.
 - **신뢰 프로세스의 첫 write**: 신뢰 프로세스는 SUSPICIOUS여도 LOW로 취급되어, ML이 HIGH를 판정하기 전의 write가 디스크에 반영된다.
 - **프로세스를 나눠 쓰는 공격**: 파일마다 새 프로세스로 처리하는 방식(시스템 도구 악용 등)은 PID 단위 행동 탐지가 약해질 수 있다.
 - **PoC 범위**: FUSE의 사용자-커널 전환 오버헤드, root 권한 공격자의 마운트 해제·하부 저장소 직접 접근은 범위 밖이다. 향후 eBPF 또는 커널 미니필터 계층으로 이식해 성능과 보안성을 확보하는 것이 발전 방향이다.
@@ -148,9 +148,9 @@ HIGH(0.82)는 0.70~0.80이 근소하게 낫지만 근거 표본이 1개 차이�
 |---|---|---|---|
 | 1 | 확장자 그룹별 보호 강도 차등 | 파일을 `HIGH_VALUE`(문서·DB·키)/`COMPRESSED`(미디어)/`PLAIN_TEXT`/`UNKNOWN` 4그룹으로 나눠 버퍼 상한·지연 배율·엔트로피 임계값을 다르게 적용 | Taylor et al., "The Inadequacy of Entropy-Based Ransomware Detection", **ICONIP 2019**(원 제안서엔 NDSS로 잘못 인용돼 있어 정정) — 압축 포맷은 암호화 후에도 엔트로피 증가폭이 작아 단일 임계값으로 탐지 어려움. NetApp ONTAP ARP의 확장자군별 차등 정책 |
 | 2 | magic byte를 넘어선 구조 검증 | 커밋 직전 해당 경로의 버퍼된 조각을 메모리에서 재조합해 ZIP 목차(`[Content_Types].xml`)·PDF 트레일러(`%%EOF`)·SQLite 헤더 등 내부 구조까지 검증. HIGH_VALUE 그룹에만 적용 | magic byte만 맞추고 내부를 깨뜨리는 회피에 대응 |
-| 3 | 경과시간 기반 지연 재설계 | write "누적 횟수" 대신 MEDIUM 진입 후 "경과시간" 구간(0~2s/2~5s/5s~)별로 지연 적용, 그룹별 배율 곱함 | von der Assen et al., "GuardFS", **arXiv:2401.17917**, Table 6 — DEL+OBF 방어 실측: 1초 지연 평균 손실 3.87MB, 5초 0.7MB, 10초 0.75MB(5초 이후 개선 없음). 논문 수치를 실제 PDF Table 6에서 직접 대조해 확인 |
+| 3 | 경과시간 기반 지연 재설계 | write "누적 횟수" 대신 MEDIUM 진입 후 "경과시간" 구간(0~2s/2~5s/5s~)별로 지연 적용, 그룹별 배율 곱함 | von der Assen et al., "holdFS", **arXiv:2401.17917**, Table 6 — DEL+OBF 방어 실측: 1초 지연 평균 손실 3.87MB, 5초 0.7MB, 10초 0.75MB(5초 이후 개선 없음). 논문 수치를 실제 PDF Table 6에서 직접 대조해 확인 |
 | 4 | unlink 단계적 차단 | MEDIUM 중 unlink는 실제 삭제 대신 스테이징으로 이동(호출자에겐 성공으로 응답) → LOW 판정 시 삭제 확정, HIGH 격상 시 원본 복원 | Rcryptect, *Computers & Security* 2021의 "의심 단계 진입 후 root만 삭제 허용" 아이디어를, 권한 모델이 없는 우리 구조에 맞게 스테이징+지연확정 방식으로 재설계 |
-| 5 | 시스템 전역 버퍼 상한 | PID별 상한과 별개로 전역 200MB 상한을 두고, 초과를 유발한 write의 주체를 즉시 HIGH로 격상 | GuardFS/ShieldFS가 공통으로 지적하는 "버퍼 기반 방어는 동시 프로세스 수에 비례해 메모리 요구량이 느는 DoS 위험" |
+| 5 | 시스템 전역 버퍼 상한 | PID별 상한과 별개로 전역 200MB 상한을 두고, 초과를 유발한 write의 주체를 즉시 HIGH로 격상 | holdFS/ShieldFS가 공통으로 지적하는 "버퍼 기반 방어는 동시 프로세스 수에 비례해 메모리 요구량이 느는 DoS 위험" |
 
 ### 기존(main) 대비 정책 변화 요약
 
@@ -178,7 +178,7 @@ HIGH(0.82)는 0.70~0.80이 근소하게 낫지만 근거 표본이 1개 차이�
 
 **새 모델 작업 시 우선순위**:
 
-1. **페어링된 데이터셋 확보** — `sim_ransomware.py` 같은 시뮬레이터로 GuardFS를 실제로
+1. **페어링된 데이터셋 확보** — `sim_ransomware.py` 같은 시뮬레이터로 holdFS를 실제로
    돌리면서, 같은 프로세스의 동적 피처(PidStats)와 그 프로세스 실행파일의 정적 피처를
    동시에 기록하는 파이프라인부터 만들어야 앙상블 튜닝이 의미가 있다.
 2. **확률 보정(calibration)** — RandomForest의 `predict_proba`는 실제 확률이 아니라서,
@@ -370,7 +370,7 @@ HIGH 격상 사유 예시:
 
 ```
 Capstone/
-├── guardfs/fuse_fs/
+├── holdfs/fuse_fs/
 │   └── passthrough.py          # FUSE 메인 (이벤트 수집, 상태 관리, write 라우팅)
 ├── stage1/                     # Stage 1 경량 탐지 모듈
 │   └── detector.py             # EntropyDetector / FrequencyDetector / HoneypotDetector
@@ -417,13 +417,13 @@ mkdir -p ~/test_mount/honeypot
 source venv/bin/activate
 ```
 
-### 2. GuardFS 마운트 (터미널 1)
+### 2. holdFS 마운트 (터미널 1)
 
 ```bash
-python3 guardfs/fuse_fs/passthrough.py ~/test_mount ~/test_underlay
+python3 holdfs/fuse_fs/passthrough.py ~/test_mount ~/test_underlay
 ```
 
-마운트 성공 시 `~/test_mount/` 에 파일을 쓰면 GuardFS가 인터셉트한다.  
+마운트 성공 시 `~/test_mount/` 에 파일을 쓰면 holdFS가 인터셉트한다.  
 실제 데이터는 `~/test_underlay/` 에 저장된다.
 
 ### 3. 언마운트 (터미널 2 — 종료 시)
@@ -436,7 +436,7 @@ fusermount -u ~/test_mount
 
 ## 테스트 방법
 
-GuardFS를 마운트한 상태에서 **별도 터미널**에서 실행한다.
+holdFS를 마운트한 상태에서 **별도 터미널**에서 실행한다.
 
 ---
 

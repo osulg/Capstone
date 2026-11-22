@@ -17,7 +17,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from guardfs.common.paths import (
+from holdfs.common.paths import (
     FILESECURITY_LOG_PATH,
     PROJECT_ROOT as HOLDFS_PROJECT_ROOT,
     get_event_log_path,
@@ -923,7 +923,7 @@ class ScenarioRunner:
             record.result = result
             record.holdfs_pid = result.get(
                 "holdfs_pid",
-                result.get("guardfs_pid"),
+                result.get("holdfs_pid"),
             )
 
             # 최종 JSON을 기준으로 단계 결과를 다시 확정한다.

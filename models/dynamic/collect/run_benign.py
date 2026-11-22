@@ -2,7 +2,7 @@
 """
 정상 워크로드 수집 러너 (Task 4).
 
-전제: 다른 터미널에서 GuardFS가 수집 모드로 마운트돼 있어야 한다.
+전제: 다른 터미널에서 holdFS가 수집 모드로 마운트돼 있어야 한다.
       (--collect-only, 마운트 = --mount 인자)
       그래야 실행 1회에 대해 FUSE 로그와 eBPF 로그가 같은 run_id로 함께 남는다.
 
@@ -48,7 +48,7 @@ DECOY_FIELDS = ["decoy_mode", "decoy_seed", "decoy_files", "decoy_depth",
 
 def parse_args():
     p = argparse.ArgumentParser(description="정상 워크로드 수집 러너")
-    p.add_argument("--mount", required=True, help="수집 모드 GuardFS 마운트 경로")
+    p.add_argument("--mount", required=True, help="수집 모드 holdFS 마운트 경로")
     p.add_argument("--out-csv", help="run 메타데이터 CSV (기본: 마운트 옆 collect/benign_runs.csv)")
     p.add_argument("--as-user", help="워크로드 실행 사용자 (root로 러너를 돌릴 때 권장)")
     p.add_argument("--repeats", type=int, default=3, help="각 조합 반복 횟수")
@@ -69,10 +69,10 @@ def parse_args():
                    help="[random] 파일 수 고정 (L 평가셋: 5000). run_id 접두가 L로 바뀐다")
     p.add_argument("--decoy-files-min", type=int, default=decoy_gen.FILES_MIN)
     p.add_argument("--decoy-files-max", type=int, default=decoy_gen.FILES_MAX)
-    p.add_argument("--guardfs", action="store_true",
-                   help="각 run마다 GuardFS를 collect-only로 마운트해 FUSE 로그도 남긴다"
+    p.add_argument("--holdfs", action="store_true",
+                   help="각 run마다 holdFS를 collect-only로 마운트해 FUSE 로그도 남긴다"
                         " (collect_one.sh와 동일 방식: 일반 사용자로 실행하고 수집기는 sudo로 돈다)")
-    p.add_argument("--underlay", help="GuardFS underlay 경로 (기본: <mount>와 형제인 underlay)")
+    p.add_argument("--underlay", help="holdFS underlay 경로 (기본: <mount>와 형제인 underlay)")
     p.add_argument("--repo", help="레포 루트 (기본: 이 파일 기준 자동)")
     return p.parse_args()
 
@@ -86,16 +86,16 @@ def main():
     underlay = os.path.realpath(args.underlay) if args.underlay \
         else os.path.join(os.path.dirname(mount), "underlay")
 
-    if args.guardfs:
-        # collect_one.sh와 동일: GuardFS는 사용자 권한으로 띄우고 수집기만 sudo.
+    if args.holdfs:
+        # collect_one.sh와 동일: holdFS는 사용자 권한으로 띄우고 수집기만 sudo.
         # root로 이 스크립트를 돌리면 사용자 권한 워크로드가 root 마운트에 접근 못 한다.
         if os.geteuid() == 0:
-            print("[run_benign] 오류: --guardfs 모드는 일반 사용자로 실행해야 합니다 "
+            print("[run_benign] 오류: --holdfs 모드는 일반 사용자로 실행해야 합니다 "
                   "(수집기는 내부에서 sudo로 호출됨).", file=sys.stderr)
             return 2
     elif not os.path.ismount(mount) and not args.dry_run:
         print(f"[run_benign] 경고: {mount} 가 마운트 지점이 아닙니다. "
-              f"GuardFS 수집 모드가 켜져 있는지 확인하세요.", file=sys.stderr)
+              f"holdFS 수집 모드가 켜져 있는지 확인하세요.", file=sys.stderr)
 
     names = args.workloads.split(",") if args.workloads else None
     workloads = bw.available(names)
@@ -165,13 +165,13 @@ def main():
         rc = None
         start = time.time()
         start_wall = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        guardfs_proc = None
+        holdfs_proc = None
 
         try:
-            # --guardfs: 이 run 전용으로 GuardFS를 collect-only 마운트한다.
+            # --holdfs: 이 run 전용으로 holdFS를 collect-only 마운트한다.
             # 그래야 FUSE 로그가 이 run_id로 따로 남는다(악성 수집과 동일 방식).
-            if args.guardfs:
-                guardfs_proc = _mount_guardfs(run_id, mount, underlay, repo)
+            if args.holdfs:
+                holdfs_proc = _mount_holdfs(run_id, mount, underlay, repo)
 
             # 이전 실행(같은 run_id)이 남긴 파일을 먼저 제거한다. 안 그러면
             # gzip/sqlite 등이 기존 파일과 충돌해 프롬프트에서 멈추거나 실패한다.
@@ -181,8 +181,8 @@ def main():
             if args.as_user:
                 _chown_tree(workdir, args.as_user)
 
-            # --guardfs면 GuardFS는 사용자 권한, 수집기는 sudo(= collect_one.sh와 동일).
-            cmd = (["sudo"] if args.guardfs else []) + [
+            # --holdfs면 holdFS는 사용자 권한, 수집기는 sudo(= collect_one.sh와 동일).
+            cmd = (["sudo"] if args.holdfs else []) + [
                 sys.executable, COLLECTOR,
                 "--run-id", run_id,
                 "--target-dir", mount,
@@ -200,13 +200,13 @@ def main():
         except Exception as e:  # noqa: BLE001 - run 하나 실패가 전체를 멈추지 않게
             status = f"error:{type(e).__name__}:{e}"
         finally:
-            if guardfs_proc is not None:
-                _unmount_guardfs(guardfs_proc, mount)
+            if holdfs_proc is not None:
+                _unmount_holdfs(holdfs_proc, mount)
             # 로그는 이미 collect/ 에 저장됐으므로 워크로드가 만든 데이터는 지워도 된다.
             # 수백 run에서 디스크가 계속 차오르는 것을 막는다.
             if args.cleanup:
                 shutil.rmtree(workdir, ignore_errors=True)
-                if args.guardfs:
+                if args.holdfs:
                     shutil.rmtree(os.path.join(underlay, "runs", run_id),
                                   ignore_errors=True)
 
@@ -234,10 +234,10 @@ def main():
     return 0
 
 
-def _mount_guardfs(run_id, mount, underlay, repo):
-    """이 run 전용 GuardFS를 collect-only로 마운트(사용자 권한). 마운트되면 Popen 반환."""
+def _mount_holdfs(run_id, mount, underlay, repo):
+    """이 run 전용 holdFS를 collect-only로 마운트(사용자 권한). 마운트되면 Popen 반환."""
     import signal  # noqa: F401  (unmount에서 사용)
-    passthrough = os.path.join(repo, "guardfs", "fuse_fs", "passthrough.py")
+    passthrough = os.path.join(repo, "holdfs", "fuse_fs", "passthrough.py")
     venv = os.path.join(repo, "venv", "bin", "activate")
     if not os.path.exists(passthrough):
         raise RuntimeError(f"passthrough.py 없음: {passthrough}")
@@ -260,14 +260,14 @@ def _mount_guardfs(run_id, mount, underlay, repo):
         if os.path.ismount(mount):
             return proc
         if proc.poll() is not None:
-            raise RuntimeError("GuardFS가 시작 중 종료됨")
+            raise RuntimeError("holdFS가 시작 중 종료됨")
         time.sleep(0.5)
-    _unmount_guardfs(proc, mount)
-    raise RuntimeError("GuardFS 마운트 타임아웃")
+    _unmount_holdfs(proc, mount)
+    raise RuntimeError("holdFS 마운트 타임아웃")
 
 
-def _unmount_guardfs(proc, mount):
-    """GuardFS 프로세스 종료 + 마운트 해제."""
+def _unmount_holdfs(proc, mount):
+    """holdFS 프로세스 종료 + 마운트 해제."""
     import signal
     try:
         proc.send_signal(signal.SIGINT)

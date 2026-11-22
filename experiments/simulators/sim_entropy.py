@@ -3,10 +3,10 @@ import sys
 
 # 1. 테스트용 대상 원본 파일 경로 지정 (마운트 안 파일)
 #    명령행 인자로 받는다. 예:
-#      python sim_entropy.py ~/guardfs_runtime/mount/victim.txt
+#      python sim_entropy.py ~/holdfs_runtime/mount/victim.txt
 if len(sys.argv) < 2:
-    print("사용법: python sim_entropy.py <GuardFS 마운트 안 대상파일 경로>")
-    print("예:    python sim_entropy.py ~/guardfs_runtime/mount/victim.txt")
+    print("사용법: python sim_entropy.py <holdFS 마운트 안 대상파일 경로>")
+    print("예:    python sim_entropy.py ~/holdfs_runtime/mount/victim.txt")
     sys.exit(1)
 path = os.path.expanduser(sys.argv[1])
 
@@ -29,4 +29,4 @@ high_entropy_data = os.urandom(1024)
 with open(path, "wb") as f:
     f.write(high_entropy_data)
 
-print(f"[ATTACK] 고엔트로피 데이터 쓰기 완료! GuardFS 로그를 확인하세요.")
+print(f"[ATTACK] 고엔트로피 데이터 쓰기 완료! holdFS 로그를 확인하세요.")

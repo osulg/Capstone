@@ -1,4 +1,4 @@
-# GuardFS 악성코드 동적 행위 수집 — 진행 정리 & 튜토리얼
+# holdFS 악성코드 동적 행위 수집 — 진행 정리 & 튜토리얼
 
 > 이 문서는 랜섬웨어의 **파일 시스템 행위**를 FUSE + eBPF로 수집하기 위해
 > 2-VM 격리 환경을 구축하고 실제 수집을 진행한 과정을 정리한 것이다.
@@ -11,14 +11,14 @@
 ### 목표
 - 이미 수집된 **정상(benign)** 데이터에 더해, **악성(ransomware)** 파일시스템 행위 데이터를 수집
 - 수집 데이터로 새 **동적 탐지 모델**(IsolationForest / RandomForest) 학습 준비
-- 특징: FUSE(GuardFS) 관점 + eBPF 관점을 **동일 스키마**로 동시 수집, lineage 기반 라벨링
+- 특징: FUSE(holdFS) 관점 + eBPF 관점을 **동일 스키마**로 동시 수집, lineage 기반 라벨링
 
 ### 최종 구성 (2-VM)
 
 | VM | IP | 역할 | 상태 |
 |----|----|------|------|
 | **Sandbox** (`songjiwoo`) | `192.168.85.1` | 가짜 인터넷(INetSim+dnsmasq), 백업 저장소(sshd) | 계속 켜둠, 복원 X |
-| **Infected** (`infected`) | `192.168.85.3` | GuardFS(FUSE)+eBPF 수집, 악성코드 실행 | 샘플마다 스냅샷 복원 |
+| **Infected** (`infected`) | `192.168.85.3` | holdFS(FUSE)+eBPF 수집, 악성코드 실행 | 샘플마다 스냅샷 복원 |
 
 - **네트워크**: VMware Host-only(VMnet1), DHCP 비활성, 호스트 어댑터 분리 → **완전 격리**
 - **격리 검증**: `ping 8.8.8.8` 실패 / 두 VM 간 `ping` 성공 / `nslookup` → `192.168.85.1`
@@ -27,7 +27,7 @@
 - [x] VMnet1 Host-only 격리망 + 두 VM 고정 IP(netplan/networkd)
 - [x] Sandbox 가짜 인터넷: **dnsmasq**(모든 도메인→85.1) + **INetSim**(HTTP 80 / HTTPS 443)
   - INetSim 자체 DNS는 최신 `Net::DNS`와 호환 문제로 죽어서 **dnsmasq로 대체**
-- [x] Infected: Capstone repo + Python venv + **BCC(eBPF)** + kernel headers + GuardFS(pyfuse3/trio)
+- [x] Infected: Capstone repo + Python venv + **BCC(eBPF)** + kernel headers + holdFS(pyfuse3/trio)
 - [x] 수집 스크립트
   - `scripts/collect_one.sh` — 마운트+파일준비+eBPF수집+요약을 한 번에
   - `scripts/run_sample.sh` — 패밀리별 인자 자동화 배치 도우미
@@ -35,9 +35,9 @@
 - [x] 실제 수집: **11개 패밀리 · 약 38 run** 확보 (상세는 아래 "패밀리별 수집 결과")
 
 ### 산출물 (수집 데이터 형식)
-`~/guardfs_runtime/collect/<run_id>.*`
+`~/holdfs_runtime/collect/<run_id>.*`
 - `<run_id>.ebpf.jsonl` — eBPF 관점 원시 이벤트
-- `<run_id>.fuse.jsonl` — FUSE(GuardFS) 관점 원시 이벤트
+- `<run_id>.fuse.jsonl` — FUSE(holdFS) 관점 원시 이벤트
 - `.ebpf.meta.json` / `.fuse.meta.json` — run 메타데이터
 
 `run_id` 규칙: `<family>_<sha256앞8자리>_<run번호>` (예: `avoslocker_0cd7b6ea_001`)
@@ -95,7 +95,7 @@
 | 데이터 유실 | 스냅샷 복원 전 백업 안 함 / Sandbox 실수 복원 | **백업 먼저, 복원 나중** 철칙 |
 | `Failed to get block size`로 암호화 실패 (INC Ransom) | passthrough.py에 `statfs` 미구현 → pyfuse3가 ENOSYS 반환 | **passthrough.py에 `statfs` 핸들러 추가** (underlay statvfs 전달) |
 | FreeBSD 바이너리가 아무 행위 안 함 (Interlock 일부) | arch 가드가 CPU만 보고 OS ABI 무시 → FreeBSD용 x86-64 통과 | run_sample.sh에 **FreeBSD 감지 추가**(file 출력에 FreeBSD면 스킵) |
-| 광범위 스캔형이 수집 로그까지 암호화 (Gunra 등) | 로그가 홈 아래(collect/)에 있어 함께 암호화됨 | eBPF 로그를 **root 전용 폴더(`/var/log/guardfs`)에 격리** 후 종료 시 회수 |
+| 광범위 스캔형이 수집 로그까지 암호화 (Gunra 등) | 로그가 홈 아래(collect/)에 있어 함께 암호화됨 | eBPF 로그를 **root 전용 폴더(`/var/log/holdfs`)에 격리** 후 종료 시 회수 |
 | 랜섬노트만 생기고 암호화는 안 됨 | "노트 생성 ≠ 암호화". ESXi 조건/인자 미충족 | **op 분포로 판정**: WRITE/RENAME/UNLINK 없으면 실패로 간주·폐기 |
 
 ### 알려진 한계
@@ -114,7 +114,7 @@
 ### 0. 전체 그림
 ```
 [Infected VM]                         [Sandbox VM]
- GuardFS(FUSE) + eBPF 수집    ── 격리망(VMnet1) ──   dnsmasq(모든 도메인→85.1)
+ holdFS(FUSE) + eBPF 수집    ── 격리망(VMnet1) ──   dnsmasq(모든 도메인→85.1)
  악성코드 실행                                       INetSim(가짜 HTTP/HTTPS)
       │                                              (+ 백업 저장 sshd)
       └─ 어떤 도메인 요청 → 85.1(가짜)로 유도, 진짜 인터넷은 차단
@@ -210,17 +210,17 @@ scripts/run_sample.sh <FAMILY> --list
 scripts/run_sample.sh <FAMILY> <SHA8>
 
 # ③ 성공 확인: "파일 변경 감지됨" + 이벤트 수백~수천
-ls -la ~/guardfs_runtime/underlay/attack_target/     # 암호화/랜섬노트 확인
+ls -la ~/holdfs_runtime/underlay/attack_target/     # 암호화/랜섬노트 확인
 
 # ④ 백업 (복원 전 필수!)
 scp -O -o StrictHostKeyChecking=no \
-    ~/guardfs_runtime/collect/<run_id>.* songjiwoo@192.168.85.1:~/collected/
+    ~/holdfs_runtime/collect/<run_id>.* songjiwoo@192.168.85.1:~/collected/
 
 # ⑤ Infected 스냅샷 복원 → 다음 샘플
 ```
 
 **내부 동작** (`run_sample.sh` → `collect_one.sh`):
-1. GuardFS를 `--collect-only`로 마운트 (탐지·차단 없이 순수 로깅)
+1. holdFS를 `--collect-only`로 마운트 (탐지·차단 없이 순수 로깅)
 2. 마운트 안 `attack_target/`에 테스트 파일 20종(64KB) 생성 + 실행 전 해시
 3. eBPF 수집기(`models/dynamic/collect/ebpf_collector.py`)가 **프로브 등록 후** 샘플을 `infected` 권한으로 실행, 프로세스+자손 추적
 4. eBPF/FUSE 두 관점 JSONL 저장, 실행 후 해시로 파일 변경 확인, 언마운트

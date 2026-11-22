@@ -226,7 +226,7 @@ def register_process_and_wait(
 def get_runtime_paths() -> tuple[Path, Path]:
     """S01 직접 실행과 웹 실행에서 사용하는 기본 경로를 반환한다."""
 
-    runtime = Path.home() / "guardfs_runtime"
+    runtime = Path.home() / "holdfs_runtime"
 
     return (
         runtime / "mount",

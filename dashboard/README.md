@@ -9,7 +9,7 @@ HoldFS ──(~/filesecurity.log, stdout)──▶ agent.py ──JSON POST─�
                                                                    └─ /api/chat: 이벤트 + 지식 검색(RAG) → OpenAI
 ```
 
-HoldFS 코드(`guardfs/`)는 수정하지 않는다. 에이전트가 HoldFS가 이미 남기는 로그를 읽는다.
+HoldFS 코드(`holdfs/`)는 수정하지 않는다. 에이전트가 HoldFS가 이미 남기는 로그를 읽는다.
 
 | 파일 | 역할 |
 |---|---|
@@ -24,15 +24,15 @@ HoldFS 코드(`guardfs/`)는 수정하지 않는다. 에이전트가 HoldFS가 �
 ```bash
 bash dashboard/run_all.sh            # 서버 + HoldFS + 에이전트
 bash dashboard/run_all.sh --demo     # + 샘플 이벤트
-bash dashboard/run_all.sh --no-guardfs   # HoldFS 없이 화면만 확인
+bash dashboard/run_all.sh --no-holdfs   # HoldFS 없이 화면만 확인
 ```
 
 - 시작 전에 이전에 떠 있던 서버 / 에이전트 / HoldFS 마운트를 정리한다 (중복 에이전트, 옛 코드로 도는 HoldFS 방지).
 - LLM 제공자(Gemini / Groq / OpenAI / 로컬)를 고르고 **API 키를 화면에 보이지 않게 입력**한다.
   키는 파일에 저장하지 않고 서버 프로세스 환경변수로만 전달한다. Enter만 누르면 로컬 모드.
-- 로그: `~/guardfs_runtime/dashboard_logs/{server,guardfs_stdout,agent}.log`
+- 로그: `~/holdfs_runtime/dashboard_logs/{server,holdfs_stdout,agent}.log`
 - **Ctrl+C 한 번**이면 세 프로세스를 모두 종료하고 마운트를 해제한다.
-- 테스트는 다른 터미널에서: `python3 experiments/simulators/sim_highentropy.py ~/guardfs_runtime/mount/sim_target --keep`
+- 테스트는 다른 터미널에서: `python3 experiments/simulators/sim_highentropy.py ~/holdfs_runtime/mount/sim_target --keep`
 
 아래는 각 구성 요소를 따로 실행하는 방법이다.
 
@@ -69,10 +69,10 @@ MEDIUM 격상 → victim_1~5 WRITE BUFFERED → HIGH 격상(reeval_score=0.837) 
 
 ```bash
 # 터미널 B: HoldFS 실행 (stdout을 파일로도 저장해야 격상 이유가 수집된다)
-PYTHONUNBUFFERED=1 ./scripts/run_guardfs.sh 2>&1 | tee ~/guardfs_stdout.log
+PYTHONUNBUFFERED=1 ./scripts/run_holdfs.sh 2>&1 | tee ~/holdfs_stdout.log
 
 # 터미널 C: 에이전트
-python dashboard/agent.py --stdout-log ~/guardfs_stdout.log
+python dashboard/agent.py --stdout-log ~/holdfs_stdout.log
 ```
 
 에이전트가 읽는 로그는 두 종류다.
@@ -89,19 +89,19 @@ python dashboard/agent.py --stdout-log ~/guardfs_stdout.log
 
 ### 강제 상태로 빠르게 시험하기
 
-HoldFS의 테스트용 강제 상태 파일(`/tmp/guardfs_state_<pid>`)을 사용한다.
+HoldFS의 테스트용 강제 상태 파일(`/tmp/holdfs_state_<pid>`)을 사용한다.
 
 ```bash
-MOUNT=~/guardfs_runtime/mount
+MOUNT=~/holdfs_runtime/mount
 
 # MEDIUM: write가 버퍼링된다 → 대시보드에 MEDIUM / WRITE / BUFFERED
-bash -c 'echo MEDIUM > /tmp/guardfs_state_$$; for i in 1 2 3; do echo data$i > '"$MOUNT"'/victim_$i.txt; done; sleep 1'
+bash -c 'echo MEDIUM > /tmp/holdfs_state_$$; for i in 1 2 3; do echo data$i > '"$MOUNT"'/victim_$i.txt; done; sleep 1'
 
 # HIGH: write가 차단되고 프로세스가 SIGSTOP 된다 → HIGH / WRITE / BLOCKED
-bash -c 'echo HIGH > /tmp/guardfs_state_$$; echo pwned > '"$MOUNT"'/victim_9.txt' &
+bash -c 'echo HIGH > /tmp/holdfs_state_$$; echo pwned > '"$MOUNT"'/victim_9.txt' &
 sleep 1; kill -9 %1 2>/dev/null   # 정지된 프로세스 정리
 
-rm -f /tmp/guardfs_state_*
+rm -f /tmp/holdfs_state_*
 ```
 
 강제 상태는 ML을 거치지 않으므로 `ESCALATE` 행(격상 이유)은 나오지 않는다.
@@ -120,16 +120,16 @@ HoldFS가 허니팟 접근을 차단하면 출력하는 `[HONEYPOT] pid=… op=�
 
 | 폴더 | 기본 경로 | 환경변수 |
 |---|---|---|
-| 보호 폴더 (HoldFS underlay) | `~/guardfs_runtime/underlay` | `DASH_PROTECTED_DIR` |
-| 보호 없는 폴더 (비교용) | `~/guardfs_demo/unprotected` | `DASH_UNPROTECTED_DIR` |
+| 보호 폴더 (HoldFS underlay) | `~/holdfs_runtime/underlay` | `DASH_PROTECTED_DIR` |
+| 보호 없는 폴더 (비교용) | `~/holdfs_demo/unprotected` | `DASH_UNPROTECTED_DIR` |
 
 - 파일 앞부분 4KB 엔트로피가 HoldFS 기준(`ENTROPY_THRESHOLD`, 7.0) 이상이면 "암호화 의심", 64B 미만은 "판정 불가".
 - `.locked` / `.enc` 등은 "의심 확장자"로 표시. 숨김 파일, 심볼릭 링크는 제외.
 - 보호 폴더의 `honeypot/` 파일은 "🍯 미끼 파일"로 목록 맨 위에 따로 표시하고, 정상/암호화 개수에서는 뺀다.
 - 시연: 같은 시뮬레이터를 두 경로에 각각 실행한다.
   ```bash
-  python3 experiments/simulators/sim_highentropy.py ~/guardfs_runtime/mount/sim_target --keep      # 보호
-  python3 experiments/simulators/sim_highentropy.py ~/guardfs_demo/unprotected/sim_target --keep   # 비보호
+  python3 experiments/simulators/sim_highentropy.py ~/holdfs_runtime/mount/sim_target --keep      # 보호
+  python3 experiments/simulators/sim_highentropy.py ~/holdfs_demo/unprotected/sim_target --keep   # 비보호
   ```
   보호 폴더는 반드시 **마운트 경로**로 실행해야 HoldFS가 개입한다(탭은 그 결과가 저장되는 underlay를 보여준다).
 
@@ -153,7 +153,7 @@ HoldFS가 허니팟 접근을 차단하면 출력하는 `[HONEYPOT] pid=… op=�
   "level": "HIGH",
   "pid": 905425,
   "process": "python3",
-  "target": "/home/user/guardfs_runtime/underlay/victim_6.txt",
+  "target": "/home/user/holdfs_runtime/underlay/victim_6.txt",
   "action": "WRITE",
   "result": "BLOCKED",
   "reason": "reeval_score=0.837"

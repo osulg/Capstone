@@ -103,9 +103,9 @@ v5 상위권이던 규모 피처(`total_write_bytes`, `files_per_dir`, `high_ent
 ## 5. 배포 작업 현황
 
 1. **런타임 피처 정합 — 완료** (`f1dec18`): `passthrough.py`의 `PidStats`와 학습 추출기
-   (`features.py`)가 같은 확장자 판정 규칙(`guardfs/common/ext_rule.py`)을 쓴다.
+   (`features.py`)가 같은 확장자 판정 규칙(`holdfs/common/ext_rule.py`)을 쓴다.
    규칙은 `config.DYNAMIC_EXT_RULE = "v6"`로 모델과 짝을 맞춘다.
-2. **모델 파일 — 완료** (`1af0fb1`, `5af2be0`): `train_v6.py`로 GuardFS venv(scikit-learn 1.3.2)에서
+2. **모델 파일 — 완료** (`1af0fb1`, `5af2be0`): `train_v6.py`로 holdFS venv(scikit-learn 1.3.2)에서
    RandomForest(n_estimators=400, random_state=42), run 균형 가중치로 학습한 `rf_model_v6.pkl`을
    런타임 모델로 전환했다. dyn-only HIGH 임계값은 0.6(`STAGE2_DYN_ONLY_HIGH_THRESHOLD`).
    메타데이터는 `train_v6_meta.json`.
@@ -130,9 +130,9 @@ python3 models/dynamic/collect/eval_v6.py --data models/dynamic/dataset_v6 --hol
 
 위 수치는 scikit-learn 1.9.1에서 계산했다. 1.3.2(VM venv)에서는 소수점이 조금 다를 수 있다.
 
-## 7. 런타임 검증 (VM, GuardFS 실제 마운트)
+## 7. 런타임 검증 (VM, holdFS 실제 마운트)
 
-v6 모델(rf_model_v6.pkl, ext_rule=v6, dyn-only HIGH 0.6)을 GuardFS에 올려 마운트 위에서 확인한 결과다.
+v6 모델(rf_model_v6.pkl, ext_rule=v6, dyn-only HIGH 0.6)을 holdFS에 올려 마운트 위에서 확인한 결과다.
 
 ### 정상 작업 (오탐 없음)
 

@@ -7,7 +7,7 @@ Stage1Detector
 - 탐지 여부와 탐지기 이름 반환
 """
 
-from guardfs.common.config import (
+from holdfs.common.config import (
     ENTROPY_BURST_MAX_PIDS,
     ENTROPY_BURST_MIN_BYTES,
     ENTROPY_BURST_MIN_FILES,
@@ -24,7 +24,7 @@ from .honeypot import HoneypotDetector
 
 
 class Stage1Detector:
-    """GuardFS의 Stage 1 탐지기를 통합하여 실행"""
+    """holdFS의 Stage 1 탐지기를 통합하여 실행"""
 
     def __init__(self, honeypot_dir: str):
         self.honeypot = HoneypotDetector(honeypot_dir)

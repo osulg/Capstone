@@ -2,8 +2,8 @@
 
 set -u
 
-MOUNT="${MOUNT:-$HOME/guardfs_runtime/mount}"
-UNDERLAY="${UNDERLAY:-$HOME/guardfs_runtime/underlay}"
+MOUNT="${MOUNT:-$HOME/holdfs_runtime/mount}"
+UNDERLAY="${UNDERLAY:-$HOME/holdfs_runtime/underlay}"
 TEST_NO="${1:-}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 
@@ -59,7 +59,7 @@ precheck() {
     fi
 
     local pid
-    pid="$(pgrep -f '[p]ython3 .*guardfs/fuse_fs/passthrough.py' | head -n 1)"
+    pid="$(pgrep -f '[p]ython3 .*holdfs/fuse_fs/passthrough.py' | head -n 1)"
     if [ -n "$pid" ]; then
         record "PASS" "Precheck process" "PID=$pid"
     else
@@ -76,7 +76,7 @@ final_health() {
     fi
 
     local pid
-    pid="$(pgrep -f '[p]ython3 .*guardfs/fuse_fs/passthrough.py' | head -n 1)"
+    pid="$(pgrep -f '[p]ython3 .*holdfs/fuse_fs/passthrough.py' | head -n 1)"
     if [ -n "$pid" ]; then
         record "PASS" "Final process health" "PID=$pid"
     else
@@ -90,10 +90,10 @@ test_mkdir_rmdir() {
     local underlay_path="$UNDERLAY/$case_name"
     local mount_attr underlay_attr
 
-    if mkdir "$mount_path" 2>/tmp/guardfs-test-error; then
+    if mkdir "$mount_path" 2>/tmp/holdfs-test-error; then
         record "PASS" "MKDIR" "created"
     else
-        record "FAIL" "MKDIR" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "MKDIR" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     if [ -d "$mount_path" ]; then
@@ -118,10 +118,10 @@ test_mkdir_rmdir() {
         record "FAIL" "Directory attributes" "comparison unavailable"
     fi
 
-    if rmdir "$mount_path" 2>/tmp/guardfs-test-error; then
+    if rmdir "$mount_path" 2>/tmp/holdfs-test-error; then
         record "PASS" "RMDIR" "removed"
     else
-        record "FAIL" "RMDIR" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "RMDIR" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     if [ ! -e "$mount_path" ] && [ ! -e "$underlay_path" ]; then
@@ -140,10 +140,10 @@ test_create_write_read() {
 
     ARTIFACT="$mount_path"
 
-    if printf 'hello guardfs\n' >"$mount_path" 2>/tmp/guardfs-test-error; then
+    if printf 'hello holdfs\n' >"$mount_path" 2>/tmp/holdfs-test-error; then
         record "PASS" "CREATE + WRITE" "exit=0"
     else
-        record "FAIL" "CREATE + WRITE" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "CREATE + WRITE" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     [ -f "$mount_path" ] \
@@ -153,18 +153,18 @@ test_create_write_read() {
         && record "PASS" "Underlay file" "exists" \
         || record "FAIL" "Underlay file" "missing"
 
-    mount_content="$(cat "$mount_path" 2>/tmp/guardfs-test-error)"
+    mount_content="$(cat "$mount_path" 2>/tmp/holdfs-test-error)"
     if [ $? -eq 0 ]; then
         record "PASS" "Mount read" "content=$mount_content"
     else
-        record "FAIL" "Mount read" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "Mount read" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
-    underlay_content="$(cat "$underlay_path" 2>/tmp/guardfs-test-error)"
+    underlay_content="$(cat "$underlay_path" 2>/tmp/holdfs-test-error)"
     if [ $? -eq 0 ]; then
         record "PASS" "Underlay read" "content=$underlay_content"
     else
-        record "FAIL" "Underlay read" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "Underlay read" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     check_equal "File contents" "$underlay_content" "$mount_content"
@@ -183,7 +183,7 @@ test_create_write_read() {
         local read_rc=$?
         exec 3<&-
         if [ "$read_rc" -eq 0 ]; then
-            check_equal "Reopen + read" "hello guardfs" "$line"
+            check_equal "Reopen + read" "hello holdfs" "$line"
         else
             record "FAIL" "Reopen + read" "read failed"
         fi
@@ -204,19 +204,19 @@ test_rename_stat_read() {
 
     ARTIFACT="$new_mount"
 
-    if printf 'rename test data\n' >"$old_mount" 2>/tmp/guardfs-test-error; then
+    if printf 'rename test data\n' >"$old_mount" 2>/tmp/holdfs-test-error; then
         record "PASS" "Create source" "exit=0"
     else
-        record "FAIL" "Create source" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "Create source" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     old_mount_inode="$(stat -c '%i' "$old_mount" 2>/dev/null)"
     old_underlay_inode="$(stat -c '%i' "$old_underlay" 2>/dev/null)"
 
-    if mv "$old_mount" "$new_mount" 2>/tmp/guardfs-test-error; then
+    if mv "$old_mount" "$new_mount" 2>/tmp/holdfs-test-error; then
         record "PASS" "RENAME" "exit=0"
     else
-        record "FAIL" "RENAME" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "RENAME" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     if [ ! -e "$old_mount" ] && [ ! -e "$old_underlay" ]; then
@@ -244,18 +244,18 @@ test_rename_stat_read() {
         "$old_underlay_inode" \
         "$new_underlay_inode"
 
-    mount_content="$(cat "$new_mount" 2>/tmp/guardfs-test-error)"
+    mount_content="$(cat "$new_mount" 2>/tmp/holdfs-test-error)"
     if [ $? -eq 0 ]; then
         record "PASS" "Mount read after rename" "content=$mount_content"
     else
-        record "FAIL" "Mount read after rename" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "Mount read after rename" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
-    underlay_content="$(cat "$new_underlay" 2>/tmp/guardfs-test-error)"
+    underlay_content="$(cat "$new_underlay" 2>/tmp/holdfs-test-error)"
     if [ $? -eq 0 ]; then
         record "PASS" "Underlay read after rename" "content=$underlay_content"
     else
-        record "FAIL" "Underlay read after rename" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "Underlay read after rename" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     check_equal "Content after rename" "$underlay_content" "$mount_content"
@@ -271,16 +271,16 @@ test_rename_unlink() {
 
     ARTIFACT="$new_mount"
 
-    if printf 'rename then unlink\n' >"$old_mount" 2>/tmp/guardfs-test-error; then
+    if printf 'rename then unlink\n' >"$old_mount" 2>/tmp/holdfs-test-error; then
         record "PASS" "Create source" "exit=0"
     else
-        record "FAIL" "Create source" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "Create source" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
-    if mv "$old_mount" "$new_mount" 2>/tmp/guardfs-test-error; then
+    if mv "$old_mount" "$new_mount" 2>/tmp/holdfs-test-error; then
         record "PASS" "RENAME" "exit=0"
     else
-        record "FAIL" "RENAME" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "RENAME" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     if [ -f "$new_mount" ] && [ -f "$new_underlay" ]; then
@@ -289,13 +289,13 @@ test_rename_unlink() {
         record "FAIL" "Renamed paths" "missing before unlink"
     fi
 
-    if /bin/rm -f -- "$new_mount" 2>/tmp/guardfs-test-error; then
+    if /bin/rm -f -- "$new_mount" 2>/tmp/holdfs-test-error; then
         record "PASS" "UNLINK after rename" "exit=0"
     else
         record \
             "FAIL" \
             "UNLINK after rename" \
-            "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+            "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     if [ ! -e "$old_mount" ] && [ ! -e "$old_underlay" ] &&
@@ -317,17 +317,17 @@ test_open_handle_rename() {
     local python_output expected_content mount_content underlay_content
 
     ARTIFACT="$new_mount"
-    export GUARDFS_TEST_OLD="$old_mount"
-    export GUARDFS_TEST_NEW="$new_mount"
+    export HOLDFS_TEST_OLD="$old_mount"
+    export HOLDFS_TEST_NEW="$new_mount"
 
-    python_output="$(python3 - <<'PY' 2>/tmp/guardfs-test-error
+    python_output="$(python3 - <<'PY' 2>/tmp/holdfs-test-error
 import os
 from pathlib import Path
 
-from guardfs.common.paths import get_forced_state_path
+from holdfs.common.paths import get_forced_state_path
 
-old_path = os.environ["GUARDFS_TEST_OLD"]
-new_path = os.environ["GUARDFS_TEST_NEW"]
+old_path = os.environ["HOLDFS_TEST_OLD"]
+new_path = os.environ["HOLDFS_TEST_NEW"]
 state_path = Path(get_forced_state_path(os.getpid()))
 
 # 시스템 신뢰 판정과 무관하게 이번 테스트의 Python PID만 LOW로 고정한다.
@@ -371,7 +371,7 @@ PY
     if [ "$python_rc" -eq 0 ]; then
         record "PASS" "Open-handle rename" "$python_output"
     else
-        record "FAIL" "Open-handle rename" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "Open-handle rename" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     if [ ! -e "$old_mount" ] && [ ! -e "$old_underlay" ]; then
@@ -381,8 +381,8 @@ PY
     fi
 
     expected_content=$'before rename\nafter rename'
-    mount_content="$(cat "$new_mount" 2>/tmp/guardfs-test-error)"
-    underlay_content="$(cat "$new_underlay" 2>/tmp/guardfs-test-error)"
+    mount_content="$(cat "$new_mount" 2>/tmp/holdfs-test-error)"
+    underlay_content="$(cat "$new_underlay" 2>/tmp/holdfs-test-error)"
     check_equal "Mount renamed content" "$expected_content" "$mount_content"
     check_equal "Underlay renamed content" "$expected_content" "$underlay_content"
 }
@@ -394,21 +394,21 @@ test_open_handle_unlink() {
     local python_output
 
     ARTIFACT="none"
-    export GUARDFS_TEST_MOUNT_FILE="$mount_path"
-    export GUARDFS_TEST_UNDERLAY_FILE="$underlay_path"
+    export HOLDFS_TEST_MOUNT_FILE="$mount_path"
+    export HOLDFS_TEST_UNDERLAY_FILE="$underlay_path"
 
-    python_output="$(python3 - <<'PY' 2>/tmp/guardfs-test-error
+    python_output="$(python3 - <<'PY' 2>/tmp/holdfs-test-error
 import os
 from pathlib import Path
-from guardfs.common.paths import get_forced_state_path
+from holdfs.common.paths import get_forced_state_path
 
 state_path = Path(get_forced_state_path(os.getpid()))
 with state_path.open("x", encoding="utf-8") as state_file:
     state_file.write("LOW")
 try:
 
-    mount_path = os.environ["GUARDFS_TEST_MOUNT_FILE"]
-    underlay_path = os.environ["GUARDFS_TEST_UNDERLAY_FILE"]
+    mount_path = os.environ["HOLDFS_TEST_MOUNT_FILE"]
+    underlay_path = os.environ["HOLDFS_TEST_UNDERLAY_FILE"]
 
     with open(mount_path, "w+b") as handle:
         handle.write(b"before unlink\n")
@@ -441,7 +441,7 @@ PY
     if [ "$python_rc" -eq 0 ]; then
         record "PASS" "Open-handle unlink" "$python_output"
     else
-        record "FAIL" "Open-handle unlink" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "Open-handle unlink" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     if [ ! -e "$mount_path" ] && [ ! -e "$underlay_path" ]; then
@@ -460,16 +460,16 @@ test_truncate_ftruncate() {
 
     ARTIFACT="$mount_path"
 
-    if printf '0123456789abcdef' >"$mount_path" 2>/tmp/guardfs-test-error; then
+    if printf '0123456789abcdef' >"$mount_path" 2>/tmp/holdfs-test-error; then
         record "PASS" "Create source" "size=16"
     else
-        record "FAIL" "Create source" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "Create source" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
-    if truncate -s 5 "$mount_path" 2>/tmp/guardfs-test-error; then
+    if truncate -s 5 "$mount_path" 2>/tmp/holdfs-test-error; then
         record "PASS" "TRUNCATE" "requested size=5"
     else
-        record "FAIL" "TRUNCATE" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "TRUNCATE" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     mount_size="$(stat -c '%s' "$mount_path" 2>/dev/null)"
@@ -477,18 +477,18 @@ test_truncate_ftruncate() {
     check_equal "Mount size after truncate" "5" "$mount_size"
     check_equal "Underlay size after truncate" "5" "$underlay_size"
 
-    export GUARDFS_TEST_MOUNT_FILE="$mount_path"
-    python_output="$(python3 - <<'PY' 2>/tmp/guardfs-test-error
+    export HOLDFS_TEST_MOUNT_FILE="$mount_path"
+    python_output="$(python3 - <<'PY' 2>/tmp/holdfs-test-error
 import os
 from pathlib import Path
-from guardfs.common.paths import get_forced_state_path
+from holdfs.common.paths import get_forced_state_path
 
 state_path = Path(get_forced_state_path(os.getpid()))
 with state_path.open("x", encoding="utf-8") as state_file:
     state_file.write("LOW")
 try:
 
-    path = os.environ["GUARDFS_TEST_MOUNT_FILE"]
+    path = os.environ["HOLDFS_TEST_MOUNT_FILE"]
     with open(path, "r+b") as handle:
         os.ftruncate(handle.fileno(), 2)
         size = os.fstat(handle.fileno()).st_size
@@ -504,7 +504,7 @@ PY
     if [ "$python_rc" -eq 0 ]; then
         record "PASS" "FTRUNCATE" "$python_output"
     else
-        record "FAIL" "FTRUNCATE" "$(tr '\n' ' ' </tmp/guardfs-test-error)"
+        record "FAIL" "FTRUNCATE" "$(tr '\n' ' ' </tmp/holdfs-test-error)"
     fi
 
     mount_size="$(stat -c '%s' "$mount_path" 2>/dev/null)"
@@ -521,7 +521,7 @@ PY
 print_results() {
     echo
     echo "============================================================"
-    echo " GuardFS Passthrough Test $TEST_NO"
+    echo " holdFS Passthrough Test $TEST_NO"
     echo "============================================================"
     printf '%s' "$RESULTS" |
         while IFS='|' read -r status name detail; do
@@ -534,7 +534,7 @@ print_results() {
         echo "FINAL RESULT: PASS"
     else
         echo "FINAL RESULT: FAIL"
-        echo "GuardFS log: tail -n 100 /tmp/guardfs-terminal.log"
+        echo "holdFS log: tail -n 100 /tmp/holdfs-terminal.log"
     fi
     echo "Retained artifact: $ARTIFACT"
     echo "============================================================"

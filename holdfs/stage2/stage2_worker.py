@@ -7,7 +7,7 @@ import joblib
 import pandas as pd
 import trio
 
-from guardfs.common.config import (
+from holdfs.common.config import (
     DYNAMIC_EXT_RULE,
     DYNAMIC_MODEL_WEIGHT,
     STAGE2_DYN_ONLY_HIGH_THRESHOLD,
@@ -18,14 +18,14 @@ from guardfs.common.config import (
     STAGE2_WATCH_TIMEOUT_SEC,
     STATIC_MODEL_WEIGHT,
 )
-from guardfs.common.paths import (
+from holdfs.common.paths import (
     DYNAMIC_FEATURE_COLS_PATH,
     DYNAMIC_MODEL_PATH,
     STATIC_MODEL_PATH,
     STATIC_VOCAB_PATH,
 )
-from guardfs.stage2.states import ProcState
-from guardfs.stage2.static_analyzer import StaticAnalyzer
+from holdfs.stage2.states import ProcState
+from holdfs.stage2.static_analyzer import StaticAnalyzer
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
@@ -60,7 +60,7 @@ def load_models():
 
     except Exception as e:
         raise RuntimeError(
-            f"GuardFS 기동 실패: 동적 모델을 사용할 수 없습니다: {e}"
+            f"holdFS 기동 실패: 동적 모델을 사용할 수 없습니다: {e}"
         ) from e
 
     try:
@@ -323,8 +323,8 @@ async def stage2_worker(recv_chan, ops) -> None:
                     )
 
     async def reeval_loop() -> None:
-        from guardfs.stage2.policy.low import handle_low_return
-        from guardfs.stage2.policy.medium import (
+        from holdfs.stage2.policy.low import handle_low_return
+        from holdfs.stage2.policy.medium import (
             commit_buffers,
             validate_medium_buffers,
         )

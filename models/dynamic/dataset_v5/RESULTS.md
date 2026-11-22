@@ -1,6 +1,6 @@
 # 동적 모델 v5 — 성능 결과 (FUSE-only · PID 단위)
 
-런타임(GuardFS 탐지)이 실제로 보는 신호에 맞춘 동적 모델. `*.fuse.jsonl`
+런타임(holdFS 탐지)이 실제로 보는 신호에 맞춘 동적 모델. `*.fuse.jsonl`
 로그를 **PID 단위**로 재집계해 학습했다(재수집 없음). 런타임 `PidStats`가
 내는 피처와 **바이트 단위로 동일**함을 검증했다(학습=추론).
 
@@ -72,16 +72,16 @@ python3 models/dynamic/collect/extract_perpid_fuse.py \
     --ebpf-dir <같은 폴더> \
     --out models/dynamic/dataset_v5/features_perpid.csv
 
-# 2) 학습 + 성능 + 모델 저장  ※ 반드시 GuardFS venv(배포 sklearn)에서
+# 2) 학습 + 성능 + 모델 저장  ※ 반드시 holdFS venv(배포 sklearn)에서
 python3 models/dynamic/collect/train_v5.py \
     --features models/dynamic/dataset_v5/features_perpid.csv \
     --out-model models/dynamic/rf_model_v5.pkl \
     --out-cols  models/dynamic/feature_cols_v5.json
 ```
 
-## 런타임 검증 (VM, GuardFS detection 모드 실제 실행)
+## 런타임 검증 (VM, holdFS detection 모드 실제 실행)
 
-오프라인 교차검증과 별개로, 실제 GuardFS에서 Stage1 -> Stage2 전체 경로를 돌려 확인했다.
+오프라인 교차검증과 별개로, 실제 holdFS에서 Stage1 -> Stage2 전체 경로를 돌려 확인했다.
 정적 점수는 python3 인터프리터 기준 0.295(양성)라, 동적 단독 HIGH 규칙
 (`STAGE2_DYN_ONLY_HIGH_THRESHOLD = 0.5`)이 없으면 스크립트형 공격은 가중합 상한
 0.65에 막혀 HIGH가 될 수 없다.
@@ -120,7 +120,7 @@ python3 models/dynamic/collect/train_v5.py \
    -> 첫 점수가 낮아도 `STAGE2_WATCH_TIMEOUT_SEC`(10초) 관찰 창을 열고 1초마다 재채점.
 2. 재평가 타이머(`next_reeval`)가 이벤트를 처리할 때마다 1초씩 밀려, 의심 PID가 많으면
    관찰 창이 20초 이상으로 늘었다(가짜 ops 하네스 재현: 20.1~21.0초 -> 수정 후 10.0~11.0초,
-   실제 GuardFS 로그에서도 재평가 간격 약 1초 확인).
+   실제 holdFS 로그에서도 재평가 간격 약 1초 확인).
 
 ## 한계 (알려진 것)
 
@@ -133,5 +133,5 @@ python3 models/dynamic/collect/train_v5.py \
 - 첫 평가 시점(Stage1 첫 트리거)의 동적 점수는 낮고(수집 악성 PID 38개 중 7개가
   0.5 이상, 인샘플 측정), 관찰 창에서 이벤트가 쌓여야 올라간다. 탐지에는 수 초가 걸린다.
 - 런타임 검증은 소규모(시뮬레이터 1회, 정상 작업 수십 PID)이며, 실제 랜섬웨어
-  샘플을 GuardFS 탐지 모드에서 돌려 본 결과가 아니다.
+  샘플을 holdFS 탐지 모드에서 돌려 본 결과가 아니다.
 - 학습에 쓴 악성은 11개 패밀리 38 run이다. moneymessage(부분감염)는 미탐이다.

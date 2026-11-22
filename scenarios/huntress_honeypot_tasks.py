@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from guardfs.common.paths import get_honeypot_dir
+from holdfs.common.paths import get_honeypot_dir
 from scenarios.huntress_config import (
     HONEYPOT_DELAY_SECONDS,
     HONEYPOT_FILES,

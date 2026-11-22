@@ -1,6 +1,6 @@
-# GuardFS 동적 탐지 모델 — 성능 결과 (dataset_v4)
+# holdFS 동적 탐지 모델 — 성능 결과 (dataset_v4)
 
-FUSE(GuardFS) + eBPF로 수집한 프로세스 행동 데이터로 랜섬웨어를 탐지한 결과.
+FUSE(holdFS) + eBPF로 수집한 프로세스 행동 데이터로 랜섬웨어를 탐지한 결과.
 
 ## 데이터셋
 

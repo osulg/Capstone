@@ -21,7 +21,7 @@
 중요: sklearn 버전이 모델 학습 버전과 다르면 배포 pkl의 predict_proba가
       확률이 아닌 깨진 값을 낸다(정상 범위 0~1을 벗어남). 이 스크립트는 이를
       감지해 경고하고, pkl 재적합이 불가능하면 '같은 params로 새로 학습'해
-      추정만 낸다. 권위 있는 값은 GuardFS venv(배포 때와 같은 sklearn)에서
+      추정만 낸다. 권위 있는 값은 holdFS venv(배포 때와 같은 sklearn)에서
       실행해야 한다.
 
 사용:
@@ -92,7 +92,7 @@ def main():
             print(f"\n[경고] 배포 pkl predict_proba 범위 이상 "
                   f"(min {p_in.min():.3f}, max {p_in.max():.3f}) "
                   f"— sklearn 버전 불일치로 모델이 깨짐. "
-                  f"이 환경 점수는 신뢰 불가. GuardFS venv에서 재실행 필요.")
+                  f"이 환경 점수는 신뢰 불가. holdFS venv에서 재실행 필요.")
         else:
             print(f"\n=== in-sample (배포 모델 직접) ===")
             print(f"  정상 dyn 최대 {p_in[y==0].max():.3f} / "
@@ -146,7 +146,7 @@ def main():
               "(정상에 고점수 run 존재 — 분리가 약함)")
     if not pkl_ok:
         print("\n⚠ 이 결과는 '새로 학습한 RF' 기준 추정치다. 배포 모델 그대로의"
-              "\n  권위 있는 수치는 GuardFS venv(배포 때 sklearn)에서 재실행할 것.")
+              "\n  권위 있는 수치는 holdFS venv(배포 때 sklearn)에서 재실행할 것.")
 
 
 if __name__ == "__main__":

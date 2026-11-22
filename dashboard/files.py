@@ -17,10 +17,10 @@ import os
 import sys
 from collections import Counter
 
-# HoldFS와 같은 엔트로피 기준을 쓴다 (guardfs/common/config.py).
+# HoldFS와 같은 엔트로피 기준을 쓴다 (holdfs/common/config.py).
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 try:
-    from guardfs.common.config import ENTROPY_THRESHOLD
+    from holdfs.common.config import ENTROPY_THRESHOLD
 except ImportError:
     ENTROPY_THRESHOLD = 7.0
 
@@ -29,7 +29,7 @@ MIN_SAMPLE_BYTES = 64      # 이보다 작으면 엔트로피 판정이 무의�
 PREVIEW_BYTES = 512
 HEX_PREVIEW_BYTES = 96
 MAX_FILES = 300
-# 보호 폴더 최상위의 honeypot/ 은 HoldFS 미끼 파일 (guardfs/common/paths.get_honeypot_dir).
+# 보호 폴더 최상위의 honeypot/ 은 HoldFS 미끼 파일 (holdfs/common/paths.get_honeypot_dir).
 # 목록에는 '미끼 파일'로 따로 표시하고, 정상/암호화 판정 대상에서는 뺀다.
 HONEYPOT_DIR = "honeypot"
 RANSOM_EXTS = {".locked", ".enc", ".encrypted", ".crypt", ".crypted", ".lock", ".ransom"}
@@ -38,12 +38,12 @@ FOLDERS = [
     {
         "key": "protected",
         "label": "보호 폴더 (HoldFS)",
-        "path": os.path.expanduser(os.environ.get("DASH_PROTECTED_DIR", "~/guardfs_runtime/underlay")),
+        "path": os.path.expanduser(os.environ.get("DASH_PROTECTED_DIR", "~/holdfs_runtime/underlay")),
     },
     {
         "key": "unprotected",
         "label": "보호 없는 폴더",
-        "path": os.path.expanduser(os.environ.get("DASH_UNPROTECTED_DIR", "~/guardfs_demo/unprotected")),
+        "path": os.path.expanduser(os.environ.get("DASH_UNPROTECTED_DIR", "~/holdfs_demo/unprotected")),
     },
 ]
 

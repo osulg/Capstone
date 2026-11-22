@@ -10,16 +10,16 @@ import zipfile
 
 import trio
 
-from guardfs.common.config import (
+from holdfs.common.config import (
     ENTROPY_HEADER_SIZE,
     EXTENSION_GROUPS,
     MEDIUM_DELAY_PHASES,
     MEDIUM_GLOBAL_BUFFER_LIMIT_BYTES,
     MEDIUM_SIZE_LIMIT,
 )
-from guardfs.common.paths import FILESECURITY_LOG_PATH
-from guardfs.stage1.entropy import shannon_entropy
-from guardfs.stage1.trust import is_trusted_pid
+from holdfs.common.paths import FILESECURITY_LOG_PATH
+from holdfs.stage1.entropy import shannon_entropy
+from holdfs.stage1.trust import is_trusted_pid
 
 
 def log_medium_event(
@@ -644,7 +644,7 @@ async def handle_write_medium(
             pass
 
     # 규칙 3: write "누적 횟수"가 아니라 MEDIUM 진입 후 "경과시간" 구간별로
-    # 지연을 적용한다 (GuardFS 실측: 5초 지연이 최적, 10초는 더 늦춰도 개선 없음).
+    # 지연을 적용한다 (holdFS 실측: 5초 지연이 최적, 10초는 더 늦춰도 개선 없음).
     elapsed = trio.current_time() - ops._medium_entered_at[pid]
     base_ms = _phase_delay_ms(elapsed, trusted)
     delay_sec = (base_ms / 1000.0) * group["delay_multiplier"]

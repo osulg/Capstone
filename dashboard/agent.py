@@ -14,7 +14,7 @@ HoldFS가 남기는 로그를 tail 하면서 MEDIUM / HIGH 이벤트를 JSON으�
 
 사용 예:
     python dashboard/agent.py                                  # filesecurity.log만
-    python dashboard/agent.py --stdout-log ~/guardfs_stdout.log
+    python dashboard/agent.py --stdout-log ~/holdfs_stdout.log
     python dashboard/agent.py --demo                           # 샘플 이벤트 전송
 """
 
@@ -261,7 +261,7 @@ class StdoutParser:
 def run_demo(sender: Sender, delay: float) -> None:
     """발표 화면과 같은 시나리오(python3 스크립트형 랜섬웨어)를 순서대로 전송한다."""
     pid = 905425
-    base = os.path.expanduser("~/guardfs_runtime/underlay")
+    base = os.path.expanduser("~/holdfs_runtime/underlay")
     seq = [
         dict(level="MEDIUM", action="ESCALATE", result="MEDIUM", target="",
              reason="stage1=EntropyBurstDetector, Stage2 최초 평가 score=0.412, "

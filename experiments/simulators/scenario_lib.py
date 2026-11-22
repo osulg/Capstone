@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-공개 침해사고 재현 시뮬레이터 공용 하네스 (GuardFS/HoldFS 탐지 검증용).
+공개 침해사고 재현 시뮬레이터 공용 하네스 (holdFS/HoldFS 탐지 검증용).
 
 이 모듈은 실제 랜섬웨어/멀웨어가 아니다. sim_highentropy.py 가 이미 확립한
 안전 불변식을 그대로 공용화한 것이며, 모든 시나리오 시뮬레이터가 아래 규칙을
 공유하게 한다.
 
 안전 불변식 (모든 시나리오가 반드시 지킨다):
-  1) 대상은 "GuardFS 마운트 안에, 이 스크립트가 새로 만든 전용 workdir" 뿐이다.
+  1) 대상은 "holdFS 마운트 안에, 이 스크립트가 새로 만든 전용 workdir" 뿐이다.
      `/`, 홈 디렉터리를 대상으로 받으면 거부한다. workdir 는 매 실행마다
      시각이 붙은 새 폴더로 만든다(exist_ok=False).
   2) 이 스크립트가 만든 더미 파일만 읽고/덮어쓰고/이름 바꾸고/지운다.
@@ -34,11 +34,11 @@ import time
 from typing import Callable, Sequence
 
 # 준비 단계에서 쓰는 평문 한 줄(저엔트로피). sim_highentropy.py 와 동일 계열.
-PLAINTEXT_LINE = b"This is a plain text test document for GuardFS simulation.\n"
+PLAINTEXT_LINE = b"This is a plain text test document for holdFS simulation.\n"
 
 
 def log(msg: str) -> None:
-    """시뮬레이터 표준 출력(한 줄, 즉시 flush). GuardFS 로그와 구분되게 [SIM] 접두."""
+    """시뮬레이터 표준 출력(한 줄, 즉시 flush). holdFS 로그와 구분되게 [SIM] 접두."""
     print(f"[SIM] {msg}", flush=True)
 
 

@@ -3,9 +3,9 @@ import multiprocessing
 import os
 import time
 
-TARGET = os.path.expanduser(os.environ.get("MOUNT", "~/guardfs_runtime/mount"))
+TARGET = os.path.expanduser(os.environ.get("MOUNT", "~/holdfs_runtime/mount"))
 def set_state(pid: int, state: str) -> None:
-    with open(f"/tmp/guardfs_state_{pid}", "w") as f:
+    with open(f"/tmp/holdfs_state_{pid}", "w") as f:
         f.write(state)
 
 
@@ -49,7 +49,7 @@ def high_worker():
 
 if __name__ == "__main__":
     print("=" * 50)
-    print("GuardFS 3-Policy 동시 테스트")
+    print("holdFS 3-Policy 동시 테스트")
     print(f"마운트: {TARGET}")
     print("=" * 50)
     print()
@@ -75,13 +75,13 @@ if __name__ == "__main__":
 
     for worker in (p_low, p_med, p_high):
         try:
-            os.unlink(f"/tmp/guardfs_state_{worker.pid}")
+            os.unlink(f"/tmp/holdfs_state_{worker.pid}")
         except FileNotFoundError:
             pass
 
     print()
     print("=" * 50)
-    print("결과 확인: ls ~/guardfs_runtime/underlay/")
+    print("결과 확인: ls ~/holdfs_runtime/underlay/")
     print("  low_file.txt    → 있어야 함 (즉시 저장)")
     print("  medium_file.txt → 강제 MEDIUM 동안 underlay 미생성 (staging)")
     print("  high_file.txt   → 없어야 함 (차단)")

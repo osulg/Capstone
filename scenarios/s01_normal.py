@@ -65,19 +65,19 @@ def absent(path):
     return False
 
 
-def check_health(mount, guardfs_pid):
+def check_health(mount, holdfs_pid):
     require(sys.platform == "linux", "Run this scenario on Linux with HoldFS.")
     require(os.path.ismount(mount), "HoldFS mount is not mounted.")
     # stat also detects a disconnected userspace filesystem.
     mount.stat()
-    cmdline = Path(f"/proc/{guardfs_pid}/cmdline").read_bytes()
+    cmdline = Path(f"/proc/{holdfs_pid}/cmdline").read_bytes()
     require(
-        b"guardfs" in cmdline and b"python" in cmdline,
+        b"holdfs" in cmdline and b"python" in cmdline,
         "The supplied PID is not a running HoldFS Python process.",
     )
 
 
-def find_guardfs_pid():
+def find_holdfs_pid():
     candidates = []
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit() or int(entry.name) == os.getpid():
@@ -87,9 +87,9 @@ def find_guardfs_pid():
         except (FileNotFoundError, ProcessLookupError, PermissionError):
             continue
         if b"python" in command and (
-            b"guardfs/fuse_fs/passthrough.py" in command
-            or b"guardfs.main" in command
-            or b"guardfs/main.py" in command
+            b"holdfs/fuse_fs/passthrough.py" in command
+            or b"holdfs.main" in command
+            or b"holdfs/main.py" in command
         ):
             candidates.append(int(entry.name))
     require(
@@ -101,7 +101,7 @@ def find_guardfs_pid():
 def run(
     mount,
     underlay,
-    guardfs_pid=None,
+    holdfs_pid=None,
     on_step=None,
     propagation_timeout=30.0,
     total_timeout=120.0,
@@ -143,8 +143,8 @@ def run(
         "scenario_id": "S01",
         "run_id": run_id,
         "pid": os.getpid(),
-        "guardfs_pid": guardfs_pid,
-        "holdfs_pid": guardfs_pid,
+        "holdfs_pid": holdfs_pid,
+        "holdfs_pid": holdfs_pid,
         "processes": [],
         "started_at": timestamp(),
         "mount": str(mount),
@@ -169,7 +169,7 @@ def run(
         try:
             wait_until(
                 probe,
-                lambda: check_health(mount, guardfs_pid),
+                lambda: check_health(mount, holdfs_pid),
                 min(propagation_timeout, remaining),
             )
         finally:
@@ -209,14 +209,14 @@ def run(
         wait(lambda: absent(path) and absent(under(path)))
 
     def precheck():
-        nonlocal guardfs_pid
+        nonlocal holdfs_pid
         require(sys.platform == "linux", "Run this scenario on Linux with HoldFS.")
         require(mount != underlay, "Mount and underlay must be different paths.")
         require(underlay.is_dir(), "Underlay directory is missing.")
-        guardfs_pid = guardfs_pid or find_guardfs_pid()
-        report["guardfs_pid"] = guardfs_pid
-        report["holdfs_pid"] = guardfs_pid
-        check_health(mount, guardfs_pid)
+        holdfs_pid = holdfs_pid or find_holdfs_pid()
+        report["holdfs_pid"] = holdfs_pid
+        report["holdfs_pid"] = holdfs_pid
+        check_health(mount, holdfs_pid)
         require(
             absent(folder) and absent(under(folder)), "Run directory already exists."
         )
@@ -295,7 +295,7 @@ def run(
                 "Scenario total timeout exceeded.",
             )
             details = operation()
-            check_health(mount, guardfs_pid)
+            check_health(mount, holdfs_pid)
             step.update(status="passed", details=details or {})
 
         except (OSError, RuntimeError) as error:
@@ -343,7 +343,7 @@ def main():
         default=None,
         help="runner가 지정한 실행별 작업 폴더 이름",
     )
-    parser.add_argument("--holdfs-pid", "--guardfs-pid", dest="holdfs_pid", type=int)
+    parser.add_argument("--holdfs-pid", "--holdfs-pid", dest="holdfs_pid", type=int)
     parser.add_argument("--propagation-timeout", type=float, default=30.0)
     parser.add_argument("--total-timeout", type=float, default=120.0)
     parser.add_argument("--wait-registration-ack", action="store_true")
@@ -373,7 +373,7 @@ def main():
         report = run(
             mount=args.mount,
             underlay=args.underlay,
-            guardfs_pid=args.holdfs_pid,
+            holdfs_pid=args.holdfs_pid,
             propagation_timeout=args.propagation_timeout,
             total_timeout=args.total_timeout,
             on_progress=progress,

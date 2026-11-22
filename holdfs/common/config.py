@@ -97,7 +97,7 @@ STATIC_MODEL_WEIGHT = 0.5
 #   (v5 모델 기준값은 0.5였다: dataset_v5/RESULTS.md)
 STAGE2_DYN_ONLY_HIGH_THRESHOLD = 0.6
 
-# 동적 피처 "확장자 변경 rename" 판정 규칙 (guardfs/common/ext_rule.py).
+# 동적 피처 "확장자 변경 rename" 판정 규칙 (holdfs/common/ext_rule.py).
 #   런타임 PidStats가 이 규칙으로 피처를 만들고, 모델은 같은 규칙으로 뽑은
 #   데이터로 학습돼 있어야 한다. paths.DYNAMIC_MODEL_PATH 와 반드시 짝을 맞춘다.
 #     "v5": rf_model_v5.pkl
@@ -194,7 +194,7 @@ EXTENSION_GROUPS = {
 }
 
 # ========== MEDIUM Policy - 경과시간 기반 지연 (레이어 1) ========== #
-# 근거: GuardFS(von der Assen et al., arXiv:2401.17917) Table 6 —
+# 근거: holdFS(von der Assen et al., arXiv:2401.17917) Table 6 —
 # DEL+OBF 방어에서 탐지 후 지연을 1초로 두면 평균 3.87MB 손실, 5초는 0.7MB,
 # 10초는 0.75MB로 5초 이후로는 더 늦춰도 개선되지 않는다는 실측 결과.
 # write "누적 횟수"가 아니라 MEDIUM 진입 후 "경과시간" 구간별로 지연을
@@ -209,7 +209,7 @@ MEDIUM_DELAY_PHASES = (
 # ========== MEDIUM Policy - 버퍼 상한 ========== #
 # PID당 상한은 확장자 그룹별로 다르다 (EXTENSION_GROUPS 참고). 이와 별개로
 # 시스템 전체 상한을 둬서, 여러 프로세스가 동시에 MEDIUM에 몰릴 때 총
-# 메모리 사용량이 무한정 늘어나는 걸 막는다 (GuardFS/ShieldFS 공통 지적:
+# 메모리 사용량이 무한정 늘어나는 걸 막는다 (holdFS/ShieldFS 공통 지적:
 # 버퍼 기반 방어는 프로세스 수에 비례해 메모리 요구량이 커지는 DoS 위험).
 MEDIUM_GLOBAL_BUFFER_LIMIT_BYTES = 200_000_000
 

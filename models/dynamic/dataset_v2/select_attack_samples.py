@@ -58,7 +58,7 @@ def main():
                 "Family": family,
                 "SHA256": sha256,
                 "Root_EXE": str(path.resolve()),
-                "Raw_JSONL": f"/mnt/guardfs_logs/raw/attack/{sample_id}.jsonl",
+                "Raw_JSONL": f"/mnt/holdfs_logs/raw/attack/{sample_id}.jsonl",
                 "Status": "PENDING",
                 "Notes": "collection candidate; x86-64; all samples",
             })

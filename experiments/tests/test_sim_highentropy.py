@@ -1,6 +1,6 @@
 """시뮬레이터의 준비 완료 검사와 공격 시작 조건을 검증한다.
 
-테스트 방법 (GuardFS 실행 및 FUSE mount 불필요):
+테스트 방법 (holdFS 실행 및 FUSE mount 불필요):
   cd ~/Capstone
   source venv/bin/activate
   python experiments/tests/test_sim_highentropy.py

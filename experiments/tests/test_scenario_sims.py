@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-시나리오 시뮬레이터의 FUSE-비의존 로직을 검증한다 (GuardFS 실행/마운트 불필요).
+시나리오 시뮬레이터의 FUSE-비의존 로직을 검증한다 (holdFS 실행/마운트 불필요).
 
 테스트 방법:
   cd ~/Capstone

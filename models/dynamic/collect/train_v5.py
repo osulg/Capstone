@@ -11,7 +11,7 @@
      현실적 오탐률/탐지율
   3) Leave-One-Family-Out — 처음 보는 악성 패밀리 일반화
 
-중요: 반드시 GuardFS venv(배포 때와 같은 sklearn)에서 실행해 pkl을 저장할 것.
+중요: 반드시 holdFS venv(배포 때와 같은 sklearn)에서 실행해 pkl을 저장할 것.
       다른 버전에서 저장하면 런타임 로드시 predict_proba가 깨진다.
 
 사용:

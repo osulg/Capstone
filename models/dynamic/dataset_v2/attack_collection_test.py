@@ -2,7 +2,7 @@
 from pathlib import Path
 import subprocess
 
-target = Path.home() / "guardfs_attack_collection_test"
+target = Path.home() / "holdfs_attack_collection_test"
 target.mkdir(parents=True, exist_ok=True)
 
 files = []

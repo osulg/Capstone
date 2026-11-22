@@ -8,12 +8,12 @@ eBPF 동적 데이터 수집기 (source=ebpf, 스키마 v1)
 사용 예 (root 권한 필요, x86_64 / 커널 5.8+ / BCC):
   sudo python3 models/dynamic/collect/ebpf_collector.py \
       --run-id benign_tar_001 \
-      --target-dir /home/capstone/guardfs_runtime/mount \
+      --target-dir /home/capstone/holdfs_runtime/mount \
       --as-user capstone \
-      -- tar czf /home/capstone/guardfs_runtime/mount/out.tgz -C /home/capstone/guardfs_runtime/mount docs
+      -- tar czf /home/capstone/holdfs_runtime/mount/out.tgz -C /home/capstone/holdfs_runtime/mount docs
 
 출력: <log-dir>/<run_id>.ebpf.jsonl, <run_id>.ebpf.meta.json
-      (기본 log-dir은 FUSE 수집 로그와 같은 ~/guardfs_runtime/collect)
+      (기본 log-dir은 FUSE 수집 로그와 같은 ~/holdfs_runtime/collect)
 """
 
 import argparse
@@ -33,8 +33,8 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, PROJECT_ROOT)
 
 from ebpf_events import OPS, SCHEMA_VERSION, EbpfEventProcessor  # noqa: E402
-from guardfs.collect.fuse_logger import RUN_ID_PATTERN  # noqa: E402
-from guardfs.common.paths import get_collect_log_dir  # noqa: E402
+from holdfs.collect.fuse_logger import RUN_ID_PATTERN  # noqa: E402
+from holdfs.common.paths import get_collect_log_dir  # noqa: E402
 
 BPF_SRC = os.path.join(HERE, "ebpf_collector.c")
 DEFAULT_CRYPTO_LIB = "/lib/x86_64-linux-gnu/libcrypto.so.3"
@@ -55,7 +55,7 @@ def _run_id_arg(value: str) -> str:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="GuardFS eBPF 동적 데이터 수집기")
+    parser = argparse.ArgumentParser(description="holdFS eBPF 동적 데이터 수집기")
     parser.add_argument("--run-id", required=True, type=_run_id_arg)
     parser.add_argument(
         "--target-dir",

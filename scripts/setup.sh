@@ -3,7 +3,7 @@
 set -e
 
 echo "========================================"
-echo " GuardFS Setup"
+echo " holdFS Setup"
 echo "========================================"
 
 # 프로젝트 루트
@@ -12,8 +12,8 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # 가상환경 경로
 VENV_DIR="$PROJECT_ROOT/venv"
 
-# GuardFS 런타임 경로
-RUNTIME_DIR="$HOME/guardfs_runtime"
+# holdFS 런타임 경로
+RUNTIME_DIR="$HOME/holdfs_runtime"
 MOUNT_DIR="$RUNTIME_DIR/mount"
 UNDERLAY_DIR="$RUNTIME_DIR/underlay"
 LOG_DIR="$RUNTIME_DIR/logs"
@@ -91,7 +91,7 @@ fi
 
 "$UV_BIN" pip check --python "$VENV_DIR/bin/python"
 
-echo "[4/6] GuardFS 런타임 디렉터리 생성"
+echo "[4/6] holdFS 런타임 디렉터리 생성"
 
 mkdir -p "$MOUNT_DIR"
 mkdir -p "$UNDERLAY_DIR"
@@ -111,12 +111,12 @@ echo "[6/6] Setup 완료"
 
 echo ""
 echo "========================================"
-echo " GuardFS 환경 준비 완료"
+echo " holdFS 환경 준비 완료"
 echo "========================================"
 echo ""
 echo "가상환경 활성화:"
 echo "  source $VENV_DIR/bin/activate"
 echo ""
-echo "GuardFS 실행:"
-echo "  ./scripts/run_guardfs.sh"
+echo "holdFS 실행:"
+echo "  ./scripts/run_holdfs.sh"
 echo ""

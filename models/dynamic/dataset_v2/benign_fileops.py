@@ -1,6 +1,6 @@
 from pathlib import Path
 
-target = Path.home() / "guardfs_benign_dataset"
+target = Path.home() / "holdfs_benign_dataset"
 target.mkdir(parents=True, exist_ok=True)
 
 files = []

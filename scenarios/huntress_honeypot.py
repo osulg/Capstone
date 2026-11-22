@@ -8,7 +8,7 @@ import stat
 import time
 from pathlib import Path
 
-from guardfs.common.paths import get_honeypot_dir
+from holdfs.common.paths import get_honeypot_dir
 
 DECOY_NAMES = (
     "id_rsa",

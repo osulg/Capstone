@@ -1,6 +1,6 @@
 from pathlib import Path
 
-target = Path.home() / "guardfs_benign_temp_cleanup"
+target = Path.home() / "holdfs_benign_temp_cleanup"
 target.mkdir(parents=True, exist_ok=True)
 
 files = []

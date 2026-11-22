@@ -11,7 +11,7 @@
 # 사용법:
 #   bash dashboard/run_all.sh              # 전체 실행
 #   bash dashboard/run_all.sh --demo       # 실행 후 샘플 이벤트도 전송
-#   bash dashboard/run_all.sh --no-guardfs # HoldFS 없이 서버+에이전트만 (화면 확인용)
+#   bash dashboard/run_all.sh --no-holdfs # HoldFS 없이 서버+에이전트만 (화면 확인용)
 #
 # 환경변수:
 #   DASH_PORT (기본 5000), DASH_HOST (기본 0.0.0.0)
@@ -20,33 +20,33 @@ set -uo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="$PROJECT_ROOT/venv"
-RUNTIME_DIR="$HOME/guardfs_runtime"
+RUNTIME_DIR="$HOME/holdfs_runtime"
 MOUNT_DIR="$RUNTIME_DIR/mount"
 LOG_DIR="$RUNTIME_DIR/dashboard_logs"
 PORT="${DASH_PORT:-5000}"
 HOST="${DASH_HOST:-0.0.0.0}"
 
 SERVER_LOG="$LOG_DIR/server.log"
-GUARDFS_LOG="$LOG_DIR/guardfs_stdout.log"
+HOLDFS_LOG="$LOG_DIR/holdfs_stdout.log"
 AGENT_LOG="$LOG_DIR/agent.log"
 
 DEMO=0
-NO_GUARDFS=0
+NO_HOLDFS=0
 for arg in "$@"; do
     case "$arg" in
         --demo)       DEMO=1 ;;
-        --no-guardfs) NO_GUARDFS=1 ;;
+        --no-holdfs) NO_HOLDFS=1 ;;
         -h|--help)    sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "알 수 없는 옵션: $arg (--help 참고)"; exit 1 ;;
     esac
 done
 
-SERVER_PID=""; GUARDFS_PID=""; AGENT_PID=""; TAIL_PID=""
+SERVER_PID=""; HOLDFS_PID=""; AGENT_PID=""; TAIL_PID=""
 
 say()  { echo "[run_all] $*"; }
 fail() { echo "[run_all] ERROR: $*" >&2; exit 1; }
 
-unmount_guardfs() {
+unmount_holdfs() {
     if mountpoint -q "$MOUNT_DIR" 2>/dev/null; then
         fusermount3 -u "$MOUNT_DIR" 2>/dev/null \
             || fusermount3 -uz "$MOUNT_DIR" 2>/dev/null \
@@ -59,10 +59,10 @@ unmount_guardfs() {
 cleanup_previous() {
     pkill -f "dashboard/agent.py" 2>/dev/null
     pkill -f "dashboard/server.py" 2>/dev/null
-    unmount_guardfs
+    unmount_holdfs
     # 마운트 해제 후에도 남은 HoldFS 프로세스 정리 (SIGSTOP된 테스트 프로세스는 건드리지 않음)
-    pkill -f "guardfs/fuse_fs/passthrough.py" 2>/dev/null
-    rm -f /tmp/guardfs_state_*
+    pkill -f "holdfs/fuse_fs/passthrough.py" 2>/dev/null
+    rm -f /tmp/holdfs_state_*
     sleep 1
 }
 
@@ -72,10 +72,10 @@ shutdown_all() {
     say "종료 중..."
     [ -n "$TAIL_PID" ]   && kill "$TAIL_PID" 2>/dev/null
     [ -n "$AGENT_PID" ]  && kill "$AGENT_PID" 2>/dev/null
-    unmount_guardfs                                  # 언마운트되면 HoldFS도 종료됨
-    [ -n "$GUARDFS_PID" ] && { sleep 1; kill "$GUARDFS_PID" 2>/dev/null; }
+    unmount_holdfs                                  # 언마운트되면 HoldFS도 종료됨
+    [ -n "$HOLDFS_PID" ] && { sleep 1; kill "$HOLDFS_PID" 2>/dev/null; }
     [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
-    rm -f /tmp/guardfs_state_*
+    rm -f /tmp/holdfs_state_*
     wait 2>/dev/null
     say "모두 종료했습니다. 로그: $LOG_DIR"
     exit 0
@@ -91,7 +91,7 @@ source "$VENV_DIR/bin/activate"
 python -c "import flask" 2>/dev/null || fail "flask가 없습니다: pip install -r dashboard/requirements.txt"
 mkdir -p "$LOG_DIR"
 # 파일 상태 탭의 '보호 없는 폴더' (비교 시연용, HoldFS를 거치지 않음)
-UNPROTECTED_DIR="${DASH_UNPROTECTED_DIR:-$HOME/guardfs_demo/unprotected}"
+UNPROTECTED_DIR="${DASH_UNPROTECTED_DIR:-$HOME/holdfs_demo/unprotected}"
 mkdir -p "$UNPROTECTED_DIR"
 
 say "이전 실행 정리 (서버 / 에이전트 / HoldFS)"
@@ -157,21 +157,21 @@ say "서버 준비 완료: $HEALTH"
 # 3. HoldFS
 # ----------------------------------------
 AGENT_ARGS=( --server "http://127.0.0.1:$PORT" )
-if [ "$NO_GUARDFS" -eq 0 ]; then
+if [ "$NO_HOLDFS" -eq 0 ]; then
     say "HoldFS 시작 (mount: $MOUNT_DIR)"
-    PYTHONUNBUFFERED=1 bash "$PROJECT_ROOT/scripts/run_guardfs.sh" > "$GUARDFS_LOG" 2>&1 &
-    GUARDFS_PID=$!
+    PYTHONUNBUFFERED=1 bash "$PROJECT_ROOT/scripts/run_holdfs.sh" > "$HOLDFS_LOG" 2>&1 &
+    HOLDFS_PID=$!
 
     for _ in $(seq 1 40); do
         mountpoint -q "$MOUNT_DIR" && break
-        kill -0 "$GUARDFS_PID" 2>/dev/null || { tail -n 30 "$GUARDFS_LOG"; fail "HoldFS가 종료되었습니다"; }
+        kill -0 "$HOLDFS_PID" 2>/dev/null || { tail -n 30 "$HOLDFS_LOG"; fail "HoldFS가 종료되었습니다"; }
         sleep 0.5
     done
-    mountpoint -q "$MOUNT_DIR" || { tail -n 30 "$GUARDFS_LOG"; fail "HoldFS 마운트 실패 (20초 초과)"; }
+    mountpoint -q "$MOUNT_DIR" || { tail -n 30 "$HOLDFS_LOG"; fail "HoldFS 마운트 실패 (20초 초과)"; }
     say "HoldFS 마운트 완료"
-    AGENT_ARGS+=( --stdout-log "$GUARDFS_LOG" )
+    AGENT_ARGS+=( --stdout-log "$HOLDFS_LOG" )
 else
-    say "--no-guardfs: HoldFS를 띄우지 않습니다"
+    say "--no-holdfs: HoldFS를 띄우지 않습니다"
 fi
 
 # ----------------------------------------
@@ -194,7 +194,7 @@ cat <<EOF
  실행 중   (Ctrl+C = 전부 종료)
 --------------------------------------------------------
  대시보드  : http://127.0.0.1:$PORT   ${IP:+(외부: http://$IP:$PORT)}
- 로그      : $LOG_DIR/{server,guardfs_stdout,agent}.log
+ 로그      : $LOG_DIR/{server,holdfs_stdout,agent}.log
  테스트    : (다른 터미널에서)
    cd $PROJECT_ROOT && source venv/bin/activate
    # 보호 폴더 (HoldFS 마운트를 거침)
@@ -210,7 +210,7 @@ EOF
 tail -n +1 -f "$AGENT_LOG" &
 TAIL_PID=$!
 while true; do
-    for name_pid in "server:$SERVER_PID" "agent:$AGENT_PID" ${GUARDFS_PID:+"guardfs:$GUARDFS_PID"}; do
+    for name_pid in "server:$SERVER_PID" "agent:$AGENT_PID" ${HOLDFS_PID:+"holdfs:$HOLDFS_PID"}; do
         name="${name_pid%%:*}"; pid="${name_pid##*:}"
         if ! kill -0 "$pid" 2>/dev/null; then
             echo ""
@@ -218,7 +218,7 @@ while true; do
             case "$name" in
                 server)  tail -n 20 "$SERVER_LOG" ;;
                 agent)   tail -n 20 "$AGENT_LOG" ;;
-                guardfs) tail -n 30 "$GUARDFS_LOG" ;;
+                holdfs) tail -n 30 "$HOLDFS_LOG" ;;
             esac
             shutdown_all
         fi

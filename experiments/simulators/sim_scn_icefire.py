@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-사례 ① IceFire 랜섬웨어 — 파일연산 모의 재현 (GuardFS/HoldFS 탐지 검증용).
+사례 ① IceFire 랜섬웨어 — 파일연산 모의 재현 (holdFS/HoldFS 탐지 검증용).
 
 근거: SentinelLABS, "IceFire Ransomware Returns | Now Targeting Linux
 Enterprise Networks" (2023-03).
@@ -20,26 +20,26 @@ Enterprise Networks" (2023-03).
   이 구간들은 재현하지 않고 전제로만 둔다.
 
 탐지 관점(문서 1장): 비신뢰 exe 이므로 신뢰 면제 없이 Stage 1(엔트로피·매직·
-확장자) 규칙에 즉시 걸린다. GuardFS 에서는 비신뢰 실행 경로 → 선제 MEDIUM,
+확장자) 규칙에 즉시 걸린다. holdFS 에서는 비신뢰 실행 경로 → 선제 MEDIUM,
 고엔트로피 write → EntropyDetector/EntropyBurstDetector, .ifire rename →
 ExtChangeDetector(계열 확장자 추가 시 즉시, 아니면 5개 누적) → Stage 2 → HIGH.
 
 테스트 방법 (Linux/Ubuntu, 터미널 두 개):
-  1) 터미널 A: GuardFS 를 detection 모드로 실행하고 mount 성공 확인
-       cd ~/Capstone && bash scripts/run_guardfs.sh
+  1) 터미널 A: holdFS 를 detection 모드로 실행하고 mount 성공 확인
+       cd ~/Capstone && bash scripts/run_holdfs.sh
      (또는 대시보드까지: bash dashboard/run_all.sh)
   2) 터미널 B:
        cd ~/Capstone && source venv/bin/activate
-       mountpoint ~/guardfs_runtime/mount
+       mountpoint ~/holdfs_runtime/mount
        python3 experiments/simulators/sim_scn_icefire.py \
-           ~/guardfs_runtime/mount/sim_icefire --keep
+           ~/holdfs_runtime/mount/sim_icefire --keep
 
 확인 기준:
   - 공격 PID 출력 후 터미널 A/대시보드에서 해당 PID 의 상태 격상과 탐지 사유
     (EntropyDetector/EntropyBurstDetector/ExtChangeDetector, ML dyn/stat/score,
     HIGH 사유)를 대조한다. HIGH 전환 후 write/rename/unlink 차단과 SIGSTOP 을
     확인한다.
-  - 차단으로 인한 ENOENT 등 파일 오류는 GuardFS 상태/이벤트 로그와 함께 원인을
+  - 차단으로 인한 ENOENT 등 파일 오류는 holdFS 상태/이벤트 로그와 함께 원인을
     확인한다(차단 여부를 이 스크립트 종료코드만으로 단정하지 않는다).
 
 준비 로직만 검사하려면:
@@ -63,7 +63,7 @@ import scenario_lib as lib  # noqa: E402
 # IceFire 랜섬노트 파일명(보고서 관찰치). 내용은 수익화 문구 없는 모의 텍스트.
 NOTE_NAME = "iFire-readme.txt"
 NOTE_BODY = (
-    "[SIMULATION] This is a GuardFS detection test artifact.\n"
+    "[SIMULATION] This is a holdFS detection test artifact.\n"
     "No real encryption, key, or contact information is involved.\n"
 )
 # 공격 도구가 자기 삭제하는 것을 모사하기 위한 표식 파일(이 스크립트가 만든다).
@@ -125,7 +125,7 @@ def _office_bytes(ext: str, size: int) -> bytes:
             "_rels/.rels": _relationships(main, "officeDocument"),
             main: (
                 f'<w:document xmlns:w="{_WORD_NS}"><w:body><w:p><w:r>'
-                "<w:t>GuardFS simulation document. No real user data.</w:t>"
+                "<w:t>holdFS simulation document. No real user data.</w:t>"
                 "</w:r></w:p><w:sectPr/></w:body></w:document>"
             ).encode(),
         }
@@ -143,7 +143,7 @@ def _office_bytes(ext: str, size: int) -> bytes:
             "_rels/.rels": _relationships("xl/workbook.xml", "officeDocument"),
             "xl/workbook.xml": (
                 f'<workbook xmlns="{_SHEET_NS}" xmlns:r="{_OFFICE_REL}">'
-                '<sheets><sheet name="GuardFS" sheetId="1" r:id="rId1"/>'
+                '<sheets><sheet name="holdFS" sheetId="1" r:id="rId1"/>'
                 "</sheets></workbook>"
             ).encode(),
             "xl/_rels/workbook.xml.rels": _relationships(
@@ -152,7 +152,7 @@ def _office_bytes(ext: str, size: int) -> bytes:
             main: (
                 f'<worksheet xmlns="{_SHEET_NS}"><sheetData>'
                 '<row r="1"><c r="A1" t="inlineStr"><is>'
-                "<t>GuardFS simulation spreadsheet</t></is></c></row>"
+                "<t>holdFS simulation spreadsheet</t></is></c></row>"
                 "</sheetData></worksheet>"
             ).encode(),
         }
@@ -173,7 +173,7 @@ def _office_bytes(ext: str, size: int) -> bytes:
 def _pdf_bytes(size: int) -> bytes:
     def build(padding: int) -> bytes:
         stream = (
-            b"BT /F1 18 Tf 72 720 Td (GuardFS simulation PDF) Tj ET\n"
+            b"BT /F1 18 Tf 72 720 Td (holdFS simulation PDF) Tj ET\n"
             + b" " * padding
             + b"\n"
         )
@@ -284,7 +284,7 @@ def wait_for_documents(workdir, names, size, timeout) -> bool:
 
 def parse_args():
     p = argparse.ArgumentParser(description="IceFire 파일연산 모의 재현")
-    p.add_argument("target", help="GuardFS 마운트 안의 대상 폴더 (없으면 생성)")
+    p.add_argument("target", help="holdFS 마운트 안의 대상 폴더 (없으면 생성)")
     p.add_argument("--files", type=int, default=12, help="테스트 문서 개수")
     p.add_argument("--size-kb", type=int, default=64, help="파일당 크기(KB)")
     p.add_argument(
@@ -364,7 +364,7 @@ def main() -> int:
     paths = [os.path.join(workdir, n) for n in names]
     lib.log(
         f"공격 역할 PID={os.getpid()} (비신뢰 바이너리 전제, duration={args.duration}s). "
-        f"GuardFS 로그/대시보드를 확인하세요."
+        f"holdFS 로그/대시보드를 확인하세요."
     )
 
     start = time.time()
@@ -397,7 +397,7 @@ def main() -> int:
             lib.log(f"자기 삭제 모사 실패(차단일 수 있음): {e}")
     except OSError as e:
         # ENOENT 등은 보호 차단만으로 설명되지 않으므로 결과를 단정하지 않는다.
-        lib.log(f"파일 연산 실패: {e} → 차단 여부는 GuardFS 상태/이벤트 로그로 확인")
+        lib.log(f"파일 연산 실패: {e} → 차단 여부는 holdFS 상태/이벤트 로그로 확인")
         rc = 3
     finally:
         lib.log(f"종료: {total / 1024 / 1024:.1f}MB 덮어씀, {time.time() - start:.1f}s")
